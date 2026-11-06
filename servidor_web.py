@@ -40605,6 +40605,12 @@ def ensure_imagens_schema() -> None:
         colunas = {r["name"] for r in DB.execute("PRAGMA table_info(imagem_gasto_v2017)").fetchall()}
         if "buscas" not in colunas:
             DB.execute("ALTER TABLE imagem_gasto_v2017 ADD COLUMN buscas INTEGER NOT NULL DEFAULT 0")
+        # V20.31: agente de anúncios — o pedido aponta o rascunho; o gasto separa imagem de anúncio.
+        if "origem" not in colunas:
+            DB.execute("ALTER TABLE imagem_gasto_v2017 ADD COLUMN origem TEXT NOT NULL DEFAULT 'imagem'")
+        colunas = {r["name"] for r in DB.execute("PRAGMA table_info(imagem_trabalho_v2017)").fetchall()}
+        if "rascunho_id" not in colunas:
+            DB.execute("ALTER TABLE imagem_trabalho_v2017 ADD COLUMN rascunho_id INTEGER")
         DB.commit()
 
 
@@ -40861,8 +40867,9 @@ def imagens_agente_status() -> dict[str, Any]:
 
 def imagens_payload() -> dict[str, Any]:
     with DB_LOCK:
+        # V20.31: os pedidos de texto de anúncio usam a mesma fila do agente, mas aparecem só no rascunho do anúncio.
         rows = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE apagado_em IS NULL AND situacao<>'enviando' "
-                          "ORDER BY id DESC").fetchall()
+                          "AND tipo<>'anuncio' ORDER BY id DESC").fetchall()
         modelo = _imagem_cfg("modelo", IMAGEM_MODELO_PADRAO)
         agente = imagens_agente_status()
         saldo = imagens_saldo()
@@ -41019,6 +41026,109 @@ def imagens_arquivo(id_: Any, nome: Any, so_originais: bool = False) -> tuple[by
     sufixo = "" if nome.startswith("resultado_1") else "_" + nome.rsplit(".", 1)[0]
     baixar = f"{base}_{row['tipo']}{sufixo}.{nome.rsplit('.', 1)[-1]}"
     return dados, tipo, baixar
+
+
+# ---------- V20.31: agente de anúncios (pedido do Admin no rascunho) ----------
+# Desenho: docs/superpowers/specs/2026-11-06-agente-anuncios-design.md. Usa a fila do Estúdio (tipo 'anuncio'):
+# o agente já busca e baixa por lá. Nada aqui escreve no ML; o aceito vai ao rascunho e aos vazios da ficha.
+ANUNCIO_AGENTE_ABERTO = ("enviando", "aguardando", "analisando", "aguardando_atributos")
+ANUNCIO_AGENTE_MAX_FOTOS = 12
+ANUNCIO_AGENTE_FOTOS_PECA = 3
+
+
+def _anuncio_agente_fotos(codigo: str, limite: int) -> list[Path]:
+    caminhos = []
+    for f in anuncio_fotos(codigo)[:limite]:
+        caminho = ANUNCIO_FOTOS_DIR / str(f.get("arquivo") or "")
+        if caminho.is_file() and caminho.resolve().parent == ANUNCIO_FOTOS_DIR.resolve():
+            caminhos.append(caminho)
+    return caminhos
+
+
+def anuncio_agente_pedir(rascunho_id: Any, ator: str, nome: str = "", link: str = "") -> dict[str, Any]:
+    """Põe o pedido na fila do agente: ficha, fotos da ficha e, no kit, as peças com fichas e fotos."""
+    rasc = anuncio_rascunho_ler(rascunho_id)
+    if rasc is None:
+        raise ValueError("Rascunho não encontrado.")
+    if rasc["situacao"] not in ANUNCIO_RASCUNHO_EDITAVEL:
+        raise ValueError("Este rascunho já foi publicado ou está em publicação.")
+    ficha = ficha_ler(rasc["ficha_codigo"])
+    if ficha is None:
+        raise ValueError("Produto não encontrado.")
+    link = str(link or "").strip()
+    if link:
+        partes = urlparse(link)
+        if partes.scheme not in ("http", "https") or not partes.netloc or len(link) > 500 or any(c.isspace() for c in link):
+            raise ValueError("Link do fornecedor inválido: cole o endereço completo, começando com https://")
+    fotos: list[tuple[Path, str, str]] = [(c, "original", "")
+                                          for c in _anuncio_agente_fotos(ficha["codigo"], ANUNCIO_AGENTE_MAX_FOTOS)]
+    kit: list[dict[str, Any]] = []
+    comp = kit_composicao(ficha["codigo"]) if ficha.get("tipo") == "kit" else None
+    if comp:
+        candidatos = None
+        for c in comp["componentes"]:
+            fp = ficha_ler(c["sku"])
+            if fp is not None:
+                kit.append({"sku": c["sku"], "quantidade": c["quantidade"], "ficha": fp.get("campos") or {}})
+                fotos += [(cam, "peca", c["sku"]) for cam in _anuncio_agente_fotos(c["sku"], ANUNCIO_AGENTE_FOTOS_PECA)]
+            else:  # peça sem ficha: só código e descrição do Precificador
+                if candidatos is None:
+                    candidatos = _anuncio_produtos_candidatos()
+                achado = candidatos.get(normalize(c["sku"])) or {}
+                kit.append({"sku": c["sku"], "quantidade": c["quantidade"], "descricao": str(achado.get("nome") or "")})
+    produto = {"rascunho_id": rasc["id"], "conta": rasc["conta"], "codigo": ficha["codigo"],
+               "ficha": ficha.get("campos") or {}, "tipo_ficha": ficha.get("tipo") or "peca", "kit": kit,
+               "nome": re.sub(r"\s+", " ", str(nome or "")).strip()[:150], "link": link}
+    arquivos = []
+    for i, (cam, papel, peca) in enumerate(fotos):
+        a = {"nome": f"original_{i + 1}{cam.suffix.lower() or '.jpg'}", "papel": papel, "bytes": cam.stat().st_size}
+        if peca:
+            a["peca"] = peca
+        arquivos.append(a)
+    agora = now_iso()
+    with DB_LOCK:
+        aberto = DB.execute("SELECT id FROM imagem_trabalho_v2017 WHERE tipo='anuncio' AND rascunho_id=? AND "
+                            f"apagado_em IS NULL AND situacao IN ({','.join('?' * len(ANUNCIO_AGENTE_ABERTO))})",
+                            (rasc["id"], *ANUNCIO_AGENTE_ABERTO)).fetchone()
+        if aberto is not None:
+            raise ImagemConflito("Já tem um pedido ao agente para este rascunho.")
+        cur = DB.execute(
+            "INSERT INTO imagem_trabalho_v2017(tipo,sku,situacao,criado_por,criado_em,atualizado_em,arquivos_json,bytes,"
+            "produto_json,rascunho_id) VALUES('anuncio',?,'enviando',?,?,?,?,?,?,?)",
+            (ficha["codigo"], str(ator or ""), agora, agora, json.dumps(arquivos, ensure_ascii=False),
+             sum(a["bytes"] for a in arquivos), json.dumps(produto, ensure_ascii=False), rasc["id"]))
+        id_ = int(cur.lastrowid)
+        DB.commit()
+    pasta = _imagem_pasta(id_)
+    try:  # cópia fora do DB_LOCK; falha = some a pasta e a linha
+        pasta.mkdir(parents=True, exist_ok=True)
+        for a, (cam, _, _) in zip(arquivos, fotos):
+            shutil.copyfile(cam, pasta / a["nome"])
+    except Exception as exc:
+        shutil.rmtree(pasta, ignore_errors=True)
+        with DB_LOCK:
+            DB.execute("DELETE FROM imagem_trabalho_v2017 WHERE id=?", (id_,))
+            DB.commit()
+        raise ValueError(f"Não foi possível preparar as fotos para o agente: {exc}")
+    with DB_LOCK:
+        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aguardando' WHERE id=?", (id_,))
+        DB.commit()
+    audit(str(ator or ""), "anuncios.agente.pedir", f"rascunho={rasc['id']}|{ficha['codigo']}|{len(arquivos)} foto(s)|#{id_}")
+    return {"ok": True, "trabalho_id": id_}
+
+
+def anuncio_agente_estado(rascunho_id: Any) -> dict[str, Any] | None:
+    try:
+        rid = int(rascunho_id)
+    except (TypeError, ValueError):
+        return None
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE tipo='anuncio' AND rascunho_id=? AND apagado_em IS NULL "
+                         "ORDER BY id DESC LIMIT 1", (rid,)).fetchone()
+    if row is None:
+        return None
+    return {"id": row["id"], "situacao": row["situacao"], "mensagem": row["mensagem"],
+            "proposta": _imagem_json(row["textos_json"], {}), "atualizado_em": row["atualizado_em"]}
 
 
 # ---------- agente ----------
@@ -41832,6 +41942,11 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = self.auth(admin_only=True)
             if ctx is not None:
                 self.send_json({"ok": True, "trabalhos": anuncio_estudio_lista(str((query.get("busca") or [""])[0]))})
+            return
+        if path == "/api/anuncios/agente":  # V20.31: estado do pedido ao agente de um rascunho (so le)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, "trabalho": anuncio_agente_estado((query.get("rascunho") or [""])[0])})
             return
         if path == "/api/anuncios/rascunhos":  # V20.24: rascunhos de uma ficha (so le o banco)
             ctx = self.auth(admin_only=True)
@@ -44205,7 +44320,9 @@ class AppHandler(BaseHTTPRequestHandler):
                     "/api/anuncios/remover", "/api/anuncios/reincluir", "/api/anuncios/foto",
                     "/api/anuncios/foto/remover", "/api/anuncios/foto/ordenar", "/api/anuncios/rascunho",
                     "/api/anuncios/rascunho/validar", "/api/anuncios/rascunho/publicar",
-                    "/api/anuncios/rascunho/liberar"):
+                    "/api/anuncios/rascunho/liberar",
+                    # V20.31: agente de anúncios (pedir, trocar a categoria, aceitar)
+                    "/api/anuncios/agente/pedir", "/api/anuncios/agente/atributos", "/api/anuncios/agente/aceitar"):
             # V20.23: ver = modulo admin; gravar = so perfil Admin. Nada daqui grava no ML/Shopee/Magalu/TikTok/Apollo.
             ctx = self.auth(admin_only=True)
             if ctx is None:
@@ -44353,6 +44470,13 @@ class AppHandler(BaseHTTPRequestHandler):
                     rasc = anuncio_rascunho_salvar(body, ctx["username"], v)
                     audit(ctx["username"], "anuncios.rascunho", f"{rasc.get('ficha_codigo')}|{rasc.get('id')}|v{rasc.get('versao')}")
                     res = {"ok": True, "rascunho": rasc}
+                elif path == "/api/anuncios/agente/pedir":  # V20.31: pedido ao agente (nada vai ao ML)
+                    try:
+                        res = anuncio_agente_pedir(body.get("rascunho_id"), ctx["username"],
+                                                   str(body.get("nome") or ""), str(body.get("link") or ""))
+                    except ImagemConflito as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 409)
+                        return
                 elif path == "/api/anuncios/rascunho/validar":  # V20.24: POST /items/validate (nao cria nada)
                     res = anuncio_validar(body.get("id"), ctx["username"])
                 elif path == "/api/anuncios/rascunho/publicar":  # V20.24: a UNICA escrita no ML dos anuncios
