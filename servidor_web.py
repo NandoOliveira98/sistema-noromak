@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.29-TIKTOK-ETIQUETA-VENDAS"
+APP_VERSION = "20.30-TIKTOK-PEDIDOS-EXTENSAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2715,6 +2715,7 @@ def init_db() -> None:
     ensure_shopee_promo_schema()  # V19.49
     ensure_magalu_promo_schema()  # V19.55
     ensure_tiktok_estoque_schema()  # V19.64
+    ensure_tiktok_sc_schema()  # V20.30: pedidos pela extensão do Seller Center
     ensure_anuncios_schema()  # V20.23
     ensure_ml_billing_credito_schema()
     ensure_ml_billing_data_schema()
@@ -10045,7 +10046,8 @@ def _tiktok_linhas_do_pedido(pedido: dict[str, Any], products: list[dict[str, An
         chave = (str(item.get("sku_id") or ""), sku)
         if chave not in agrupado:
             agrupado[chave] = {"sku": sku, "nome": str(item.get("product_name") or ""), "qtd": 0}
-        agrupado[chave]["qtd"] += 1  # o TikTok manda um line_item por unidade
+        # A API manda um line_item por unidade; o Seller Center (V20.30) manda a quantidade.
+        agrupado[chave]["qtd"] += max(1, _tiktok_quantidade(item.get("quantity")) or 1)
     linhas = []
     for (sku_id, sku), g in agrupado.items():
         if not sku:
@@ -10127,6 +10129,231 @@ def tiktok_sincronizar_iniciar() -> bool:
             tiktok_log_event_se_mudou("pedidos", "sincronizar agora", "ERRO", str(exc)[:800])
     threading.Thread(target=rodar, name="tiktok-sincronizar-agora", daemon=True).start()
     return True
+
+
+# ---------------------------------------------------------------------------
+# V20.30 — pedidos do TikTok pela extensão do Seller Center. A API oficial exige gerente de
+# contas (o TikTok confirmou em 06/11); a extensão NOROMAK_TIKTOK_ESTOQUE lê as chamadas
+# internas da própria página com a sessão do vendedor (mapa em
+# docs/superpowers/specs/2026-11-06-tiktok-seller-center-mapa.md). Decisões do dono (06/11):
+# - a extensão lê a aba "Para enviar" sozinha a cada 2 min, com uma aba do Seller Center
+#   aberta; ao ligar o PC pega o que entrou à noite;
+# - pedido que sumiu da aba só sai da fila com o TikTok CONFIRMANDO (o detalhe do pedido diz
+#   enviado/cancelado). Leitura pela metade ou erro nunca tira nada; ADMIN e concluído valem
+#   como sempre (save_storage);
+# - o Painel de saúde fica Crítico (e-mail) sem leitura há 30 min no expediente.
+# Mesmas linhas da importação pela API (_tiktok_linhas_do_pedido, uid TIKTOKAPI_, origem
+# API_TIKTOK): se a API um dia for liberada, as duas falam do mesmo pedido.
+# ---------------------------------------------------------------------------
+# sku_display_status do Seller Center = os códigos de situação da Open API (conferido: 121 em
+# pedido enviado). O que não está aqui é desconhecido e nunca tira pedido da fila.
+TIKTOK_SC_STATUS = {100: "UNPAID", 105: "ON_HOLD", 111: "AWAITING_SHIPMENT", 112: "AWAITING_COLLECTION",
+                    114: "PARTIALLY_SHIPPING", 121: "IN_TRANSIT", 122: "DELIVERED", 130: "COMPLETED",
+                    140: "CANCELLED"}
+TIKTOK_SC_NA_FILA = ("AWAITING_SHIPMENT", "AWAITING_COLLECTION", "PARTIALLY_SHIPPING")
+TIKTOK_SC_SAIU = ("IN_TRANSIT", "DELIVERED", "COMPLETED", "CANCELLED")
+TIKTOK_SC_MAX_PEDIDOS = 500
+TIKTOK_SC_SEM_LEITURA_S = 30 * 60   # Painel de saúde
+TIKTOK_SC_ORIGEM = "API_TIKTOK"
+
+
+class TikTokImportacaoDesligada(Exception):
+    pass
+
+
+def ensure_tiktok_sc_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS tiktok_sc_pedido_v2030 (
+                pedido TEXT PRIMARY KEY,
+                nome TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                detalhe_em TEXT NOT NULL DEFAULT '',
+                visto_em TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+        DB.commit()
+
+
+def _tiktok_sc_endereco(o: dict[str, Any]) -> dict[str, str]:
+    """Endereço do detalhe vem como lista chave/valor (name, geo_l1, zipcode...)."""
+    comprador = o.get("buyer_info_module") if isinstance(o.get("buyer_info_module"), dict) else {}
+    endereco = comprador.get("shipping_address") if isinstance(comprador.get("shipping_address"), dict) else {}
+    saida: dict[str, str] = {}
+    for item in endereco.get("items") or []:
+        if isinstance(item, dict) and item.get("key"):
+            saida[str(item["key"])] = str(item.get("value") or "").strip()
+    return saida
+
+
+def tiktok_sc_pedido(o: Any) -> dict[str, Any] | None:
+    """Um pedido do Seller Center (lista ou detalhe) no formato da Open API que
+    _tiktok_linhas_do_pedido já entende. Leitura tolerante: o que falta fica vazio."""
+    if not isinstance(o, dict):
+        return None
+    numero = str(o.get("main_order_id") or "").strip()
+    if not numero.isdigit():
+        return None
+    por_linha: dict[str, str] = {}
+    for s in o.get("order_status_module") or []:
+        if isinstance(s, dict):
+            por_linha[str(s.get("order_line_id") or "")] = TIKTOK_SC_STATUS.get(
+                _tiktok_quantidade(s.get("sku_display_status")) or -1, "")
+    nomes = set(por_linha.values())
+    if not nomes or "" in nomes:
+        status = ""                                   # alguma linha com situação desconhecida
+    elif nomes == {"CANCELLED"}:
+        status = "CANCELLED"
+    elif nomes - {"CANCELLED"} <= set(TIKTOK_SC_SAIU):
+        status = next(s for s in TIKTOK_SC_SAIU if s in nomes)
+    else:
+        status = next((s for s in TIKTOK_SC_NA_FILA if s in nomes), "")
+    itens: list[dict[str, Any]] = []
+    for sk in o.get("sku_module") or []:
+        if not isinstance(sk, dict):
+            continue
+        linhas = [str(x) for x in (sk.get("order_line_ids") or [])]
+        if linhas:
+            qtd = sum(1 for x in linhas if por_linha.get(x) != "CANCELLED")
+        else:
+            qtd = _tiktok_quantidade(sk.get("quantity")) or 0
+        if qtd <= 0:
+            continue
+        itens.append({"sku_id": str(sk.get("sku_id") or ""), "seller_sku": str(sk.get("seller_sku_name") or "").strip(),
+                      "product_name": str(sk.get("product_name") or ""), "quantity": min(qtd, 999)})
+    trade = o.get("trade_order_module") if isinstance(o.get("trade_order_module"), dict) else {}
+    pacotes = [{"id": str(f.get("package_id") or "")} for f in (o.get("fulfill_unit_id_mapper") or [])
+               if isinstance(f, dict) and str(f.get("package_id") or "").strip()]
+    comprador = o.get("buyer_info_module") if isinstance(o.get("buyer_info_module"), dict) else {}
+    endereco = _tiktok_sc_endereco(o)
+    return {"id": numero, "status": status, "create_time": trade.get("create_time"),
+            "rts_sla_time": trade.get("latest_rts_time"), "line_items": itens, "packages": pacotes,
+            "recipient_address": {"name": endereco.get("name") or ""},
+            "_apelido": str(comprador.get("buyer_nickname") or ""),
+            "_cpf": re.sub(r"\D", "", str(comprador.get("cpf") or "")),
+            "_cpf_nome": re.sub(r"\s+", " ", str(comprador.get("cpf_name") or "")).strip()}
+
+
+def _tiktok_sc_pedidos_na_fila(fila: list[dict[str, Any]]) -> set[str]:
+    return {str(order_number(r) or "").strip() for r in fila
+            if isinstance(r, dict) and normalize(r.get("OrigemCadastro")) == normalize(TIKTOK_SC_ORIGEM)
+            and str(order_number(r) or "").strip()}
+
+
+def tiktok_sc_estado() -> dict[str, Any]:
+    """O que a extensão precisa saber antes de ler: os pedidos do TikTok na fila (para conferir
+    os que sumiram da aba) e os que já têm o detalhe (nome/CPF) guardado."""
+    with DB_LOCK:
+        raw, _, _ = get_storage("conf_pedidos")
+        com_detalhe = [r["pedido"] for r in DB.execute(
+            "SELECT pedido FROM tiktok_sc_pedido_v2030 WHERE detalhe_em<>'' ORDER BY detalhe_em DESC LIMIT ?",
+            (TIKTOK_SC_MAX_PEDIDOS,))]
+    na_fila = sorted(_tiktok_sc_pedidos_na_fila(_rows_from_storage_value(raw)))[:TIKTOK_SC_MAX_PEDIDOS]
+    return {"ok": True, "importacao": tiktok_importacao_ligada(), "na_fila": na_fila, "com_detalhe": com_detalhe,
+            "ultima_leitura_epoch": int(float(_tiktok_config_ler("pedidos_extensao_epoch") or 0))}
+
+
+def tiktok_pedidos_da_extensao(pedidos: Any, detalhes: Any, completo: bool, ator: str) -> dict[str, Any]:
+    """Recebe a aba "Para enviar" (e os detalhes que a extensão abriu) e acerta a fila de Bauru."""
+    if not tiktok_importacao_ligada():
+        raise TikTokImportacaoDesligada("A importação do TikTok está desligada (Admin → Integrações).")
+    if not isinstance(pedidos, list) or not isinstance(detalhes, list):
+        raise ValueError("Formato inválido: pedidos e detalhes precisam ser listas.")
+    if len(pedidos) > TIKTOK_SC_MAX_PEDIDOS or len(detalhes) > TIKTOK_SC_MAX_PEDIDOS:
+        raise ValueError(f"No máximo {TIKTOK_SC_MAX_PEDIDOS} pedidos por envio.")
+    if pedidos:
+        _tiktok_guardar_amostra("seller_center pedidos/list", pedidos[0])
+    if detalhes:
+        _tiktok_guardar_amostra("seller_center pedidos/get", detalhes[0])
+    lidos: dict[str, dict[str, Any]] = {}
+    for o in pedidos:
+        p = tiktok_sc_pedido(o)
+        if p:
+            lidos[p["id"]] = p
+    det: dict[str, dict[str, Any]] = {}
+    for o in detalhes:
+        p = tiktok_sc_pedido(o)
+        if p:
+            det[p["id"]] = p
+    for numero, p in det.items():              # o detalhe foi lido agora: vale mais que a lista
+        if numero in lidos or p["status"] in TIKTOK_SC_NA_FILA:
+            lidos[numero] = p
+    abertos = [p for p in lidos.values() if p["status"] in TIKTOK_SC_NA_FILA]
+    saiu = {n for n, p in det.items() if p["status"] in TIKTOK_SC_SAIU}  # só com o TikTok confirmando
+    if not TIKTOK_SYNC_LOCK.acquire(blocking=False):
+        raise TikTokRodadaOcupada("Já tem uma importação do TikTok rodando. Tente de novo em instantes.")
+    try:
+        products_raw, _, _ = get_storage("conf_produtos")
+        products = _rows_from_storage_value(products_raw)
+        with DB_LOCK:
+            nomes = {r["pedido"]: r["nome"] for r in DB.execute("SELECT pedido, nome FROM tiktok_sc_pedido_v2030")}
+        api_linhas: list[dict[str, Any]] = []
+        for p in abertos:
+            if not p["recipient_address"]["name"]:
+                p["recipient_address"]["name"] = nomes.get(p["id"]) or p["_cpf_nome"] or p["_apelido"]
+            api_linhas.extend(_tiktok_linhas_do_pedido(p, products))
+        atual_raw, _, _ = get_storage("conf_pedidos")
+        atual = _rows_from_storage_value(atual_raw)
+        # Quem sumiu da aba sem o TikTok confirmar fica como está (a linha antiga volta igual).
+        # (pedido aberto que não gerou linha — sem SKU, por exemplo — também fica como está)
+        com_linhas = {str(order_number(r) or "").strip() for r in api_linhas}
+        ficam = _tiktok_sc_pedidos_na_fila(atual) - com_linhas - saiu
+        for r in atual:
+            if isinstance(r, dict) and normalize(r.get("OrigemCadastro")) == normalize(TIKTOK_SC_ORIGEM) \
+                    and str(order_number(r) or "").strip() in ficam:
+                api_linhas.append(r)
+        fila, removidas, pulados = _magalu_merge(atual, api_linhas, origem=TIKTOK_SC_ORIGEM,
+                                                 campos=TIKTOK_CAMPOS_OPERACIONAIS + ("Cliente",))
+        save_storage("conf_pedidos", atual_raw, json_dumps(fila), False,
+                     actor=f"extensao-tiktok:{ator}", actor_role="sistema",
+                     source_screen="Extensão TikTok (Seller Center)", change_method="Pedidos do Seller Center TikTok",
+                     client_ip="127.0.0.1", allow_completed_reimport=False,
+                     remove_pending_identities=removidas)
+    finally:
+        TIKTOK_SYNC_LOCK.release()
+    agora = now_iso()
+    with DB_LOCK:
+        for p in lidos.values():
+            nome = p["recipient_address"]["name"] if p["id"] in det else ""
+            DB.execute(
+                """INSERT INTO tiktok_sc_pedido_v2030(pedido,nome,status,detalhe_em,visto_em) VALUES(?,?,?,?,?)
+                   ON CONFLICT(pedido) DO UPDATE SET status=excluded.status, visto_em=excluded.visto_em,
+                       nome=CASE WHEN excluded.nome<>'' THEN excluded.nome ELSE tiktok_sc_pedido_v2030.nome END,
+                       detalhe_em=CASE WHEN excluded.detalhe_em<>'' THEN excluded.detalhe_em ELSE tiktok_sc_pedido_v2030.detalhe_em END""",
+                (p["id"], nome[:200], p["status"], agora if p["id"] in det else "", agora))
+        for numero in saiu - set(lidos):
+            DB.execute("""INSERT INTO tiktok_sc_pedido_v2030(pedido,status,detalhe_em,visto_em) VALUES(?,?,?,?)
+                          ON CONFLICT(pedido) DO UPDATE SET status=excluded.status, visto_em=excluded.visto_em""",
+                       (numero, det[numero]["status"], agora, agora))
+        DB.execute("DELETE FROM tiktok_sc_pedido_v2030 WHERE visto_em < ?",
+                   ((datetime.now(timezone.utc) - timedelta(days=60)).astimezone().isoformat(timespec="milliseconds"),))
+        DB.commit()
+    # Nome/CPF da nota (para o cadastro no Apollo): só quando o pedido ainda não tem nada guardado
+    # — o que outra extensão ou o Admin gravou nunca é sobrescrito.
+    fiscais = 0
+    with DB_LOCK:
+        ja = {r["order_key"] for r in DB.execute("SELECT order_key FROM cliente_fiscal")}
+    for numero, p in det.items():
+        if p["status"] in TIKTOK_SC_NA_FILA and len(p["_cpf"]) in (11, 14) and p["_cpf_nome"] \
+                and normalize(numero) not in ja:
+            try:
+                if salvar_cliente_fiscal(numero, p["_cpf"], p["_cpf_nome"], fonte="tiktok_sc",
+                                         usuario="extensao-tiktok").get("ok"):
+                    fiscais += 1
+            except Exception as exc:
+                tiktok_log_event_se_mudou("pedidos", f"cliente_fiscal {numero}", "ERRO", str(exc)[:300])
+    if completo:
+        _tiktok_config_gravar("pedidos_extensao_epoch", str(int(time.time())), ator)
+    resumo = {"ok": True, "pedidos": len({order_number(r) for r in api_linhas if isinstance(r, dict)}),
+              "abertos": len(abertos), "linhas": len(api_linhas), "removidas": len(removidas),
+              "saiu_confirmado": len(saiu), "mantidos_sem_confirmar": len(ficam - saiu),
+              "ja_na_fila_por_outra_origem": pulados, "nome_cpf_guardados": fiscais, "completo": bool(completo)}
+    tiktok_log_event_se_mudou("pedidos", "extensao Seller Center", "OK" if completo else "PARCIAL",
+                              f"{len(abertos)} pedido(s) a enviar, {len(removidas)} linha(s) removida(s), "
+                              f"{len(saiu)} confirmado(s) enviado/cancelado")
+    return resumo
 
 
 _TIKTOK_LOG_ULTIMO: dict[tuple[str, str], tuple[str, str]] = {}
@@ -41663,6 +41890,14 @@ class AppHandler(BaseHTTPRequestHandler):
                 else:
                     self.send_json(tiktok_extensao_pendentes())
             return
+        if path == "/api/tiktok-estoque/extensao/pedidos-estado":  # V20.30: antes de ler a aba "Para enviar"
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                if str(ctx.get("app_role") or "") != "admin":
+                    self.send_json({"ok": False, "error": "Somente o perfil Admin."}, 403)
+                else:
+                    self.send_json(tiktok_sc_estado())
+            return
         if path == "/api/integracoes/tiktok/logs":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -44199,6 +44434,13 @@ class AppHandler(BaseHTTPRequestHandler):
                     res = tiktok_produtos_sincronizar()
                 elif path == "/api/tiktok-estoque/extensao/produtos":  # V19.81
                     res = tiktok_produtos_da_extensao(body.get("produtos"), completo=bool(body.get("completo")))
+                elif path == "/api/tiktok-estoque/extensao/pedidos":  # V20.30: aba "Para enviar" do Seller Center
+                    try:
+                        res = tiktok_pedidos_da_extensao(body.get("pedidos"), body.get("detalhes") or [],
+                                                         completo=bool(body.get("completo")), ator=ctx["username"])
+                    except (TikTokImportacaoDesligada, TikTokRodadaOcupada) as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 409)
+                        return
                 elif path == "/api/tiktok-estoque/extensao/iniciar":  # V19.81: uma rodada de envio por vez
                     try:
                         res = tiktok_extensao_iniciar(ctx["username"])
@@ -47815,6 +48057,7 @@ def saude_checks() -> list[dict[str, Any]]:
     itens: list[dict[str, Any]] = []
     itens += _saude_check(_saude_ml, "ml_conexao", "Operação", "Mercado Livre")
     itens += _saude_check(_saude_shopee, "shopee_conexao", "Operação", "Shopee")
+    itens += _saude_check(_saude_tiktok_pedidos, "tiktok_pedidos", "Operação", "Pedidos do TikTok")  # V20.30
     itens += _saude_check(_saude_posvenda, "posvenda_prazo", "Operação", "Reclamações do Mercado Livre")
     itens += _saude_check(_saude_impressao, "impressao_fila", "Operação", "Fila de impressão (Zebra)")
     itens += _saude_check(_saude_imagens, "imagens_agente", "Operação", "Agente de imagens")  # V20.17
@@ -47828,6 +48071,28 @@ def saude_checks() -> list[dict[str, Any]]:
     itens += _saude_check(_saude_promocoes, "promocoes_auto", "Rotinas", "Promoções automáticas")
     itens += _saude_check(_saude_anuncios_estoque, "anuncios_estoque", "Rotinas", "Estoque dos anúncios do ML")  # V20.26
     return itens
+
+
+def _saude_tiktok_pedidos(agora: float | None = None) -> dict[str, Any]:
+    """V20.30: os pedidos do TikTok só entram com a extensão lendo o Seller Center num PC ligado.
+    Crítico (e-mail) sem leitura há 30 min entre 08:30 e 18:00 de dia útil (Brasília) — às 08:00
+    o PC acabou de ligar; fora do expediente só atenção. Nunca lido = a extensão não está em uso."""
+    g, t = "Operação", "Pedidos do TikTok"
+    agora = time.time() if agora is None else agora
+    if not tiktok_importacao_ligada():
+        return _saude_item("tiktok_pedidos", g, t, "info", "Importação do TikTok desligada")
+    ultima = float(_tiktok_config_ler("pedidos_extensao_epoch") or 0)
+    if not ultima:
+        return _saude_item("tiktok_pedidos", g, t, "info", "A extensão do Seller Center ainda não leu os pedidos")
+    idade = agora - ultima
+    if idade <= TIKTOK_SC_SEM_LEITURA_S:
+        return _saude_item("tiktok_pedidos", g, t, "ok", f"Última leitura do Seller Center há {_saude_idade_txt(idade)}")
+    br = datetime.fromtimestamp(agora, timezone(timedelta(hours=-3)))
+    expediente = br.weekday() < 5 and (8, 30) <= (br.hour, br.minute) < (18, 0)
+    return _saude_item("tiktok_pedidos", g, t, "critico" if expediente else "atencao",
+                       f"Pedidos do TikTok sem leitura há {_saude_idade_txt(idade)}: pedido novo não está entrando na fila",
+                       "Deixe uma aba do Seller Center (seller-br.tiktok.com) aberta no Edge com a extensão "
+                       "Noromak - Estoque TikTok e o Noromak logado.")
 
 
 def _saude_anuncios_estoque() -> dict[str, Any]:

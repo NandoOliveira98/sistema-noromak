@@ -456,6 +456,19 @@ também depois de abrir o kit (linha `KITDB_` excluída); falha ao lê-las = nen
 segue); "Sincronizar agora" só inicia em segundo plano (`tiktok_sincronizar_iniciar`, 409 se já roda); a recusa vai para a amostra
 `<rota> [erro]` e a 1ª resposta boa fica na `<rota>`; link do documento fora de `TIKTOK_PDF_HOSTS` já dá ERRO ao vincular (com o
 host no log). Testes: `TESTES/test_tiktok_etiqueta_v2029.py`, `TESTES/test_tiktok_vendas_v2029.py`.
+**V20.30 — pedidos pela extensão do Seller Center** (dono, 06/11: o TikTok confirmou que a API só sai com gerente de contas, e
+cadastro ISV não vale para conta que já vende; "criar o nosso caminho"). Mapa das chamadas internas em
+`docs/superpowers/specs/2026-11-06-tiktok-seller-center-mapa.md`. Extensão `NOROMAK_TIKTOK_ESTOQUE` **0.7**: alarme de 2 min lê a aba
+"Para enviar" (`POST /api/fulfillment/order/list`, `search_tab 101`) e abre até 10 detalhes por volta (`/api/fulfillment/order/get`):
+primeiro os da fila que sumiram da aba, depois os novos (nome e CPF da nota). Rotas `GET /api/tiktok-estoque/extensao/pedidos-estado` e
+`POST /api/tiktok-estoque/extensao/pedidos` (perfil Admin; importação desligada ou outra rodada = 409). `tiktok_sc_pedido` traduz para o
+formato da Open API (`sku_display_status` = códigos da Open API, conferido: 121 em pedido enviado; quantidade pelas `order_line_ids` não
+canceladas) e reaproveita `_tiktok_linhas_do_pedido` (mesmo uid `TIKTOKAPI_`, origem `API_TIKTOK`) e o `_magalu_merge`. **Sai da fila só
+com o TikTok confirmando** (detalhe IN_TRANSIT/DELIVERED/COMPLETED/CANCELLED); sumiu da aba sem confirmar, lista vazia ou situação
+desconhecida = fica como está. Nome guardado em `tiktok_sc_pedido_v2030` (60 dias); CPF/nome da nota vão para `cliente_fiscal`
+(fonte `tiktok_sc`) só se o pedido ainda não tem nada lá. Painel de saúde `tiktok_pedidos`: Crítico (e-mail) sem leitura completa há 30 min
+entre 08:30 e 18:00 de dia útil, fora disso atenção; nunca lido = info. **Etiqueta continua pelo Seller Center** (a extensão não organiza
+envio). Teste: `TESTES/test_tiktok_pedidos_extensao_v2030.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na
