@@ -39,7 +39,7 @@ import artes  # noqa: E402
 import processar as P  # noqa: E402
 from claude_imagens import ClaudeImagens, ClaudeRecusou  # noqa: E402
 
-VERSAO = "0.3"
+VERSAO = "0.4"  # V20.31: etapa de anúncio
 INTERVALO = 10
 LOG = PASTA / "agente.log"
 TUNEL_LOG = PASTA / "tunel.log"
@@ -129,7 +129,8 @@ class Noromak:
         self._pedir("POST", "/api/imagens/agente/ping", {"versao": VERSAO, "computador": platform.node()})
 
     def proximo(self) -> dict | None:
-        return self._pedir("GET", "/api/imagens/agente/proximo").get("trabalho")
+        # V20.31: "anuncio=1" avisa o servidor que este agente sabe tratar o pedido de anúncio.
+        return self._pedir("GET", "/api/imagens/agente/proximo?anuncio=1").get("trabalho")
 
     def arquivo(self, id_: int, nome: str) -> bytes:
         return self._pedir("GET", f"/api/imagens/agente/arquivo?id={id_}&nome={urllib.request.quote(nome)}", bruto=True)
@@ -139,6 +140,9 @@ class Noromak:
 
     def resultado(self, corpo: dict) -> None:
         self._pedir("POST", "/api/imagens/agente/resultado", corpo)
+
+    def anuncio(self, corpo: dict) -> None:  # V20.31
+        self._pedir("POST", "/api/imagens/agente/anuncio", corpo)
 
 
 PORTAO_LOGIN = ("O portão de login do NoromakWeb barrou o agente. Peça para liberar /expedicao/api/imagens/agente/ no "
@@ -189,7 +193,11 @@ class Agente:
 
     def _processar(self, trabalho: dict, claude: ClaudeImagens, etapa: str | None) -> str:
         try:
-            if etapa == "analise":
+            if str(etapa or "").startswith("anuncio_"):  # V20.31: textos/atributos do anúncio
+                corpo = (self.etapa_anuncio_atributos(trabalho, claude) if etapa == "anuncio_atributos"
+                         else self.etapa_anuncio_textos(trabalho, claude))
+                self._entregar(self.noromak.anuncio, corpo, claude)
+            elif etapa == "analise":
                 corpo = self.etapa_analise(trabalho, claude)
                 self._entregar(self.noromak.analise, corpo, claude)
             else:
@@ -203,9 +211,10 @@ class Agente:
                 raise
             traceback.print_exc()
             msg = _mensagem_erro(e)
-            entregar = self.noromak.analise if etapa == "analise" else self.noromak.resultado
+            entregar = (self.noromak.anuncio if str(etapa or "").startswith("anuncio_")
+                        else self.noromak.analise if etapa == "analise" else self.noromak.resultado)
             try:
-                self._entregar(entregar, {"id": trabalho["id"], "situacao": "erro", "mensagem": msg}, claude)
+                self._entregar(entregar, {"id": trabalho["id"], "etapa": etapa, "situacao": "erro", "mensagem": msg}, claude)
             except Exception:
                 pass
             return "erro: " + msg
@@ -357,6 +366,32 @@ class Agente:
                     "mensagem": dados.get("motivo") or "Não dá para ler o rótulo: mande uma foto mais nítida."}
         return {"id": trabalho["id"], "situacao": "textos_para_aprovar", "textos": {"campos": dados["campos"]},
                 "relatorio": relatorio}
+
+    # ----- V20.31: anúncio (textos, depois atributos da categoria) -----
+    def _anuncio_fontes(self, trabalho: dict, claude: ClaudeImagens) -> tuple[list, list, dict | None]:
+        imagens = [img for _, img in self._originais(trabalho)]
+        catalogo = self._catalogo(trabalho)
+        produto = trabalho.get("produto") or {}
+        pesquisa = None
+        if produto.get("nome") or produto.get("link"):
+            try:
+                pesquisa = self._pesquisar(claude, str(produto.get("nome") or ""), str(produto.get("link") or ""))
+            except Exception as e:  # pesquisa que falha não trava o anúncio
+                registrar(f"#{trabalho['id']} pesquisa falhou: {_mensagem_erro(e)}")
+        return imagens, catalogo, pesquisa
+
+    def etapa_anuncio_textos(self, trabalho: dict, claude: ClaudeImagens) -> dict:
+        imagens, catalogo, pesquisa = self._anuncio_fontes(trabalho, claude)
+        dados = claude.propor_anuncio_textos(imagens, trabalho.get("produto") or {}, catalogo, pesquisa)
+        return {"id": trabalho["id"], "etapa": "anuncio_textos", "situacao": "anuncio_textos",
+                "titulos": dados.get("titulos") or [], "descricao": dados.get("descricao") or ""}
+
+    def etapa_anuncio_atributos(self, trabalho: dict, claude: ClaudeImagens) -> dict:
+        imagens, catalogo, pesquisa = self._anuncio_fontes(trabalho, claude)
+        dados = claude.propor_anuncio_atributos(imagens, trabalho.get("produto") or {}, trabalho.get("proposta") or {},
+                                                trabalho.get("atributos") or [], catalogo, pesquisa)
+        return {"id": trabalho["id"], "etapa": "anuncio_atributos", "situacao": "proposta",
+                "atributos": dados.get("atributos") or []}
 
     def etapa_arte(self, trabalho: dict, claude: ClaudeImagens) -> dict:
         originais = self._originais(trabalho)

@@ -835,6 +835,24 @@ ML que fala de "kit" (frase do ML, vai como `value_id`); nenhum = em branco para
 `POST /api/anuncios/{foto,foto/remover,foto/ordenar,rascunho,rascunho/validar,rascunho/publicar,rascunho/liberar}`; `ficha` aceita criar produto novo.
 Testes: `TESTES/test_anuncios_{criar,fotos,publicar}_v2024.py`.
 
+**V20.31 — agente de anúncios** (dono, 06/11; desenho `docs/superpowers/specs/2026-11-06-agente-anuncios-design.md`). No rascunho, o
+Admin clica em **"Pedir ao agente"** (perfil Admin; `POST /api/anuncios/agente/pedir {rascunho_id, nome?, link?}`) e o agente do Estúdio
+(Claude no PC do dono) propõe **3 títulos** (regras do `/titulo`: ≤ 60, produto+marca+modelo+característica+volume), a **descrição**
+(regras do `/descricao`, `[CONFIRMAR]` no que faltar) e os **atributos obrigatórios/condicionais** da categoria. Usa a **fila do Estúdio**
+(`imagem_trabalho_v2017`, `tipo='anuncio'`, coluna `rascunho_id`; a tela do Estúdio esconde esses trabalhos): fotos da ficha copiadas
+para a pasta do trabalho (kit: as peças com fichas e até 3 fotos; peça sem ficha vai com código e descrição do Precificador).
+**Duas etapas automáticas:** `anuncio_textos` → o servidor pede ao ML a categoria pelo título recomendado (1ª sugestão) e os atributos
+dela (fora do `DB_LOCK`; ML sem resposta = proposta só com os textos e a mensagem) → `anuncio_atributos` → `proposta`. Entrega do agente
+em `POST /api/imagens/agente/anuncio` (token do agente): título > 60 sai da lista; atributo fora dos pedidos ou valor fora da lista do ML
+é descartado; origem `ficha|rotulo|catalogo|internet`. **Só o agente 0.4+ recebe** (`/agente/proximo?anuncio=1`): o antigo trataria o
+pedido como foto principal; entrega cruzada imagem×anúncio = 400. Trocar a categoria (`POST /api/anuncios/agente/atributos`) pede só os
+atributos de novo. **Aceitar** (`POST /api/anuncios/agente/aceitar {trabalho_id, titulo, descricao, atributos, versao_rascunho}`):
+grava no rascunho pelo `anuncio_rascunho_salvar` (versão conferida → 409 `CONFLITO`; os atributos escolhidos vencem os que o rascunho
+tinha) e preenche na ficha **só** `nome/descricao/marca/modelo/categoria_ml` vazios e não "apagados pelo Admin". Nada vai ao ML.
+Gasto no mesmo crédito do Estúdio com `imagem_gasto_v2017.origem='anuncio'` (`imagens_saldo().por_origem`). Estado:
+`GET /api/anuncios/agente?rascunho=` (módulo admin). Testes: `TESTES/test_agente_anuncios_v2031.py` e `AnuncioDoAgente` em
+`FERRAMENTAS_WINDOWS/agente_imagens/test_agente.py`.
+
 **V20.26 — fase 3: controle de estoque dos anúncios do ML** (decisões do dono 05/11; plano
 `docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md`). **Exceção à regra "o Noromak nunca grava estoque": o Noromak grava
 estoque no ML só em anúncio `controle='noromak'`** (nunca Full, Alephee ou removido pelo ADMIN; como já é no TikTok). Cada anúncio tem

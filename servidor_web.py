@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.30-TIKTOK-PEDIDOS-EXTENSAO"
+APP_VERSION = "20.31-AGENTE-ANUNCIOS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -40810,6 +40810,12 @@ def ensure_imagens_schema() -> None:
         colunas = {r["name"] for r in DB.execute("PRAGMA table_info(imagem_gasto_v2017)").fetchall()}
         if "buscas" not in colunas:
             DB.execute("ALTER TABLE imagem_gasto_v2017 ADD COLUMN buscas INTEGER NOT NULL DEFAULT 0")
+        # V20.31: agente de anúncios — o pedido aponta o rascunho; o gasto separa imagem de anúncio.
+        if "origem" not in colunas:
+            DB.execute("ALTER TABLE imagem_gasto_v2017 ADD COLUMN origem TEXT NOT NULL DEFAULT 'imagem'")
+        colunas = {r["name"] for r in DB.execute("PRAGMA table_info(imagem_trabalho_v2017)").fetchall()}
+        if "rascunho_id" not in colunas:
+            DB.execute("ALTER TABLE imagem_trabalho_v2017 ADD COLUMN rascunho_id INTEGER")
         DB.commit()
 
 
@@ -41027,13 +41033,16 @@ def _imagem_custo(modelo: str, entrada: int, saida: int) -> float:
     return (entrada * pe + saida * ps) / 1_000_000
 
 
-def _imagem_registrar_gasto(trabalho_id: int, modelo: str, entrada: int, saida: int, buscas: int = 0) -> None:
-    """Uma linha por entrega do agente (fica mesmo se a imagem for apagada: o crédito foi gasto)."""
+def _imagem_registrar_gasto(trabalho_id: int, modelo: str, entrada: int, saida: int, buscas: int = 0,
+                            origem: str = "imagem") -> None:
+    """Uma linha por entrega do agente (fica mesmo se a imagem for apagada: o crédito foi gasto).
+    V20.31: `origem` separa o gasto das imagens do gasto dos textos de anúncio."""
     if not entrada and not saida and not buscas:
         return
-    DB.execute("INSERT INTO imagem_gasto_v2017(dia,quando,trabalho_id,modelo,entrada,saida,usd,buscas) VALUES(?,?,?,?,?,?,?,?)",
+    DB.execute("INSERT INTO imagem_gasto_v2017(dia,quando,trabalho_id,modelo,entrada,saida,usd,buscas,origem) "
+               "VALUES(?,?,?,?,?,?,?,?,?)",
                (datetime.now(BR_TZ).date().isoformat(), now_iso(), trabalho_id, modelo, entrada, saida,
-                round(_imagem_custo(modelo, entrada, saida) + buscas * IMAGEM_PRECO_BUSCA, 6), buscas))
+                round(_imagem_custo(modelo, entrada, saida) + buscas * IMAGEM_PRECO_BUSCA, 6), buscas, origem))
 
 
 def imagens_saldo(hoje: date | None = None) -> dict[str, Any]:
@@ -41048,9 +41057,14 @@ def imagens_saldo(hoje: date | None = None) -> dict[str, Any]:
     row = DB.execute("SELECT COALESCE(SUM(usd),0) AS usd, COUNT(*) AS n FROM imagem_gasto_v2017 WHERE dia>=? AND dia<?",
                      (inicio.isoformat(), renova.isoformat())).fetchone()
     usado = round(float(row["usd"] or 0), 4)
+    # V20.31: gasto separado por origem (imagem × anúncio), no mesmo crédito.
+    por_origem = {"imagem": 0.0, "anuncio": 0.0}
+    for r in DB.execute("SELECT COALESCE(origem,'imagem') AS o, COALESCE(SUM(usd),0) AS usd FROM imagem_gasto_v2017 "
+                        "WHERE dia>=? AND dia<? GROUP BY o", (inicio.isoformat(), renova.isoformat())).fetchall():
+        por_origem[str(r["o"])] = round(float(r["usd"] or 0), 4)
     return {"valor": valor, "dia": dia, "inicio": inicio.isoformat(), "renova_em": renova.isoformat(),
             "usado": usado, "restante": round(max(0.0, valor - usado), 4), "entregas": int(row["n"] or 0),
-            "pct": round(min(100.0, usado / valor * 100), 2) if valor > 0 else 0.0}
+            "pct": round(min(100.0, usado / valor * 100), 2) if valor > 0 else 0.0, "por_origem": por_origem}
 
 
 def imagens_agente_status() -> dict[str, Any]:
@@ -41066,8 +41080,9 @@ def imagens_agente_status() -> dict[str, Any]:
 
 def imagens_payload() -> dict[str, Any]:
     with DB_LOCK:
+        # V20.31: os pedidos de texto de anúncio usam a mesma fila do agente, mas aparecem só no rascunho do anúncio.
         rows = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE apagado_em IS NULL AND situacao<>'enviando' "
-                          "ORDER BY id DESC").fetchall()
+                          "AND tipo<>'anuncio' ORDER BY id DESC").fetchall()
         modelo = _imagem_cfg("modelo", IMAGEM_MODELO_PADRAO)
         agente = imagens_agente_status()
         saldo = imagens_saldo()
@@ -41226,6 +41241,372 @@ def imagens_arquivo(id_: Any, nome: Any, so_originais: bool = False) -> tuple[by
     return dados, tipo, baixar
 
 
+# ---------- V20.31: agente de anúncios (pedido do Admin no rascunho) ----------
+# Desenho: docs/superpowers/specs/2026-11-06-agente-anuncios-design.md. Usa a fila do Estúdio (tipo 'anuncio'):
+# o agente já busca e baixa por lá. Nada aqui escreve no ML; o aceito vai ao rascunho e aos vazios da ficha.
+ANUNCIO_AGENTE_ABERTO = ("enviando", "aguardando", "analisando", "aguardando_atributos")
+ANUNCIO_AGENTE_MAX_FOTOS = 12
+ANUNCIO_AGENTE_FOTOS_PECA = 3
+
+
+def _anuncio_agente_fotos(codigo: str, limite: int) -> list[Path]:
+    caminhos = []
+    for f in anuncio_fotos(codigo)[:limite]:
+        caminho = ANUNCIO_FOTOS_DIR / str(f.get("arquivo") or "")
+        if caminho.is_file() and caminho.resolve().parent == ANUNCIO_FOTOS_DIR.resolve():
+            caminhos.append(caminho)
+    return caminhos
+
+
+def anuncio_agente_pedir(rascunho_id: Any, ator: str, nome: str = "", link: str = "") -> dict[str, Any]:
+    """Põe o pedido na fila do agente: ficha, fotos da ficha e, no kit, as peças com fichas e fotos."""
+    rasc = anuncio_rascunho_ler(rascunho_id)
+    if rasc is None:
+        raise ValueError("Rascunho não encontrado.")
+    if rasc["situacao"] not in ANUNCIO_RASCUNHO_EDITAVEL:
+        raise ValueError("Este rascunho já foi publicado ou está em publicação.")
+    ficha = ficha_ler(rasc["ficha_codigo"])
+    if ficha is None:
+        raise ValueError("Produto não encontrado.")
+    link = str(link or "").strip()
+    if link:
+        partes = urlparse(link)
+        if partes.scheme not in ("http", "https") or not partes.netloc or len(link) > 500 or any(c.isspace() for c in link):
+            raise ValueError("Link do fornecedor inválido: cole o endereço completo, começando com https://")
+    fotos: list[tuple[Path, str, str]] = [(c, "original", "")
+                                          for c in _anuncio_agente_fotos(ficha["codigo"], ANUNCIO_AGENTE_MAX_FOTOS)]
+    kit: list[dict[str, Any]] = []
+    comp = kit_composicao(ficha["codigo"]) if ficha.get("tipo") == "kit" else None
+    if comp:
+        candidatos = None
+        for c in comp["componentes"]:
+            fp = ficha_ler(c["sku"])
+            if fp is not None:
+                kit.append({"sku": c["sku"], "quantidade": c["quantidade"], "ficha": fp.get("campos") or {}})
+                fotos += [(cam, "peca", c["sku"]) for cam in _anuncio_agente_fotos(c["sku"], ANUNCIO_AGENTE_FOTOS_PECA)]
+            else:  # peça sem ficha: só código e descrição do Precificador
+                if candidatos is None:
+                    candidatos = _anuncio_produtos_candidatos()
+                achado = candidatos.get(normalize(c["sku"])) or {}
+                kit.append({"sku": c["sku"], "quantidade": c["quantidade"], "descricao": str(achado.get("nome") or "")})
+    produto = {"rascunho_id": rasc["id"], "conta": rasc["conta"], "codigo": ficha["codigo"],
+               "ficha": ficha.get("campos") or {}, "tipo_ficha": ficha.get("tipo") or "peca", "kit": kit,
+               "nome": re.sub(r"\s+", " ", str(nome or "")).strip()[:150], "link": link}
+    arquivos = []
+    for i, (cam, papel, peca) in enumerate(fotos):
+        a = {"nome": f"original_{i + 1}{cam.suffix.lower() or '.jpg'}", "papel": papel, "bytes": cam.stat().st_size}
+        if peca:
+            a["peca"] = peca
+        arquivos.append(a)
+    agora = now_iso()
+    with DB_LOCK:
+        aberto = DB.execute("SELECT id FROM imagem_trabalho_v2017 WHERE tipo='anuncio' AND rascunho_id=? AND "
+                            f"apagado_em IS NULL AND situacao IN ({','.join('?' * len(ANUNCIO_AGENTE_ABERTO))})",
+                            (rasc["id"], *ANUNCIO_AGENTE_ABERTO)).fetchone()
+        if aberto is not None:
+            raise ImagemConflito("Já tem um pedido ao agente para este rascunho.")
+        # V20.31 (revisão final): pedido novo aposenta a proposta anterior do rascunho (e as fotos copiadas dela).
+        antigos = [r["id"] for r in DB.execute("SELECT id FROM imagem_trabalho_v2017 WHERE tipo='anuncio' AND rascunho_id=? "
+                                               "AND apagado_em IS NULL", (rasc["id"],)).fetchall()]
+        for aid in antigos:
+            DB.execute("UPDATE imagem_trabalho_v2017 SET apagado_em=?, apagado_por=? WHERE id=?", (agora, str(ator or ""), aid))
+        cur = DB.execute(
+            "INSERT INTO imagem_trabalho_v2017(tipo,sku,situacao,criado_por,criado_em,atualizado_em,arquivos_json,bytes,"
+            "produto_json,rascunho_id) VALUES('anuncio',?,'enviando',?,?,?,?,?,?,?)",
+            (ficha["codigo"], str(ator or ""), agora, agora, json.dumps(arquivos, ensure_ascii=False),
+             sum(a["bytes"] for a in arquivos), json.dumps(produto, ensure_ascii=False), rasc["id"]))
+        id_ = int(cur.lastrowid)
+        DB.commit()
+    pasta = _imagem_pasta(id_)
+    try:  # cópia fora do DB_LOCK; falha = some a pasta e a linha
+        pasta.mkdir(parents=True, exist_ok=True)
+        for a, (cam, _, _) in zip(arquivos, fotos):
+            shutil.copyfile(cam, pasta / a["nome"])
+    except Exception as exc:
+        shutil.rmtree(pasta, ignore_errors=True)
+        with DB_LOCK:
+            DB.execute("DELETE FROM imagem_trabalho_v2017 WHERE id=?", (id_,))
+            DB.commit()
+        raise ValueError(f"Não foi possível preparar as fotos para o agente: {exc}")
+    with DB_LOCK:
+        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aguardando' WHERE id=?", (id_,))
+        DB.commit()
+    for aid in antigos:
+        _anuncio_agente_limpar_pasta(aid)
+    audit(str(ator or ""), "anuncios.agente.pedir", f"rascunho={rasc['id']}|{ficha['codigo']}|{len(arquivos)} foto(s)|#{id_}")
+    return {"ok": True, "trabalho_id": id_}
+
+
+def _anuncio_agente_limpar_pasta(trabalho_id: int) -> None:
+    """V20.31 (revisão final): as fotos copiadas para o agente só servem enquanto o pedido anda."""
+    shutil.rmtree(_imagem_pasta(int(trabalho_id)), ignore_errors=True)
+
+
+def _anuncio_agente_versao_ok(versao: str) -> bool:
+    try:
+        partes = [int(x) for x in str(versao or "").split(".")[:2]]
+    except ValueError:
+        return False
+    return tuple(partes + [0] * (2 - len(partes))) >= (0, 4)
+
+
+def anuncio_agente_estado(rascunho_id: Any) -> dict[str, Any] | None:
+    try:
+        rid = int(rascunho_id)
+    except (TypeError, ValueError):
+        return None
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE tipo='anuncio' AND rascunho_id=? AND apagado_em IS NULL "
+                         "ORDER BY id DESC LIMIT 1", (rid,)).fetchone()
+        versao = _imagem_cfg("agente_versao", "")
+    if row is None:
+        return None
+    return {"id": row["id"], "situacao": row["situacao"], "mensagem": row["mensagem"],
+            "proposta": _imagem_json(row["textos_json"], {}), "atualizado_em": row["atualizado_em"],
+            # V20.31 (revisão final): agente antigo (< 0.4) nunca pega o pedido — a tela avisa
+            "agente_antigo": bool(versao) and not _anuncio_agente_versao_ok(versao)}
+
+
+def anuncio_agente_cancelar(trabalho_id: Any, ator: str) -> dict[str, Any]:
+    """V20.31 (revisão final): o Admin cancela o pedido (preso, agente desligado ou antigo). Libera pedir de novo."""
+    with DB_LOCK:
+        row = _imagem_row(trabalho_id)
+        if row["tipo"] != "anuncio" or row["apagado_em"]:
+            raise ValueError("Pedido não encontrado.")
+        DB.execute("UPDATE imagem_trabalho_v2017 SET apagado_em=?, apagado_por=?, reservado_ate=NULL, versao=versao+1 "
+                   "WHERE id=?", (now_iso(), str(ator or ""), row["id"]))
+        DB.commit()
+    _anuncio_agente_limpar_pasta(row["id"])
+    audit(str(ator or ""), "anuncios.agente.cancelar", f"#{row['id']}|rascunho={row['rascunho_id']}")
+    return {"ok": True}
+
+
+ANUNCIO_AGENTE_ORIGENS = ("ficha", "rotulo", "catalogo", "internet")
+
+
+def _anuncio_agente_categoria(titulo: str, conta: str, categoria: str = "") -> dict[str, Any]:
+    """Fora do DB_LOCK: categoria pelo título (1ª sugestão do ML) e os atributos dela. Erro = só a mensagem."""
+    try:
+        sugeridas: list[dict[str, Any]] = []
+        if not categoria:
+            sugeridas = ml_categoria_sugerir(titulo, conta)
+            if not sugeridas:
+                raise RuntimeError("o ML não sugeriu categoria para o título")
+            categoria = sugeridas[0]["categoria"]
+        defs = ml_categoria_atributos(categoria, conta)
+    except Exception as exc:
+        return {"erro": f"Categoria não lida no ML: {exc}"[:500]}
+    nome = str(defs.get("nome") or next((s.get("categoria_nome") for s in sugeridas
+                                         if s.get("categoria") == categoria), "") or "")
+    return {"categoria": categoria, "categoria_nome": nome, "atributos_ml": defs.get("atributos") or [],
+            **({"categorias": sugeridas} if sugeridas else {})}
+
+
+def _anuncio_agente_titulos(brutos: Any) -> list[dict[str, Any]]:
+    titulos = []
+    for t in (brutos if isinstance(brutos, list) else [])[:3]:
+        texto = " ".join(str((t or {}).get("texto") if isinstance(t, dict) else t or "").split())
+        if texto and len(texto) <= 60:  # acima de 60 sai da lista (nunca é cortado)
+            titulos.append({"texto": texto, "recomendado": bool(isinstance(t, dict) and t.get("recomendado"))})
+    if titulos and sum(t["recomendado"] for t in titulos) != 1:
+        for i, t in enumerate(titulos):
+            t["recomendado"] = i == 0
+    return titulos
+
+
+def _anuncio_agente_atributos(brutos: Any, defs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Só id da categoria; com lista de valores do ML, só valor da lista (id ou nome); fora disso, descartado."""
+    por_id = {str(d.get("id")): d for d in defs if isinstance(d, dict) and d.get("id")}
+    saida = []
+    for a in (brutos if isinstance(brutos, list) else []):
+        if not isinstance(a, dict) or str(a.get("id") or "") not in por_id:
+            continue
+        d = por_id[str(a["id"])]
+        valores = [v for v in d.get("valores") or [] if isinstance(v, dict)]
+        valor = " ".join(str(a.get("valor") or "").split())
+        valor_id = str(a.get("valor_id") or "").strip()
+        if valores:
+            achado = next((v for v in valores if valor_id and str(v.get("id")) == valor_id), None) or \
+                next((v for v in valores if valor and _anuncio_sem_acento(v.get("nome")) == _anuncio_sem_acento(valor)), None)
+            if achado is None:
+                continue
+            valor, valor_id = str(achado.get("nome") or ""), str(achado.get("id") or "")
+        elif not valor:
+            continue
+        else:
+            valor_id = ""
+            if d.get("max"):
+                valor = valor[:int(d["max"])]
+        origem = str(a.get("origem") or "")
+        fonte = str(a.get("fonte") or "").strip()[:300]
+        if not re.match(r"https?://", fonte, re.I):  # revisão final: link vindo da internet só http(s)
+            fonte = ""
+        saida.append({"id": str(a["id"]), "valor": valor, "valor_id": valor_id,
+                      "origem": origem if origem in ANUNCIO_AGENTE_ORIGENS else "internet", "fonte": fonte})
+    return saida
+
+
+def anuncio_agente_entregar(req: dict[str, Any]) -> dict[str, Any]:
+    """Entrega do agente (token do agente). Etapa de textos: grava e, fora do lock, busca a categoria e os
+    atributos no ML; etapa de atributos: valida contra a lista da categoria e deixa a proposta pronta."""
+    etapa = str(req.get("etapa") or "")
+    te, ts, modelo = _imagem_tokens(req)
+
+    def _reservado() -> sqlite3.Row:
+        return _imagem_agente_reservado(req, ("analisando",), anuncio=True)
+
+    def _gasto(row: sqlite3.Row) -> None:
+        _imagem_registrar_gasto(row["id"], modelo or row["modelo"] or _imagem_cfg("modelo", IMAGEM_MODELO_PADRAO), te, ts,
+                                _imagem_buscas(req), origem="anuncio")
+
+    if str(req.get("situacao") or "") == "erro":
+        msg = str(req.get("mensagem") or "")[:900]
+        with DB_LOCK:
+            row = _reservado()
+            # revisão final: com os títulos já entregues, o erro na etapa de atributos não joga fora os textos
+            tem_textos = bool(_imagem_json(row["textos_json"], {}).get("titulos"))
+            DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, mensagem=?, reservado_ate=NULL, versao=versao+1, "
+                       "atualizado_em=? WHERE id=?",
+                       ("proposta" if tem_textos else "erro",
+                        f"O agente não preencheu os atributos: {msg}" if tem_textos else msg, now_iso(), row["id"]))
+            _gasto(row)
+            DB.commit()
+        if not tem_textos:
+            _anuncio_agente_limpar_pasta(row["id"])
+        return {"ok": True}
+    if etapa == "anuncio_textos":
+        titulos = _anuncio_agente_titulos(req.get("titulos"))
+        if not titulos:
+            raise ValueError("A proposta não trouxe nenhum título válido (até 60 caracteres).")
+        textos = {"titulos": titulos, "descricao": str(req.get("descricao") or "")[:50000],
+                  "fontes": req.get("fontes") if isinstance(req.get("fontes"), dict) else {}}
+        with DB_LOCK:
+            row = _reservado()
+            produto = _imagem_json(row["produto_json"], {})
+            DB.execute("UPDATE imagem_trabalho_v2017 SET textos_json=?, reservado_ate=?, versao=versao+1, atualizado_em=?, "
+                       "modelo=COALESCE(NULLIF(?,''),modelo), tokens_entrada=tokens_entrada+?, tokens_saida=tokens_saida+? "
+                       "WHERE id=?", (json.dumps(textos, ensure_ascii=False), time.time() + IMAGEM_RESERVA_S, now_iso(),
+                                      modelo, te, ts, row["id"]))
+            _gasto(row)
+            DB.commit()
+        recomendado = next(t["texto"] for t in titulos if t["recomendado"])
+        cat = _anuncio_agente_categoria(recomendado, str(produto.get("conta") or ""))
+        with DB_LOCK:
+            row = _reservado()  # apagado enquanto o ML respondia = 409, nada gravado
+            textos.update({k: v for k, v in cat.items() if k != "erro"})
+            situacao = "proposta" if cat.get("erro") else "aguardando_atributos"
+            DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, textos_json=?, mensagem=?, reservado_ate=NULL, "
+                       "tentativas=0, versao=versao+1, atualizado_em=? WHERE id=?",
+                       (situacao, json.dumps(textos, ensure_ascii=False), cat.get("erro") or "", now_iso(), row["id"]))
+            DB.commit()
+        return {"ok": True, "situacao": situacao}
+    if etapa == "anuncio_atributos":
+        with DB_LOCK:
+            row = _reservado()
+            textos = _imagem_json(row["textos_json"], {})
+            pedidos = [d for d in textos.get("atributos_ml") or []  # só os que foram pedidos ao agente
+                       if isinstance(d, dict) and (d.get("obrigatorio") or d.get("condicional"))]
+            textos["atributos"] = _anuncio_agente_atributos(req.get("atributos"), pedidos)
+            DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='proposta', textos_json=?, mensagem='', reservado_ate=NULL, "
+                       "tentativas=0, versao=versao+1, atualizado_em=?, modelo=COALESCE(NULLIF(?,''),modelo), "
+                       "tokens_entrada=tokens_entrada+?, tokens_saida=tokens_saida+? WHERE id=?",
+                       (json.dumps(textos, ensure_ascii=False), now_iso(), modelo, te, ts, row["id"]))
+            _gasto(row)
+            DB.commit()
+        return {"ok": True, "situacao": "proposta"}
+    raise ValueError("Etapa desconhecida.")
+
+
+def anuncio_agente_trocar_categoria(trabalho_id: Any, categoria: str, ator: str) -> dict[str, Any]:
+    """O Admin troca a categoria da proposta: só os atributos são pedidos de novo ao agente."""
+    with DB_LOCK:
+        row = _imagem_row(trabalho_id)
+    if row["tipo"] != "anuncio" or row["apagado_em"] or row["situacao"] != "proposta":
+        raise ImagemConflito("A proposta não está pronta para trocar a categoria.")
+    produto = _imagem_json(row["produto_json"], {})
+    cat = _anuncio_agente_categoria("", str(produto.get("conta") or ""), str(categoria or "").strip().upper())
+    if cat.get("erro"):
+        raise ValueError(cat["erro"])
+    with DB_LOCK:
+        atual = _imagem_row(trabalho_id)
+        if atual["apagado_em"] or atual["situacao"] != "proposta":
+            raise ImagemConflito("A proposta mudou enquanto o ML respondia.")
+        textos = _imagem_json(atual["textos_json"], {})
+        textos.update(cat)
+        textos["atributos"] = []
+        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aguardando_atributos', textos_json=?, mensagem='', "
+                   "tentativas=0, versao=versao+1, atualizado_em=? WHERE id=?",
+                   (json.dumps(textos, ensure_ascii=False), now_iso(), atual["id"]))
+        DB.commit()
+    audit(str(ator or ""), "anuncios.agente.categoria", f"#{atual['id']}|{cat['categoria']}")
+    return {"ok": True}
+
+
+# Campo da ficha que a proposta aceita preenche (só se vazio e não "apagado pelo Admin").
+ANUNCIO_AGENTE_FICHA_ATRIBUTO = {"marca": "BRAND", "modelo": "MODEL"}
+
+
+def anuncio_agente_aceitar(trabalho_id: Any, escolha: dict[str, Any], ator: str, versao_rascunho: Any) -> dict[str, Any]:
+    """O Admin aceita a proposta: vai ao rascunho (versão conferida pelo anuncio_rascunho_salvar) e aos campos
+    vazios da ficha. Nada vai ao ML."""
+    escolha = escolha if isinstance(escolha, dict) else {}
+    with DB_LOCK:
+        row = _imagem_row(trabalho_id)
+    if row["tipo"] != "anuncio" or row["apagado_em"] or row["situacao"] != "proposta":
+        raise ImagemConflito("Esta proposta não está mais pronta para aceitar.")
+    textos = _imagem_json(row["textos_json"], {})
+    titulo = " ".join(str(escolha.get("titulo") or "").split())
+    if titulo not in {t.get("texto") for t in textos.get("titulos") or []}:
+        raise ValueError("Escolha um dos títulos da proposta.")
+    rasc = anuncio_rascunho_ler(row["rascunho_id"])
+    if rasc is None or rasc["situacao"] not in ANUNCIO_RASCUNHO_EDITAVEL:
+        raise ValueError("Este rascunho já foi publicado ou está em publicação.")
+    try:
+        versao = int(versao_rascunho)
+    except (TypeError, ValueError):
+        raise ValueError("Versão do rascunho inválida.")
+    escolhidos = {str(x) for x in (escolha.get("atributos") or [])}
+    atuais = {k: v for k, v in (rasc.get("atributos") or {}).items() if k != "_guardados" and str(v or "").strip()}
+    # Revisão final: o que veio da ficha para o rascunho (marca, modelo, GTIN, SKU, peso e medidas) vale mais que a
+    # proposta (ficha do Admin > rótulo/catálogo > internet).
+    propostos = {a["id"]: a["valor"] for a in textos.get("atributos") or []
+                 if a.get("id") in escolhidos and not (a["id"] in ANUNCIO_CAMPO_DO_ATRIBUTO and a["id"] in atuais)}
+    dados: dict[str, Any] = {"id": rasc["id"], "titulo": titulo}
+    if textos.get("categoria"):
+        dados["categoria"] = textos["categoria"]
+        if textos["categoria"] != str(rasc.get("categoria") or ""):
+            # Revisão final: categoria nova = só os atributos que ela tem (o resto o rascunho guarda em _guardados)
+            ids_cat = {str(d.get("id")) for d in textos.get("atributos_ml") or [] if isinstance(d, dict)}
+            atuais = {k: v for k, v in atuais.items() if k in ids_cat or k in ANUNCIO_CAMPO_DO_ATRIBUTO}
+        if propostos or atuais:
+            dados["atributos"] = {**atuais, **propostos}
+    descricao = str(textos.get("descricao") or "") if escolha.get("descricao") else ""
+    if descricao:
+        dados["descricao"] = descricao
+    salvo = anuncio_rascunho_salvar(dados, ator, versao)  # FichaConflito = o rascunho mudou (409)
+    # Ficha: só o que está vazio e não foi apagado pelo Admin.
+    ficha = ficha_ler(rasc["ficha_codigo"]) or {}
+    campos, origem = ficha.get("campos") or {}, ficha.get("origem") or {}
+    candidatos = {"nome": titulo, "descricao": descricao, "categoria_ml": str(textos.get("categoria") or "")}
+    for campo, attr in ANUNCIO_AGENTE_FICHA_ATRIBUTO.items():
+        candidatos[campo] = propostos.get(attr, "")
+    novos = {c: v for c, v in candidatos.items()
+             if v and not str(campos.get(c) or "").strip() and origem.get(c) != "admin"}
+    if novos and ficha:
+        try:
+            ficha_salvar(rasc["ficha_codigo"], novos, ator, ficha.get("versao"))
+        except FichaConflito:
+            novos = {}  # a ficha mudou no meio: o rascunho já foi gravado; a ficha fica como está
+    with DB_LOCK:
+        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aceita', versao=versao+1, atualizado_em=? WHERE id=?",
+                   (now_iso(), row["id"]))
+        DB.commit()
+    _anuncio_agente_limpar_pasta(row["id"])  # revisão final: as fotos copiadas não servem mais
+    audit(str(ator or ""), "anuncios.agente.aceitar",
+          f"#{row['id']}|rascunho={rasc['id']}|{len(propostos)} atributo(s)|ficha: {','.join(sorted(novos)) or '-'}")
+    return {"ok": True, "rascunho": salvo, "ficha_preenchida": sorted(novos)}
+
+
 # ---------- agente ----------
 
 def imagens_agente_ping(req: dict[str, Any]) -> None:
@@ -41238,9 +41619,11 @@ def imagens_agente_ping(req: dict[str, Any]) -> None:
         DB.commit()
 
 
-def imagens_agente_proximo() -> dict[str, Any]:
+def imagens_agente_proximo(aceita_anuncio: bool = False) -> dict[str, Any]:
     """Entrega o trabalho mais antigo ao agente e reserva por IMAGEM_RESERVA_S. Reserva vencida
-    (agente caiu no meio) volta para a fila; depois de IMAGEM_TENTATIVAS vira "erro"."""
+    (agente caiu no meio) volta para a fila; depois de IMAGEM_TENTATIVAS vira "erro".
+    V20.31: pedido de anúncio só vai ao agente que avisa que sabe tratar (`?anuncio=1`): o agente antigo o
+    trataria como foto principal."""
     agora = time.time()
     with DB_LOCK:
         _imagem_cfg_set("agente_ping", str(agora))
@@ -41249,19 +41632,31 @@ def imagens_agente_proximo() -> dict[str, Any]:
                               (*IMAGEM_EM_TRABALHO, agora)).fetchall()
         for v in vencidos:
             if int(v["tentativas"]) >= IMAGEM_TENTATIVAS:
-                DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='erro', reservado_ate=NULL, versao=versao+1, "
+                # V20.31 (revisão final): anúncio com os títulos já entregues fica com a proposta (sem os atributos)
+                textos_ok = v["tipo"] == "anuncio" and bool(_imagem_json(v["textos_json"], {}).get("titulos"))
+                DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, reservado_ate=NULL, versao=versao+1, "
                            "mensagem=?, atualizado_em=? WHERE id=?",
-                           (f"O agente não terminou depois de {IMAGEM_TENTATIVAS} tentativas.", now_iso(), v["id"]))
+                           ("proposta" if textos_ok else "erro",
+                            f"O agente não terminou depois de {IMAGEM_TENTATIVAS} tentativas."
+                            + (" Os atributos ficaram em branco." if textos_ok else ""), now_iso(), v["id"]))
+                if v["tipo"] == "anuncio" and not textos_ok:
+                    _anuncio_agente_limpar_pasta(v["id"])
             else:
                 volta = "aguardando_arte" if v["situacao"] == "gerando" else "aguardando"
+                if v["tipo"] == "anuncio" and _imagem_json(v["textos_json"], {}).get("titulos"):
+                    volta = "aguardando_atributos"  # V20.31: a etapa de textos já foi entregue
                 DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, reservado_ate=NULL, atualizado_em=? WHERE id=?",
                            (volta, now_iso(), v["id"]))
         row = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE apagado_em IS NULL AND situacao IN "
-                         "('aguardando','aguardando_arte') ORDER BY id LIMIT 1").fetchone()
+                         "('aguardando','aguardando_arte','aguardando_atributos')"
+                         + ("" if aceita_anuncio else " AND tipo<>'anuncio'") + " ORDER BY id LIMIT 1").fetchone()
         if row is None:
             DB.commit()
             return {"ok": True, "trabalho": None}
-        if row["situacao"] == "aguardando_arte":
+        if row["tipo"] == "anuncio":  # V20.31: agente de anúncios
+            etapa = "anuncio_atributos" if row["situacao"] == "aguardando_atributos" else "anuncio_textos"
+            nova = "analisando"
+        elif row["situacao"] == "aguardando_arte":
             etapa, nova = "arte", "gerando"
         elif row["tipo"] in ("principal", "juntos"):
             # Kit juntos sai sem texto (foto dos itens juntos em fundo branco): mesmo caminho da principal.
@@ -41273,19 +41668,26 @@ def imagens_agente_proximo() -> dict[str, Any]:
         modelo = _imagem_cfg("modelo", IMAGEM_MODELO_PADRAO)
         DB.commit()
     textos = _imagem_json(row["textos_json"], {})
-    return {"ok": True, "trabalho": {
+    trabalho = {
         "id": row["id"], "tipo": row["tipo"], "sku": row["sku"], "etapa": etapa, "modelo": modelo,
         "arquivos": _imagem_json(row["arquivos_json"], []), "obs": row["obs"],
         "produto": _imagem_json(row["produto_json"], {}),
         "textos": {"campos": textos.get("campos") or []} if etapa == "arte" else None,
         "reservado_s": IMAGEM_RESERVA_S,
-    }}
+    }
+    if etapa == "anuncio_atributos":  # V20.31: só os obrigatórios/condicionais da categoria + o que já foi proposto
+        trabalho["atributos"] = [a for a in textos.get("atributos_ml") or []
+                                 if isinstance(a, dict) and (a.get("obrigatorio") or a.get("condicional"))]
+        trabalho["proposta"] = {k: textos.get(k) for k in ("titulos", "descricao", "categoria", "categoria_nome")}
+    return {"ok": True, "trabalho": trabalho}
 
 
-def _imagem_agente_reservado(req: dict[str, Any], situacoes: tuple[str, ...]) -> sqlite3.Row:
+def _imagem_agente_reservado(req: dict[str, Any], situacoes: tuple[str, ...], anuncio: bool = False) -> sqlite3.Row:
     row = _imagem_row(req.get("id"))
     if row["apagado_em"] or row["situacao"] not in situacoes:
         raise ImagemConflito("Este trabalho não está mais na vez do agente (apagado, refeito ou já entregue).")
+    if (row["tipo"] == "anuncio") != anuncio:  # V20.31: anúncio só pela rota do anúncio, imagem só pelas de imagem
+        raise ValueError("Este trabalho não é desta etapa (anúncio × imagem).")
     return row
 
 
@@ -42037,6 +42439,11 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = self.auth(admin_only=True)
             if ctx is not None:
                 self.send_json({"ok": True, "trabalhos": anuncio_estudio_lista(str((query.get("busca") or [""])[0]))})
+            return
+        if path == "/api/anuncios/agente":  # V20.31: estado do pedido ao agente de um rascunho (so le)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, "trabalho": anuncio_agente_estado((query.get("rascunho") or [""])[0])})
             return
         if path == "/api/anuncios/rascunhos":  # V20.24: rascunhos de uma ficha (so le o banco)
             ctx = self.auth(admin_only=True)
@@ -43186,7 +43593,7 @@ class AppHandler(BaseHTTPRequestHandler):
         q = lambda k: (query.get(k) or [""])[0]
         if path == "/api/imagens/agente/proximo":
             if self.imagem_agente_auth():
-                self.imagem_responder(imagens_agente_proximo)
+                self.imagem_responder(lambda: imagens_agente_proximo(q("anuncio") == "1"))  # V20.31
             return
         if path == "/api/imagens/agente/arquivo":
             if not self.imagem_agente_auth():
@@ -43249,6 +43656,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.imagem_responder(lambda: imagens_agente_analise(self.read_json()))
             elif path == "/api/imagens/agente/resultado":
                 self.imagem_responder(lambda: imagens_agente_resultado(self.read_json()))
+            elif path == "/api/imagens/agente/anuncio":  # V20.31: textos/atributos do anúncio
+                self.imagem_responder(lambda: anuncio_agente_entregar(self.read_json()))
             else:
                 self.send_json({"ok": False, "error": "Rota do agente desconhecida."}, 404)
             return
@@ -44410,7 +44819,10 @@ class AppHandler(BaseHTTPRequestHandler):
                     "/api/anuncios/remover", "/api/anuncios/reincluir", "/api/anuncios/foto",
                     "/api/anuncios/foto/remover", "/api/anuncios/foto/ordenar", "/api/anuncios/rascunho",
                     "/api/anuncios/rascunho/validar", "/api/anuncios/rascunho/publicar",
-                    "/api/anuncios/rascunho/liberar"):
+                    "/api/anuncios/rascunho/liberar",
+                    # V20.31: agente de anúncios (pedir, trocar a categoria, aceitar)
+                    "/api/anuncios/agente/pedir", "/api/anuncios/agente/atributos", "/api/anuncios/agente/aceitar",
+                    "/api/anuncios/agente/cancelar"):
             # V20.23: ver = modulo admin; gravar = so perfil Admin. Nada daqui grava no ML/Shopee/Magalu/TikTok/Apollo.
             ctx = self.auth(admin_only=True)
             if ctx is None:
@@ -44558,6 +44970,39 @@ class AppHandler(BaseHTTPRequestHandler):
                     rasc = anuncio_rascunho_salvar(body, ctx["username"], v)
                     audit(ctx["username"], "anuncios.rascunho", f"{rasc.get('ficha_codigo')}|{rasc.get('id')}|v{rasc.get('versao')}")
                     res = {"ok": True, "rascunho": rasc}
+                elif path == "/api/anuncios/agente/pedir":  # V20.31: pedido ao agente (nada vai ao ML)
+                    try:
+                        res = anuncio_agente_pedir(body.get("rascunho_id"), ctx["username"],
+                                                   str(body.get("nome") or ""), str(body.get("link") or ""))
+                    except ImagemConflito as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 409)
+                        return
+                elif path == "/api/anuncios/agente/cancelar":  # V20.31 (revisao final): pedido preso
+                    try:
+                        res = anuncio_agente_cancelar(body.get("trabalho_id"), ctx["username"])
+                    except ImagemNaoEncontrada as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 404)
+                        return
+                elif path == "/api/anuncios/agente/aceitar":  # V20.31: aceito vai ao rascunho e aos vazios da ficha
+                    try:
+                        res = anuncio_agente_aceitar(body.get("trabalho_id"), body, ctx["username"],
+                                                     body.get("versao_rascunho"))
+                    except ImagemNaoEncontrada as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 404)
+                        return
+                    except ImagemConflito as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 409)
+                        return
+                elif path == "/api/anuncios/agente/atributos":  # V20.31: trocar a categoria da proposta
+                    try:
+                        res = anuncio_agente_trocar_categoria(body.get("trabalho_id"), str(body.get("categoria") or ""),
+                                                              ctx["username"])
+                    except ImagemNaoEncontrada as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 404)
+                        return
+                    except ImagemConflito as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 409)
+                        return
                 elif path == "/api/anuncios/rascunho/validar":  # V20.24: POST /items/validate (nao cria nada)
                     res = anuncio_validar(body.get("id"), ctx["username"])
                 elif path == "/api/anuncios/rascunho/publicar":  # V20.24: a UNICA escrita no ML dos anuncios
