@@ -856,7 +856,7 @@ kit" da aba Kits continua recusando (aponta para o seletor). A trava da fila par
 = `ativo: false` no Cadastro (nunca apaga; recusado com pedido do kit na fila, `_kit_desativar`); a ficha mostra "kit desativado" e
 "Kit" de novo religa com as peças antigas. A escolha fica em `anuncio_ficha_v2023.tipo_confirmado_por/em`; a puxada
 (`_ficha_garantir_kit` com ator `importacao:`) nunca desfaz. Mudou o tipo = anúncios da ficha em Automático voltam a Manual (linha no
-registro). Kit inativo com Peça escolhida: o estoque do anúncio consome o próprio código. **Selo "kit? confirme a composição"**
+registro). **Peça confirmada = 1 × o código INTEIRO** no estoque e no pendente (regra única em `_anuncio_sku_partes`, conjunto `_anuncio_pecas_confirmadas` na chave da leitura guardada do pendente): "0893600022-0893764272" vai assim ao Apollo e a fila desse SKU desconta dele, nunca a leitura antiga que fica só com "0893764272"; sem confirmação continua como antes (selo + sem Automático). **Selo "kit? confirme a composição"**
 (`anuncio_sku_parece_kit`, heurística conservadora): exatamente um hífen, cada lado só 0-9/A-Z/ponto com **7+ caracteres e 5+
 dígitos** (o prefixo de anúncio "151490-"/"157507-" tem 5–6 e fica fora; "KIT…" e "A/B" também), sem kit no Cadastro e tipo não
 escolhido. Na lista, na ficha e na linha do anúncio; o **Automático é recusado** até o Admin escolher (e o anúncio que já estava em

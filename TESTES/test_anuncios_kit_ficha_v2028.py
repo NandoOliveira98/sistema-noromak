@@ -194,6 +194,36 @@ class KitFichaTeste(TesteNoromak):
         inserir(anuncio_id="MLB2", ficha="151490-0893764272")
         S.anuncio_estoque_modo_definir("ml", "aracatuba", "MLB2", "automatico", "luis")
 
+    def test_peca_confirmada_com_traco_usa_o_codigo_inteiro(self):
+        """Peca confirmada = 1 x o codigo inteiro no Apollo e no pendente (nunca so "0893764272")."""
+        puxada_cria_peca()
+        inserir()
+        fila([linha("PED1", DUPLO, 3), linha("PED2", "0893764272", 5)])
+        # sem confirmar: selo + Automatico recusado (como hoje)
+        self.assertTrue(S.anuncio_ficha_payload(DUPLO)["kit_suspeito"])
+        with self.assertRaises(ValueError):
+            S.anuncio_estoque_modo_definir("ml", "aracatuba", "MLB1", "automatico", "luis")
+        S.anuncio_ficha_tipo_definir(DUPLO, "peca", "luis")
+        S.anuncio_estoque_modo_definir("ml", "aracatuba", "MLB1", "automatico", "luis")
+        chamados = []
+        stock_antigo = S.crm_stock_lookup.side_effect
+
+        def stock(codigo, operador="", wait_seconds=0):
+            chamados.append(codigo)
+            return stock_antigo(codigo, operador, wait_seconds)
+        S.crm_stock_lookup.side_effect = stock
+        self.assertEqual(S._anuncios_codigos_automatico("aracatuba"), {S.normalize(DUPLO): S.normalize(DUPLO)})
+        self.apollo = {S.normalize(DUPLO): {1: 10}, "0893764272": {1: 50}}
+        S.anuncios_apollo_ler(S.normalize(DUPLO), "aracatuba")
+        self.assertEqual(chamados, [S.normalize(DUPLO)])
+        it = next(i for i in S.anuncios_estoque_calcular("aracatuba") if i["anuncio_id"] == "MLB1")
+        self.assertEqual([(p["codigo"], p["quantidade"]) for p in it["pecas"]], [(S.normalize(DUPLO), 1)])
+        self.assertEqual(it["pecas"][0]["a_baixar"], 3)  # so a linha do SKU inteiro; a de 0893764272 nao
+        self.assertEqual(it["calculado"], 7)
+        pend = S.pendentes_por_filial(("aracatuba",))["aracatuba"]
+        self.assertEqual(pend.get(S._exp_norm_codigo(DUPLO)), 3)
+        self.assertEqual(pend.get("0893764272"), 5)
+
     def test_busca_de_produtos(self):
         S.ficha_importar("0893600022", {"nome": "Desengripante 300ml"}, "anuncio_ml")
         r = S.anuncio_produtos_buscar("desengrip")

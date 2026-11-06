@@ -8640,8 +8640,18 @@ def pendentes_da_filial(filial: str) -> dict[str, int]:
     return saida
 
 
+def _anuncio_pecas_confirmadas() -> frozenset[str]:
+    """V20.28: codigos (normalize) cujas fichas o Admin confirmou como Peca. Pequena (so as confirmadas)."""
+    with DB_LOCK:
+        rows = DB.execute("SELECT codigo FROM anuncio_ficha_v2023 WHERE tipo='peca' "
+                          "AND COALESCE(tipo_confirmado_por,'')<>''").fetchall()
+    return frozenset(str(r[0]) for r in rows)
+
+
 def _anuncio_sku_partes(sku: Any, catalogo: dict[str, dict[str, Any]],
-                        conhecidos: Any) -> tuple[list[tuple[str, int]], dict[str, Any] | None]:
+                        conhecidos: Any,
+                        pecas_confirmadas: frozenset[str] | set[str] | None = None,
+                        ) -> tuple[list[tuple[str, int]], dict[str, Any] | None]:
     """V20.26 (revisao): a MESMA abertura do SKU para o estoque do anuncio e para o pendente da fila (antes o pendente
     so usava o `_tiktok_pecas`: "WAP103/S", "PSH367/80" e "KIT-1/10405594-1/10405569" nunca descontavam).
     Kit = Cadastro de Kits / KITn-X; senao `_separacao_partes` (regra da V19.48). `conhecidos` = funcao (lida so com "/").
@@ -8650,7 +8660,14 @@ def _anuncio_sku_partes(sku: Any, catalogo: dict[str, dict[str, Any]],
     if not cod:
         return [], None
     comp = _kit_composicao(cod, catalogo)
-    if comp:
+    if comp and comp.get("ativo", True):
+        return [(c["sku"], int(c["quantidade"])) for c in comp["componentes"]], comp
+    # V20.28: Peca confirmada pelo Admin = 1 x o codigo INTEIRO ("0893600022-0893764272" vai assim ao Apollo e a fila
+    # desse SKU desconta dele). Nunca a leitura antiga que tira o "prefixo" e fica so com "0893764272". Regra unica
+    # para o estoque do anuncio e para o pendente.
+    if pecas_confirmadas and cod in pecas_confirmadas:
+        return [(cod, 1)], None
+    if comp:  # kit inativo (sem Peca confirmada): o estoque recusa ("kit inativo"); o pendente segue como antes
         return [(c["sku"], int(c["quantidade"])) for c in comp["componentes"]], comp
     return _separacao_partes(cod, conhecidos() if "/" in cod else set()), None
 
@@ -8668,6 +8685,8 @@ def _anuncio_pend_linhas() -> dict[str, list[tuple[str, str, int]]] | None:
     try:
         with DB_LOCK:
             versoes = _ml_versoes_storage("conf_pedidos", PENDING_ORDER_DELETE_KEY_V1766, "conf_kits")
+        confirmadas = _anuncio_pecas_confirmadas()  # V20.28: Peca confirmada muda a abertura do SKU
+        versoes = (versoes, confirmadas)
         agora = time.monotonic()
         with _ANUNCIO_PEND_LOCK:
             if (_ANUNCIO_PEND_CACHE.get("versoes") == versoes
@@ -8685,7 +8704,7 @@ def _anuncio_pend_linhas() -> dict[str, list[tuple[str, str, int]]] | None:
             continue
         pedido = normalize(order_number(row))
         destino = saida.setdefault(filial_da_linha(row), [])
-        for codigo, unidades in _anuncio_sku_partes(row.get("SKU"), catalogo, conhecidos)[0]:
+        for codigo, unidades in _anuncio_sku_partes(row.get("SKU"), catalogo, conhecidos, confirmadas)[0]:
             chave = _exp_norm_codigo(codigo)
             if chave and int(unidades or 0) > 0:
                 destino.append((pedido, chave, qtd * int(unidades)))
@@ -33353,14 +33372,13 @@ def _anuncio_estoque_pecas(ficha_codigo: Any, catalogo: dict[str, dict[str, Any]
     cod = normalize(ficha_codigo)
     if not cod:
         return [], "anúncio sem produto (SKU)"
-    partes, comp = _anuncio_sku_partes(cod, catalogo, conhecidos)  # V20.26 (revisao): a mesma regra do pendente
+    info = _ficha_tipo_info(cod)
+    confirmada = {cod} if info["confirmado"] and info["tipo"] == "peca" else None
+    # V20.26 (revisao) / V20.28: a mesma regra do pendente (Peca confirmada = o codigo inteiro)
+    partes, comp = _anuncio_sku_partes(cod, catalogo, conhecidos, confirmada)
     if comp and not comp.get("ativo", True):
-        info = _ficha_tipo_info(cod)
-        if not (info["confirmado"] and info["tipo"] == "peca"):
-            return [], "kit inativo no Cadastro de Kits"
-        # V20.28: o Admin escolheu "Peca" (kit desativado): o anuncio consome o proprio codigo, como uma peca
-        partes = _separacao_partes(cod, conhecidos() if "/" in cod else set())
-    elif not comp and anuncio_tipo_a_confirmar(cod, comp=comp, catalogo=catalogo):
+        return [], "kit inativo no Cadastro de Kits"
+    elif not comp and not confirmada and anuncio_tipo_a_confirmar(cod, catalogo=catalogo, info=info):
         return [], "SKU parece dois códigos juntos (kit?): confirme na ficha se é Peça ou Kit"
     pecas: dict[str, dict[str, Any]] = {}
     for codigo, qtd in partes:
