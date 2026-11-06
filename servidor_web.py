@@ -24369,6 +24369,121 @@ def _vendas_gravar(marketplace: str, date_from: str, date_to: str, records: list
         DB.commit()
 
 
+# ---------------------------------------------------------------------------
+# V20.29 — vendas do TikTok Shop (Bauru) no Dashboard (decisão do dono, 06/11): entram SÓ em
+# vendas_conta_v1898 (conta='bauru', marketplace='tiktok'); vendas_v1799, o Financeiro e as telas
+# que leem VENDAS_MARKETPLACES não mudam. O Dashboard usa VENDAS_MARKETPLACES_DASHBOARD.
+# ---------------------------------------------------------------------------
+VENDAS_MARKETPLACES_DASHBOARD = {**VENDAS_MARKETPLACES, "tiktok": "TikTok Shop"}
+TIKTOK_VENDAS_STATUS_FORA = ("UNPAID", "CANCELLED")
+TIKTOK_VENDAS_INTERVALO = 600
+TIKTOK_VENDAS_PAGINAS = 40
+
+
+def _tiktok_valor(valor: Any) -> float | None:
+    try:
+        return float(str(valor).replace(",", "."))
+    except Exception:
+        return None
+
+
+def _tiktok_epoch_dia(dia: date, fim: bool = False) -> int:
+    momento = datetime.combine(dia + timedelta(days=1) if fim else dia, datetime.min.time()).replace(tzinfo=BR_TZ)
+    return int(momento.timestamp())
+
+
+def tiktok_vendas_janela(date_from: str, date_to: str) -> dict[str, Any]:
+    """Lê as vendas do TikTok de date_from a date_to (AAAA-MM-DD, Brasília). Só lê."""
+    d1 = datetime.strptime(date_from, "%Y-%m-%d").date()
+    d2 = datetime.strptime(date_to, "%Y-%m-%d").date()
+    corpo = {"create_time_ge": _tiktok_epoch_dia(d1), "create_time_lt": _tiktok_epoch_dia(d2, fim=True)}
+    pedidos: list[dict[str, Any]] = []
+    token = ""
+    completo = False
+    for _ in range(TIKTOK_VENDAS_PAGINAS):
+        params: dict[str, Any] = {"page_size": 50}
+        if token:
+            params["page_token"] = token
+        resp = tiktok_api("POST", "/order/202309/orders/search", params=params, body=corpo)
+        dados = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+        pedidos.extend(o for o in (dados.get("orders") or []) if isinstance(o, dict))
+        token = str(dados.get("next_page_token") or "")
+        if not token:
+            completo = True
+            break
+    stamp = now_iso()
+    registros: list[tuple[Any, ...]] = []
+    for p in pedidos:
+        numero = str(p.get("id") or "").strip()
+        if not numero or str(p.get("status") or "").upper() in TIKTOK_VENDAS_STATUS_FORA:
+            continue
+        criado = _tiktok_quantidade(p.get("create_time"))
+        if not criado:
+            continue
+        momento = datetime.fromtimestamp(criado, BR_TZ)
+        grupos: dict[str, dict[str, Any]] = {}
+        for item in p.get("line_items") or []:
+            if not isinstance(item, dict) or str(item.get("display_status") or "").upper() == "CANCELLED":
+                continue
+            chave = f"{item.get('sku_id') or ''}|{item.get('seller_sku') or ''}"
+            g = grupos.setdefault(chave, {"sku": str(item.get("seller_sku") or ""), "anuncio": str(item.get("product_id") or ""),
+                                          "title": str(item.get("product_name") or ""), "qty": 0, "amount": 0.0})
+            g["qty"] += 1  # um line_item por unidade
+            g["amount"] += _tiktok_valor(item.get("sale_price")) or 0.0
+        for chave, g in grupos.items():
+            registros.append(("tiktok", numero, chave, "", momento.isoformat(), momento.date().isoformat(), g["sku"],
+                              g["anuncio"], g["title"], g["qty"], round(g["amount"], 2), str(p.get("status") or ""), stamp))
+    return {"records": registros, "complete": completo}
+
+
+def _tiktok_vendas_gravar(date_from: str, date_to: str, records: list[tuple[Any, ...]], complete: bool) -> None:
+    """Só apaga a janela (desta conta e do TikTok) quando a busca veio completa."""
+    with DB_LOCK:
+        if complete:
+            DB.execute("DELETE FROM vendas_conta_v1898 WHERE conta=? AND marketplace='tiktok' AND sale_day BETWEEN ? AND ?",
+                       (TIKTOK_CASA, date_from, date_to))
+        DB.executemany(
+            "INSERT OR REPLACE INTO vendas_conta_v1898(conta,marketplace,order_id,line_key,pack_id,sale_at,sale_day,sku,anuncio,title,qty,amount,status,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [(TIKTOK_CASA, *r) for r in records],
+        )
+        DB.commit()
+
+
+def tiktok_vendas_sync() -> dict[str, Any]:
+    """Últimos 3 dias sempre; 30 dias uma vez por dia (cancelamentos tardios)."""
+    hoje = datetime.now(BR_TZ).date()
+    janelas = [(hoje - timedelta(days=2), hoje)]
+    chave = f"resync_30d_tiktok@{TIKTOK_CASA}"
+    if _vendas_meta(chave) != hoje.isoformat():
+        janelas.append((hoje - timedelta(days=30), hoje - timedelta(days=3)))
+    vendas = 0
+    for d1, d2 in janelas:
+        lido = tiktok_vendas_janela(d1.isoformat(), d2.isoformat())  # erro aqui = nada gravado
+        _tiktok_vendas_gravar(d1.isoformat(), d2.isoformat(), lido["records"], lido["complete"])
+        vendas += len(lido["records"])
+    if len(janelas) > 1:
+        _vendas_meta(chave, hoje.isoformat())
+    _vendas_meta(f"ultima_sincronizacao_tiktok@{TIKTOK_CASA}", now_iso())
+    return {"linhas": vendas}
+
+
+def tiktok_vendas_rodada() -> dict[str, Any]:
+    if not tiktok_status_payload().get("connected"):
+        return {"sincronizou": False, "motivo": "desconectado"}
+    return {"sincronizou": True, **tiktok_vendas_sync()}
+
+
+def tiktok_vendas_loop(stop_event: threading.Event) -> None:
+    stop_event.wait(90)
+    while not stop_event.is_set():
+        try:
+            tiktok_vendas_rodada()
+        except Exception as exc:
+            tiktok_log_event_se_mudou("vendas", "worker", "ERRO", str(exc)[:800])
+        stop_event.wait(TIKTOK_VENDAS_INTERVALO)
+
+
 def vendas_ml_sync_window(date_from: str, date_to: str) -> dict[str, Any]:
     """Regrava as vendas ML de date_from a date_to (AAAA-MM-DD, horário de Brasília)."""
     # O /orders/search do ML recusa order.status=partially_refunded (HTTP 400,
@@ -24747,7 +24862,7 @@ def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = ""
     d2 = datetime.strptime(date_to, "%Y-%m-%d").date()
     if d1 > d2:
         d1, d2 = d2, d1
-    marketplace = marketplace if marketplace in VENDAS_MARKETPLACES else ""
+    marketplace = marketplace if marketplace in VENDAS_MARKETPLACES_DASHBOARD else ""
     dias = (d2 - d1).days + 1
     p2 = d1 - timedelta(days=1)
     p1 = p2 - timedelta(days=dias - 1)
@@ -24774,13 +24889,13 @@ def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = ""
         rows = DB.execute(
             f"SELECT {produto} AS sku, MAX(title) AS titulo, SUM(qty) AS unidades, SUM(amount) AS faturamento, "
             f"COUNT(DISTINCT {pedido}) AS pedidos, SUM(CASE WHEN marketplace='ml' THEN qty ELSE 0 END) AS un_ml, "
-            f"SUM(CASE WHEN marketplace='shopee' THEN qty ELSE 0 END) AS un_shopee FROM {fonte} "
+            f"SUM(CASE WHEN marketplace='shopee' THEN qty ELSE 0 END) AS un_shopee, SUM(CASE WHEN marketplace='tiktok' THEN qty ELSE 0 END) AS un_tiktok FROM {fonte} "
             f"WHERE sale_day BETWEEN ? AND ?{filtro} GROUP BY {produto} ORDER BY {ordem} DESC LIMIT 20",
             periodo(d1, d2),
         ).fetchall()
         return [{"sku": r["sku"], "titulo": r["titulo"] or "", "unidades": int(r["unidades"] or 0),
                  "faturamento": round(float(r["faturamento"] or 0), 2), "pedidos": int(r["pedidos"] or 0),
-                 "por_marketplace": {"ml": int(r["un_ml"] or 0), "shopee": int(r["un_shopee"] or 0)}} for r in rows]
+                 "por_marketplace": {"ml": int(r["un_ml"] or 0), "shopee": int(r["un_shopee"] or 0), "tiktok": int(r["un_tiktok"] or 0)}} for r in rows]
 
     atual = resumo(d1, d2)
     anterior = resumo(p1, p2)
@@ -24802,10 +24917,10 @@ def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = ""
             "pedidos": sum(c["pedidos"] for c in canais.values()),
             "unidades": sum(c["unidades"] for c in canais.values()),
             "faturamento": round(sum(c["faturamento"] for c in canais.values()), 2),
-            "por_marketplace": {m: canais.get(m, {"pedidos": 0, "unidades": 0, "faturamento": 0.0}) for m in VENDAS_MARKETPLACES},
+            "por_marketplace": {m: canais.get(m, {"pedidos": 0, "unidades": 0, "faturamento": 0.0}) for m in VENDAS_MARKETPLACES_DASHBOARD},
         })
     por_marketplace = []
-    for m, nome in VENDAS_MARKETPLACES.items():
+    for m, nome in VENDAS_MARKETPLACES_DASHBOARD.items():
         if marketplace and m != marketplace:
             continue
         row = DB.execute(
@@ -24849,6 +24964,12 @@ def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = ""
             "historico_desde": primeiro or "",
             "historico_completo": vendas_historico_completo("ml@bauru"),
         }
+    # V20.29: TikTok (Bauru) — só os últimos 30 dias, sem histórico longo.
+    sincronizacao["tiktok"] = {
+        "conectado": bool(tiktok_status_payload().get("connected")),
+        "ultima": _vendas_meta(f"ultima_sincronizacao_tiktok@{TIKTOK_CASA}"),
+        "erro": "", "historico_desde": "", "historico_completo": True,
+    }
     return {
         "ok": True,
         "marketplace": marketplace or "todos",
@@ -47066,6 +47187,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "magalu_pedidos_loop": ("Pedidos e etiquetas da Magalu", True, 20),  # V19.27
     "tiktok_pedidos_loop": ("Pedidos do TikTok Shop (Bauru)", True, 20),  # V19.64
     "tiktok_estoque_loop": ("Estoque do TikTok Shop (Apollo de Bauru)", False, 30),  # V19.64
+    "tiktok_vendas_loop": ("Vendas do TikTok Shop (Bauru)", False, 30),  # V20.29
     "anuncios_estoque_loop": ("Estoque automático dos anúncios do ML (Apollo)", False, 30),  # V20.26
     "shopee_label_worker_loop": ("Etiquetas da Shopee", True, 30),
     "vendas_sync_loop": ("Vendas (Dashboard e Financeiro)", False, 120),
@@ -48102,6 +48224,11 @@ def main() -> None:
         target=_worker_protegido(tiktok_estoque_loop), args=(watcher_stop,),
         name="tiktok-estoque-worker", daemon=True,
     )
+    # V20.29: vendas do TikTok (Bauru) no Dashboard + acerto real; sem o app conectado não chama nada.
+    tiktok_vendas_thread = threading.Thread(
+        target=_worker_protegido(tiktok_vendas_loop), args=(watcher_stop,),
+        name="tiktok-vendas-worker", daemon=True,
+    )
     # V20.26: estoque automatico dos anuncios do ML (so anuncio `noromak` em Automatico; sem nenhum, nao le nada).
     anuncios_estoque_thread = threading.Thread(
         target=_worker_protegido(anuncios_estoque_loop), args=(watcher_stop,),
@@ -48303,6 +48430,7 @@ def main() -> None:
         magalu_thread.start()
         tiktok_pedidos_thread.start()
         tiktok_estoque_thread.start()
+        tiktok_vendas_thread.start()
         anuncios_estoque_thread.start()
         vendas_ml_thread.start()
         vendas_rapido_thread.start()

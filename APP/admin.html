@@ -636,9 +636,9 @@ body{background:var(--v15-bg)!important}
 @media(max-width:760px){.v151-kpis{grid-template-columns:1fr 1fr}.v151-flow{overflow-x:auto;justify-content:flex-start}.v151-flow>div{min-width:76px}.v151-productivity{grid-template-columns:1fr 1fr}.v151-shortcuts{grid-template-columns:1fr}.v151-dashboard-head h2{font-size:20px}}
 /* V17.99: Dashboard de vendas */
 .v151-kpi{padding:10px 12px}.v151-kpi b{font-size:20px}.v151-kpi-icon{width:30px;height:30px;font-size:14px}
-.v1799-vendas{margin-top:4px;--v1799-ml:#2a78d6;--v1799-shopee:#eb6834}
+.v1799-vendas{margin-top:4px;--v1799-ml:#2a78d6;--v1799-shopee:#eb6834;--v1799-tiktok:#1aa6a0}
 .v1799-dot{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px;vertical-align:-1px}
-.v1799-dot.ml{background:var(--v1799-ml)}.v1799-dot.shopee{background:var(--v1799-shopee)}
+.v1799-dot.ml{background:var(--v1799-ml)}.v1799-dot.shopee{background:var(--v1799-shopee)}.v1799-dot.tiktok{background:var(--v1799-tiktok)}
 .v1799-seg button.ativo .v1799-dot{box-shadow:0 0 0 2px #fff}
 .v1799-legenda{display:flex;align-items:center;gap:12px;font-size:11px;font-weight:750;color:#35546f;flex-wrap:wrap;justify-content:flex-end}
 .v1799-legenda span{white-space:nowrap}
@@ -692,7 +692,7 @@ html[data-tema="escuro"] .meta-v1914-topo b{color:#E6EEF6}html[data-tema="escuro
 .v1799-chart-panel{position:relative;margin-bottom:13px}
 .v1799-chart{height:190px;display:flex;align-items:flex-end;gap:2px;padding:8px 2px 0;border-bottom:1px solid #DCE5EF;position:relative}
 .v1799-col{flex:1;min-width:3px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;cursor:default;position:relative;outline:0}
-.v1799-col i{display:block;min-height:0}.v1799-col i.ml{background:var(--v1799-ml)}.v1799-col i.shopee{background:var(--v1799-shopee)}
+.v1799-col i{display:block;min-height:0}.v1799-col i.ml{background:var(--v1799-ml)}.v1799-col i.shopee{background:var(--v1799-shopee)}.v1799-col i.tiktok{background:var(--v1799-tiktok)}
 .v1799-col i:first-child{border-radius:4px 4px 0 0}
 .v1799-col:hover i,.v1799-col:focus i{filter:brightness(.85)}.v1799-col.zero i.vazio{background:#d6e0ea;min-height:1px;border-radius:0}
 .v1799-eixo{display:flex;gap:2px;padding:4px 2px 0}.v1799-eixo span{flex:1;min-width:3px;font-size:9.5px;color:#8090a0;font-weight:700;text-align:center;white-space:nowrap;overflow:visible}
@@ -1455,6 +1455,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             <button type="button" data-v1799-canal="" class="ativo">Todos</button>
             <button type="button" data-v1799-canal="ml"><span class="v1799-dot ml"></span>Mercado Livre</button>
             <button type="button" data-v1799-canal="shopee"><span class="v1799-dot shopee"></span>Shopee</button>
+            <button type="button" data-v1799-canal="tiktok"><span class="v1799-dot tiktok"></span>TikTok</button>
           </div>
           <div class="v1799-seg" role="group" aria-label="Período">
             <button type="button" data-v1799-periodo="1">Hoje</button>
@@ -1488,7 +1489,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
       </div>
       <div id="v1799Canais" class="v1799-canais"></div>
       <div class="v151-panel v1799-chart-panel">
-        <div class="v151-panel-title"><div><h3>Faturamento por dia</h3><p>Passe o mouse sobre a barra para ver pedidos e unidades</p></div><div class="v1799-legenda" id="v1799Legenda"><span><i class="v1799-dot ml"></i>Mercado Livre</span><span><i class="v1799-dot shopee"></i>Shopee</span><span id="v1799Max" class="v151-soft-badge"></span></div></div>
+        <div class="v151-panel-title"><div><h3>Faturamento por dia</h3><p>Passe o mouse sobre a barra para ver pedidos e unidades</p></div><div class="v1799-legenda" id="v1799Legenda"><span><i class="v1799-dot ml"></i>Mercado Livre</span><span><i class="v1799-dot shopee"></i>Shopee</span><span><i class="v1799-dot tiktok"></i>TikTok Shop</span><span id="v1799Max" class="v151-soft-badge"></span></div></div>
         <div id="v1799Chart" class="v1799-chart" role="img" aria-label="Faturamento por dia"></div>
         <div id="v1799Tip" class="v1799-tip" hidden></div>
       </div>
@@ -5601,8 +5602,8 @@ function v1799Grafico(dias){
   const max=Math.max(0,...dias.map(x=>x.faturamento));
   v151Set("v1799Max",max?`maior dia: ${v1799Brl(max)}`:"");
   const passo=Math.max(1,Math.ceil(dias.length/12));
-  const ordem=["shopee","ml"];// empilhado: ML embaixo, Shopee em cima
-  document.getElementById("v1799Legenda").querySelectorAll("span:not(#v1799Max)").forEach((el,i)=>{el.hidden=!!v1799.canal&&["ml","shopee"][i]!==v1799.canal;});
+  const ordem=["tiktok","shopee","ml"];// empilhado: ML embaixo, Shopee, TikTok (V20.29, Bauru) em cima
+  document.getElementById("v1799Legenda").querySelectorAll("span:not(#v1799Max)").forEach((el,i)=>{el.hidden=!!v1799.canal&&["ml","shopee","tiktok"][i]!==v1799.canal;});
   box.innerHTML=dias.map((x,i)=>{
     const pm=x.por_marketplace||{};
     const segs=ordem.map(m=>{const v=Number(pm[m]?.faturamento||0);return v>0&&max?`<i class="${m}" style="height:${Math.max(1,v/max*100).toFixed(2)}%"></i>`:"";}).join("");
