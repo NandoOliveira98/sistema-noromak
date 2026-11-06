@@ -2186,6 +2186,19 @@ def init_db() -> None:
                 resposta TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT ''
             );
+            -- V20.29: acerto real de cada pedido do TikTok (o que caiu na conta). Valor
+            -- que o TikTok não informou fica NULL, nunca zero.
+            CREATE TABLE IF NOT EXISTS tiktok_acerto_v2029 (
+                order_id TEXT PRIMARY KEY,
+                receita REAL,
+                tarifa REAL,
+                frete REAL,
+                liquido REAL,
+                bruto_json TEXT NOT NULL DEFAULT '',
+                lido_em TEXT NOT NULL DEFAULT '',
+                tentado_em TEXT NOT NULL DEFAULT '',
+                erro TEXT NOT NULL DEFAULT ''
+            );
             """
         )
         DB.executescript(
@@ -24468,10 +24481,93 @@ def tiktok_vendas_sync() -> dict[str, Any]:
     return {"linhas": vendas}
 
 
+TIKTOK_ACERTO_ESPERA_DIAS = 3      # o acerto sai depois da entrega
+TIKTOK_ACERTO_JANELA_DIAS = 60
+TIKTOK_ACERTO_REPETIR_S = 6 * 3600
+TIKTOK_ACERTO_POR_RODADA = 20
+
+
+def _tiktok_soma(transacoes: list[dict[str, Any]], campos: tuple[str, ...], absoluto: bool = False) -> float | None:
+    """Soma tolerante; nenhum dos campos em nenhuma transação = None (nunca zero)."""
+    total: float | None = None
+    for t in transacoes:
+        for campo in campos:
+            v = _tiktok_valor(t.get(campo)) if t.get(campo) not in (None, "") else None
+            if v is not None:
+                total = (total or 0.0) + (abs(v) if absoluto else v)
+    return round(total, 2) if total is not None else None
+
+
+def tiktok_acerto_ler(order_id: str) -> dict[str, Any]:
+    """V20.29: acerto do pedido. Versão 202501 primeiro; caminho inexistente = tenta a 202309.
+    Fontes de terceiros: a 1ª resposta fica na amostra para conferir."""
+    resp: dict[str, Any] | None = None
+    for versao in ("202501", "202309"):
+        try:
+            resp = tiktok_api("GET", f"/finance/{versao}/orders/{order_id}/statement_transactions")
+            break
+        except RuntimeError as exc:
+            if versao == "202501" and re.search(r"\b404\b|path not found|not exist", str(exc), re.I):
+                continue
+            raise
+    dados = (resp or {}).get("data") if isinstance((resp or {}).get("data"), dict) else {}
+    trans = [t for t in (dados.get("statement_transactions") or []) if isinstance(t, dict)]
+    valores = {
+        "receita": _tiktok_soma(trans, ("revenue_amount",)),
+        "tarifa": _tiktok_soma(trans, ("fee_amount", "fee_tax_amount"), absoluto=True),
+        "frete": _tiktok_soma(trans, ("shipping_cost_amount",), absoluto=True),
+        "liquido": _tiktok_soma(trans, ("settlement_amount",)),
+    }
+    agora = now_iso()
+    with DB_LOCK:
+        DB.execute(
+            "INSERT OR REPLACE INTO tiktok_acerto_v2029(order_id,receita,tarifa,frete,liquido,bruto_json,lido_em,tentado_em,erro) "
+            "VALUES(?,?,?,?,?,?,?,?, '')",
+            (order_id, valores["receita"], valores["tarifa"], valores["frete"], valores["liquido"],
+             json_dumps(trans)[:20000], agora, agora))
+        DB.commit()
+    return valores
+
+
+def tiktok_acerto_pendentes(limite: int = TIKTOK_ACERTO_POR_RODADA) -> list[str]:
+    hoje = datetime.now(BR_TZ).date()
+    ate = (hoje - timedelta(days=TIKTOK_ACERTO_ESPERA_DIAS)).isoformat()
+    desde = (hoje - timedelta(days=TIKTOK_ACERTO_JANELA_DIAS)).isoformat()
+    # mesmo formato do now_iso() (fuso local), para a comparação de texto valer
+    corte = (datetime.now(timezone.utc) - timedelta(seconds=TIKTOK_ACERTO_REPETIR_S)).astimezone().isoformat(timespec="milliseconds")
+    with DB_LOCK:
+        rows = DB.execute(
+            "SELECT DISTINCT v.order_id FROM vendas_conta_v1898 v LEFT JOIN tiktok_acerto_v2029 a ON a.order_id=v.order_id "
+            "WHERE v.conta=? AND v.marketplace='tiktok' AND v.sale_day BETWEEN ? AND ? "
+            "AND COALESCE(a.lido_em,'')='' AND (COALESCE(a.tentado_em,'')='' OR a.tentado_em < ?) "
+            "ORDER BY v.sale_day LIMIT ?", (TIKTOK_CASA, desde, ate, corte, int(limite))).fetchall()
+    return [str(r[0]) for r in rows]
+
+
+def tiktok_acerto_rodada() -> dict[str, Any]:
+    lidos = erros = 0
+    for order_id in tiktok_acerto_pendentes():
+        try:
+            tiktok_acerto_ler(order_id)
+            lidos += 1
+        except Exception as exc:
+            erros += 1
+            with DB_LOCK:
+                DB.execute(
+                    "INSERT INTO tiktok_acerto_v2029(order_id,tentado_em,erro) VALUES(?,?,?) "
+                    "ON CONFLICT(order_id) DO UPDATE SET tentado_em=excluded.tentado_em, erro=excluded.erro",
+                    (order_id, now_iso(), str(exc)[:500]))
+                DB.commit()
+            tiktok_log_event_se_mudou("acerto", "worker", "ERRO", str(exc)[:800])
+    return {"lidos": lidos, "erros": erros}
+
+
 def tiktok_vendas_rodada() -> dict[str, Any]:
     if not tiktok_status_payload().get("connected"):
         return {"sincronizou": False, "motivo": "desconectado"}
-    return {"sincronizou": True, **tiktok_vendas_sync()}
+    resumo = {"sincronizou": True, **tiktok_vendas_sync()}
+    resumo["acerto"] = tiktok_acerto_rodada()  # V20.29: depois das vendas, que trazem os pedidos
+    return resumo
 
 
 def tiktok_vendas_loop(stop_event: threading.Event) -> None:

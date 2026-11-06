@@ -134,3 +134,74 @@ class Vendas(Base):
         self.assertIn('"tiktok"', html[inicio:inicio + 80])
         legenda = html.index('id="v1799Legenda"')
         self.assertIn("TikTok", html[legenda:legenda + 600])
+
+
+def _transacao(**campos):
+    return {"code": 0, "data": {"statement_transactions": [campos]}}
+
+
+class Acerto(Base):
+
+    def _venda_antiga(self, numero="TT9", dias=5):
+        with self._api([_venda(numero, dia=HOJE - timedelta(days=dias))]):
+            S.tiktok_vendas_sync()
+
+    def _acerto(self, numero):
+        with S.DB_LOCK:
+            r = S.DB.execute("SELECT * FROM tiktok_acerto_v2029 WHERE order_id=?", (numero,)).fetchone()
+        return dict(r) if r else None
+
+    def test_grava_os_valores_do_acerto(self):
+        resp = _transacao(revenue_amount="39.80", fee_amount="-4.38", shipping_cost_amount="-6.00", settlement_amount="29.42")
+        with self._api(financeiro=lambda path: resp):
+            S.tiktok_acerto_ler("TT9")
+        a = self._acerto("TT9")
+        self.assertAlmostEqual(a["receita"], 39.8)
+        self.assertAlmostEqual(a["tarifa"], 4.38)
+        self.assertAlmostEqual(a["frete"], 6.0)
+        self.assertAlmostEqual(a["liquido"], 29.42)
+        self.assertTrue(a["lido_em"])
+
+    def test_campo_ausente_fica_nulo_nunca_zero(self):
+        with self._api(financeiro=lambda path: _transacao(revenue_amount="39.80", settlement_amount="29.42")):
+            S.tiktok_acerto_ler("TT9")
+        a = self._acerto("TT9")
+        self.assertIsNone(a["frete"])
+        self.assertIsNone(a["tarifa"])
+
+    def test_cai_para_202309_quando_202501_nao_existe(self):
+        caminhos = []
+
+        def resposta(path):
+            caminhos.append(path)
+            if "/202501/" in path:
+                raise RuntimeError("TikTok HTTP 404: path not found")
+            return _transacao(settlement_amount="10.00")
+        with self._api(financeiro=resposta):
+            S.tiktok_acerto_ler("TT9")
+        self.assertEqual(caminhos, ["/finance/202501/orders/TT9/statement_transactions",
+                                    "/finance/202309/orders/TT9/statement_transactions"])
+        self.assertAlmostEqual(self._acerto("TT9")["liquido"], 10.0)
+
+    def test_erro_espera_6h(self):
+        self._venda_antiga("TT9")
+        self.assertIn("TT9", S.tiktok_acerto_pendentes())
+
+        def falha(path):
+            raise RuntimeError("Falha de rede no TikTok")
+        with self._api(financeiro=falha):
+            S.tiktok_acerto_rodada()
+        a = self._acerto("TT9")
+        self.assertTrue(a["tentado_em"])
+        self.assertFalse(a["lido_em"])
+        self.assertNotIn("TT9", S.tiktok_acerto_pendentes())
+
+    def test_lido_nao_volta_aos_pendentes(self):
+        self._venda_antiga("TT9")
+        with self._api(financeiro=lambda path: _transacao(settlement_amount="10.00")):
+            S.tiktok_acerto_rodada()
+        self.assertNotIn("TT9", S.tiktok_acerto_pendentes())
+
+    def test_venda_recente_ainda_nao_e_lida(self):
+        self._venda_antiga("TT1", dias=0)
+        self.assertNotIn("TT1", S.tiktok_acerto_pendentes())
