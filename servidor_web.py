@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.28-ANUNCIOS-KIT-FICHA"
+APP_VERSION = "20.29-TIKTOK-ETIQUETA-VENDAS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -6458,6 +6458,7 @@ def tiktok_status_payload() -> dict[str, Any]:
         "redirect_uri": TIKTOK_REDIRECT_URI,
         "credentials_server_side": True,
         "importacao_ligada": tiktok_importacao_ligada(),  # V19.64
+        "etiqueta_ligada": tiktok_etiqueta_ligada(),  # V20.29
     }
 
 
@@ -24991,7 +24992,9 @@ def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = ""
         ).fetchall()
         return [{"sku": r["sku"], "titulo": r["titulo"] or "", "unidades": int(r["unidades"] or 0),
                  "faturamento": round(float(r["faturamento"] or 0), 2), "pedidos": int(r["pedidos"] or 0),
-                 "por_marketplace": {"ml": int(r["un_ml"] or 0), "shopee": int(r["un_shopee"] or 0), "tiktok": int(r["un_tiktok"] or 0)}} for r in rows]
+                 "por_marketplace": {"ml": int(r["un_ml"] or 0), "shopee": int(r["un_shopee"] or 0),
+                                     # V20.29: TikTok só quando vendeu (o formato de sempre não muda)
+                                     **({"tiktok": int(r["un_tiktok"])} if int(r["un_tiktok"] or 0) else {})}} for r in rows]
 
     atual = resumo(d1, d2)
     anterior = resumo(p1, p2)
@@ -44090,7 +44093,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             return
         if path.startswith("/api/tiktok-estoque/") or path in ("/api/integracoes/tiktok/importacao",
-                                                              "/api/integracoes/tiktok/sincronizar"):
+                                                              "/api/integracoes/tiktok/sincronizar",
+                                                              "/api/integracoes/tiktok/etiqueta"):  # V20.29
             # V19.64: estoque e pedidos do TikTok. Mudar modo, vínculo, enviar e a chave da
             # importação = perfil Admin; ligar o Automático = OWNER (senha + 2FA).
             ctx = self.auth(admin_only=True)
@@ -44105,6 +44109,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     tiktok_importacao_definir(bool(body.get("ligada")), ctx["username"])
                     audit(ctx["username"], "tiktok.importacao", str(bool(body.get("ligada"))))
                     res = {"ok": True, "importacao": tiktok_importacao_ligada()}
+                elif path == "/api/integracoes/tiktok/etiqueta":
+                    # V20.29: etiqueta automática (organiza o envio no TikTok) — começa desligada.
+                    tiktok_etiqueta_definir(bool(body.get("ligada")), ctx["username"])
+                    audit(ctx["username"], "tiktok.etiqueta", str(bool(body.get("ligada"))))
+                    res = {"ok": True, "etiqueta": tiktok_etiqueta_ligada()}
                 elif path == "/api/integracoes/tiktok/sincronizar":
                     if not tiktok_importacao_ligada():
                         self.send_json({"ok": False, "error": "A importação do TikTok está desligada."}, 409)

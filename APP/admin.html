@@ -2099,6 +2099,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             <b>Loja</b><span id="tiktokLoja">—</span>
             <b>Conectada em</b><span id="tiktokConectadaEm">—</span>
             <b>Pedidos</b><span id="tiktokImportacao">—</span>
+            <b>Etiqueta</b><span id="tiktokEtiqueta">—</span>
             <b>Callback OAuth</b><span id="tiktokCallback">—</span>
             <b>Credenciais</b><span>Somente no servidor</span>
           </div>
@@ -2107,6 +2108,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             <button type="button" id="btnTiktokDesconectar" class="btn-perigo" onclick="desconectarTiktokAdmin()" disabled>Desconectar</button>
             <button type="button" id="btnTiktokTeste" class="btn-secundario" onclick="testeTiktokAdmin()" disabled title="Só lê: loja e depósitos. Nada é alterado.">Testar leitura</button>
             <button type="button" id="btnTiktokImportacao" class="btn-secundario" onclick="alternarImportacaoTiktokAdmin()" disabled>Desligar importação</button>
+            <button type="button" id="btnTiktokEtiqueta" class="btn-secundario" onclick="alternarEtiquetaTiktokAdmin()" disabled title="Organiza o envio no TikTok e vincula a etiqueta (PDF) para a Conferência de Bauru.">Ligar etiqueta automática</button>
             <button type="button" id="btnTiktokSincronizar" class="btn-sucesso" onclick="sincronizarTiktokAdmin()" disabled>↻ Sincronizar agora</button>
             <a class="btn-secundario" href="/expedicao/tiktok-estoque" target="_blank" rel="noopener">Estoque TikTok</a>
           </div>
@@ -9921,6 +9923,10 @@ async function carregarIntegracaoTiktokAdmin(){
       document.getElementById("tiktokImportacao").textContent=lig?"🟢 Ligada — entram na fila de Bauru a cada 2 min":"⚪ Desligada";
       if(bi){bi.disabled=false;bi.textContent=lig?"Desligar importação":"Ligar importação";bi.dataset.ligada=lig?"1":"0";}
       if(bs)bs.disabled=!lig;
+      // V20.29: etiqueta automática (organiza o envio no TikTok) — começa desligada.
+      const etq=!!tk.etiqueta_ligada,be=document.getElementById("btnTiktokEtiqueta");
+      document.getElementById("tiktokEtiqueta").textContent=etq?"🟢 Automática — organiza o envio e vincula o PDF (nota pelo Linx)":"⚪ Desligada";
+      if(be){be.disabled=false;be.textContent=etq?"Desligar etiqueta automática":"Ligar etiqueta automática";be.dataset.ligada=etq?"1":"0";}
       if(msg&&tk.last_error)msg.textContent="Último erro: "+tk.last_error;
     }else if(!tk.configured){
       badge.className="integracao-status off";badge.textContent="🟡 Aguardando credenciais (TIKTOK_APP_KEY, TIKTOK_APP_SECRET e TIKTOK_SERVICE_ID no .env)";
@@ -9949,6 +9955,13 @@ async function alternarImportacaoTiktokAdmin(){
   const bi=document.getElementById("btnTiktokImportacao");const ligar=bi?.dataset.ligada!=="1";
   if(!await nkConfirmar(ligar?"Ligar a importação do TikTok? Os pedidos aguardando envio passam a entrar sozinhos na fila de Bauru.":"Desligar a importação do TikTok? Os pedidos que já estão na fila continuam lá."))return;
   try{await mlApiAdmin("/expedicao/api/integracoes/tiktok/importacao",{method:"POST",body:JSON.stringify({ligada:ligar})});}
+  catch(e){alert("TikTok Shop: "+e.message);}
+  await carregarIntegracaoTiktokAdmin();
+}
+async function alternarEtiquetaTiktokAdmin(){
+  const be=document.getElementById("btnTiktokEtiqueta");const ligar=be?.dataset.ligada!=="1";
+  if(!await nkConfirmar(ligar?"Ligar a etiqueta automática do TikTok? O Noromak passa a organizar o envio de cada pedido no TikTok (ação no TikTok) e a vincular a etiqueta em PDF. Sem a nota fiscal enviada ao TikTok o pedido fica AGUARDANDO NF.":"Desligar a etiqueta automática do TikTok? As etiquetas já vinculadas continuam."))return;
+  try{await mlApiAdmin("/expedicao/api/integracoes/tiktok/etiqueta",{method:"POST",body:JSON.stringify({ligada:ligar})});}
   catch(e){alert("TikTok Shop: "+e.message);}
   await carregarIntegracaoTiktokAdmin();
 }

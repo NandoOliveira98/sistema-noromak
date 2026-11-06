@@ -431,6 +431,24 @@ o último código pela metade, "…/201104"). SKU no limite sem vínculo à mão
 (`_tiktok_sku_cortado`), mesmo que o trecho exista como código, porque o fim pode ter perdido uma peça inteira. A tela (aba Sem
 vínculo) oferece botões "Usar <código>" com os códigos do Precificador que começam com o trecho (`tiktok_sugerir_sku`, só no
 payload da tela; até 6, nunca o próprio trecho, nunca grava sozinho; o clique confirma mostrando as peças). Teste: `TESTES/test_tiktok_sku_cortado_v2008.py`.
+**V20.29 — etiqueta, cancelamento, vendas e acerto** (dono, 06/11; desenho em
+`docs/superpowers/specs/2026-11-06-tiktok-amazon-design.md`). A API vai ser liberada pelo **cadastro de parceiro (ISV)** no
+TikTok Partner Center, como o Bling: o código já usa esse login, basta trocar as chaves no `.env`. Construído pela documentação
+de terceiros: a 1ª resposta de cada chamada nova fica em `tiktok_amostra_v1963` — **conferir ao conectar**. **Etiqueta** (chave
+`etiqueta` em `tiktok_config_v1964`, **começa desligada**: é a única ação que grava no TikTok; ligar = perfil Admin,
+`POST /api/integracoes/tiktok/etiqueta`): na importação, pacote de pedido `AWAITING_SHIPMENT` → `POST /fulfillment/202309/packages/{id}/ship`,
+depois `GET .../shipping_documents` (SHIPPING_LABEL, A6) só para conferir que existe; registro em `conf_etiquetas` com
+`marketplace: "tiktok"` e `envio: "TIKTOK_PDF:<pacote>"` (o PDF **não** vai para o banco). Colunas `PacoteTikTok` e `Etiqueta API TikTok`
+(VINCULADA / AGUARDANDO / AGUARDANDO NF / ERRO). Recusa que cita nota/invoice = AGUARDANDO NF (a nota sai pelo Linx; o Noromak nunca
+envia); pacote que falhou só é tentado de novo depois de `TIKTOK_ETIQUETA_REPETIR_S` (600 s). Pedido com `cancel_reason`/
+`cancellation_initiator`/`is_on_hold` não tem envio organizado. **PDF:** `GET /api/etiqueta-tiktok-pdf?pedido=` (mesmo bloco e regras da
+rota do ML de Bauru) pede o link ao TikTok **a cada impressão** e só baixa `https` de `TIKTOK_PDF_HOSTS`; a Conferência imprime todo
+pedido TikTok em PDF, em qualquer filial. **Cancelado** sai pela remoção nomeada do `_magalu_merge` (a linha marcada como manual do ADMIN
+fica; concluído não volta). **Vendas** (`tiktok_vendas_loop`, 10 min, só conectado): `orders/search` por data de criação, 3 dias sempre e
+30 dias 1x/dia, sem UNPAID/CANCELLED, em `vendas_conta_v1898` (`conta='bauru'`, `marketplace='tiktok'`); `vendas_v1799`, o Financeiro e
+`VENDAS_MARKETPLACES` não mudam — o Dashboard usa `VENDAS_MARKETPLACES_DASHBOARD` (canal e cor TikTok). **Acerto** (`tiktok_acerto_v2029`):
+vendas de 3 a 60 dias, 20 por volta, `/finance/202501/orders/{id}/statement_transactions` (404 = 202309); receita, tarifa, frete e líquido
+somados das transações, campo ausente = NULL; erro espera 6 h. Testes: `TESTES/test_tiktok_etiqueta_v2029.py`, `TESTES/test_tiktok_vendas_v2029.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

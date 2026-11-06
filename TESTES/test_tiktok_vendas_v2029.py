@@ -103,6 +103,7 @@ class Vendas(Base):
         tiktok = next(m for m in d["por_marketplace"] if m["marketplace"] == "tiktok")
         self.assertEqual(tiktok["unidades"], 2)
         self.assertEqual(d["por_dia"][-1]["por_marketplace"]["tiktok"]["unidades"], 2)
+        self.assertEqual(d["top_unidades"][0]["por_marketplace"].get("tiktok"), 2)
         so = S.vendas_dashboard_payload(HOJE.isoformat(), HOJE.isoformat(), marketplace="tiktok", conta="todas")
         self.assertEqual(so["resumo"]["unidades"], 2)
 

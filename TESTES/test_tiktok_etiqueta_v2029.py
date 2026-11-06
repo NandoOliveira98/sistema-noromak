@@ -301,3 +301,32 @@ class Cancelamento(Base):
         self.assertFalse(self._chamadas("/ship"))
         self.assertFalse(self._chamadas("/shipping_documents"))
         self.assertEqual(self._linha("TT1")["Etiqueta API TikTok"], "AGUARDANDO")
+
+
+class Rotas(Base):
+
+    def test_ligar_etiqueta_so_perfil_admin(self):
+        from base import SENHA_ADMIN, Cliente
+        with S.DB_LOCK:
+            S.upsert_app_user("supervisor_t", "Supervisor T", "operador", True, SENHA_ADMIN, "teste",
+                              permissions={"conferencia": True, "admin": True})
+            S.DB.commit()
+        sup = Cliente(self.url_base)
+        sup.entrar("supervisor_t", SENHA_ADMIN, area="admin")
+        st, _ = sup.pedir("POST", "/api/integracoes/tiktok/etiqueta", {"ligada": True})
+        self.assertEqual(st, 403)
+        self.assertFalse(S.tiktok_etiqueta_ligada())
+        st, corpo = self.cliente.pedir("POST", "/api/integracoes/tiktok/etiqueta", {"ligada": True})
+        self.assertEqual(st, 200, corpo)
+        self.assertTrue(S.tiktok_etiqueta_ligada())
+        self.assertTrue(corpo["etiqueta"])
+
+    def test_status_mostra_a_chave(self):
+        self.assertFalse(S.tiktok_status_payload()["etiqueta_ligada"])
+        S.tiktok_etiqueta_definir(True, "dono")
+        self.assertTrue(S.tiktok_status_payload()["etiqueta_ligada"])
+
+    def test_tela_tem_o_botao(self):
+        html = (Path(S.__file__).resolve().parent / "APP" / "admin.html").read_text(encoding="utf-8")
+        self.assertTrue("/expedicao/api/integracoes/tiktok/etiqueta" in html, "falta a chamada da rota")
+        self.assertTrue('id="btnTiktokEtiqueta"' in html, "falta o botão")
