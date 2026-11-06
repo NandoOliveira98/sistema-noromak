@@ -690,8 +690,10 @@ class TelaEstoqueTeste(EstoqueBase):
                        "Estoque automático", 'data-nk-tabela="anuncios_estoque_registro"',
                        "OWNER_REAUTH_REQUIRED", "/api/security/owner/reauth", "Apollo ${", "− a baixar"):
             self.assertIn(trecho, html, trecho)
-        # so anuncio controlado pelo Noromak e nao-Full ganha o seletor (V20.32: do ML ou da Shopee)
-        self.assertIn('(a.canal === "ml" || a.canal === "shopee") && a.controle === "noromak" && a.logistica !== "fulfillment"', html)
+        # so anuncio controlado pelo Noromak e nao-Full ganha o seletor (V20.32: do ML ou da Shopee; V20.34: e da Magalu)
+        self.assertIn('(a.canal === "ml" || !!ESTQ_FORA[a.canal]) && a.controle === "noromak" && a.logistica !== "fulfillment"', html)
+        self.assertIn('const ESTQ_FORA = {shopee: [', html)
+        self.assertIn('magalu: ["Magalu"', html)
         # o envio manual confirma "de X para Y" antes de chamar o servidor
         i = html.find("async function enviarEstoqueManual")
         self.assertGreater(i, 0)

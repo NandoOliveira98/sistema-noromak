@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.33-ATENDIMENTO-TIKTOK"
+APP_VERSION = "20.34-ANUNCIOS-MAGALU"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -125,7 +125,11 @@ MAGALU_AUTH_URL = "https://id.magalu.com/login"
 MAGALU_TOKEN_URL = "https://id.magalu.com/oauth/token"
 MAGALU_API_BASE = os.getenv("MAGALU_API_BASE", "https://api.magalu.com").strip().rstrip("/")
 # Escopos extras pedidos no consentimento (somam aos --scopes-default do client).
-MAGALU_OAUTH_SCOPE = os.getenv("MAGALU_OAUTH_SCOPE", "open:order-order-seller:read").strip()
+# V20.34: + as permissoes de criar produto e gravar estoque (pedidas pelo idm em 06/11; extra so vem no token se o
+# link de conexao pedir - o --scopes-default do app nao as inclui). Mudou aqui = reconectar a Magalu uma vez.
+MAGALU_OAUTH_SCOPE = os.getenv("MAGALU_OAUTH_SCOPE", "open:order-order-seller:read open:portfolio-skus-seller:write "
+                               "open:portfolio-stocks-seller:write open:portfolio-categories-channel:read "
+                               "open:trace:read").strip()
 
 # V19.63: TikTok Shop (loja de Bauru), fase 0 — só a conexão. App criado no TikTok Shop
 # Partner Center; App Key/Secret e o Service ID (link de autorização) ficam só no .env.
@@ -7510,6 +7514,42 @@ def ensure_anuncios_schema() -> None:
             CREATE INDEX IF NOT EXISTS idx_anuncio_rascunho_shopee_ficha ON anuncio_rascunho_shopee_v2032(ficha_codigo);
             """
         )
+        # V20.34: rascunho de anuncio da Magalu. `sku` = o enviado (o codigo da ficha); `trace_id` = o do 202;
+        # `etapa` sku -> preco -> estoque (o que ja foi aceito depois de o SKU aparecer); peso/medidas lidos da ficha.
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS anuncio_rascunho_magalu_v2034 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ficha_codigo TEXT NOT NULL,
+                titulo TEXT NOT NULL DEFAULT '',
+                categoria TEXT NOT NULL DEFAULT '',
+                categoria_nome TEXT NOT NULL DEFAULT '',
+                marca TEXT NOT NULL DEFAULT '',
+                atributos_json TEXT NOT NULL DEFAULT '{}',
+                ficha_tecnica_json TEXT NOT NULL DEFAULT '{}',
+                fotos_json TEXT NOT NULL DEFAULT '[]',
+                descricao TEXT NOT NULL DEFAULT '',
+                preco REAL,
+                preco_de REAL,
+                quantidade INTEGER,
+                situacao TEXT NOT NULL DEFAULT 'rascunho',
+                sku TEXT,
+                trace_id TEXT,
+                enviado_em TEXT,
+                etapa TEXT NOT NULL DEFAULT '',
+                status_magalu TEXT NOT NULL DEFAULT '',
+                erros_json TEXT NOT NULL DEFAULT '[]',
+                versao INTEGER NOT NULL DEFAULT 1,
+                criado_em TEXT, criado_por TEXT, atualizado_em TEXT, atualizado_por TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_anuncio_rascunho_magalu_ficha ON anuncio_rascunho_magalu_v2034(ficha_codigo);
+            """
+        )
+        # V20.34: o processo caiu no meio do Publicar: o SKU e o codigo da ficha, entao o acompanhamento confere na
+        # propria Magalu (existe = segue; nao aparece em 30 min = incerto). Nunca fica preso em `publicando`.
+        DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET situacao='aguardando', sku=COALESCE(sku, ficha_codigo), "
+                   "enviado_em=?, etapa=CASE WHEN etapa='' THEN 'sku' ELSE etapa END, versao=versao+1 "
+                   "WHERE situacao='publicando'", (now_iso(),))
         DB.execute("UPDATE anuncio_rascunho_shopee_v2032 SET situacao='incerto', versao=versao+1, "
                    "erros_json='[\"O servidor reiniciou durante a publicação: confira no Seller Center se o anúncio foi criado.\"]' "
                    "WHERE situacao='publicando'")
@@ -35411,6 +35451,1051 @@ def shopee_incerto_liberar(rascunho_id: Any, item_id: Any, ator: str) -> dict[st
 
 
 # ---------------------------------------------------------------------------
+# V20.34 - Criar anuncio e controlar estoque na MAGALU (Araçatuba). Desenho em
+# docs/superpowers/specs/2026-11-06-anuncios-magalu-design.md. Construido pela especificacao OpenAPI oficial
+# (developers.magalu.com/apis/products.openapi.yaml), sem resposta real: a 1a resposta de cada chamada fica em
+# anuncio_amostra_v2024 (tipos `magalu_*`) - conferir no 1o uso.
+# O que muda em relacao a Shopee:
+# - Criar o SKU, o preco e o estoque respondem 202 (assincrono, `trace_id`): nada e "publicado" so pelo 202. O SKU
+#   enviado e o codigo da ficha, entao da para conferir pela propria Magalu (GET do SKU): sem resposta no envio NAO e
+#   incerto de cara, e `aguardando` - o acompanhamento le o SKU; existe = manda preco e estoque e vira `publicado`.
+# - Nao ha upload de foto: a Magalu baixa a foto de um endereco https publico em JPEG. As fotos do Noromak ficam atras
+#   do login (nginx); por isso as fotos vem do anuncio do ML desta ficha (mlstatic.com, publicas). So mlstatic, so JPEG.
+# - SKU que ja existe na Magalu (criado por outra ferramenta) NAO e sobrescrito: o Publicar recusa.
+# ---------------------------------------------------------------------------
+MAGALU_ANUNCIO_CONTA = "aracatuba"
+MAGALU_CANAL_ID = os.getenv("MAGALU_CANAL_ID", "9fe0d853-732b-4e4a-a0b0-cff988ed043d").strip()  # canal Magazine Luiza
+MAGALU_TITULO_MAX = 150
+MAGALU_DESC_MAX = 7000
+MAGALU_FOTOS_MAX = 30
+MAGALU_SKU_MAX = 32
+MAGALU_ATRIBUTOS_MAX = 3
+MAGALU_FICHA_TECNICA_MAX = 50
+MAGALU_LEITURA_CACHE_S = 24 * 3600
+MAGALU_HTTP_TIMEOUT = 35
+MAGALU_ACOMPANHAR_PRAZO_S = 30 * 60      # SKU que nao aparece em 30 min (sem erro no trace) = incerto
+MAGALU_ACOMPANHAR_INTERVALO_S = 20       # um rascunho e conferido na Magalu no maximo a cada 20 s
+MAGALU_RASCUNHO_EDITAVEL = ("rascunho", "validado", "erro")
+MAGALU_RASCUNHO_CAMPOS = ("titulo", "categoria", "categoria_nome", "marca", "descricao", "preco", "preco_de", "quantidade")
+MAGALU_ESTOQUE_RELEITURA_ESPERAS: tuple[float, ...] = (2.0, 4.0, 8.0, 15.0)  # estoque da Magalu e assincrono
+MAGALU_INCERTO_TEXTO = ("A Magalu não mostrou o SKU depois do envio. Confira no painel da Magalu (Meus produtos) se o "
+                        "anúncio foi criado e use “Conferir de novo” ou “Liberar”.")
+_MAGALU_LEITURA_CACHE: dict[tuple[str, str], tuple[float, Any]] = {}
+_MAGALU_LEITURA_LOCK = threading.Lock()
+_MAGALU_ACOMPANHAR_VISTO: dict[int, float] = {}
+_MAGALU_ACOMPANHAR_LOCKS: dict[int, threading.Lock] = {}
+_MAGALU_ACOMPANHAR_LOCKS_LOCK = threading.Lock()
+
+
+class MagaluSemResposta(Exception):
+    """V20.34: rede, timeout ou 5xx - a Magalu pode ter feito."""
+
+
+class MagaluRecusou(Exception):
+    """V20.34: a Magalu respondeu com erro (4xx). `status` = HTTP; `corpo` = o que veio."""
+
+    def __init__(self, msg: str, corpo: Any = None, status: int | None = None):
+        super().__init__(msg)
+        self.corpo = corpo
+        self.status = status
+
+
+def _magalu_talvez_fez(exc: Exception) -> bool:
+    if isinstance(exc, MagaluSemResposta):
+        return True
+    if isinstance(exc, MagaluRecusou):
+        return exc.status == 408 or (exc.status or 0) >= 500
+    return False
+
+
+def _magalu_erro_texto(corpo: Any) -> str:
+    """V20.34: o 422 vem como lista {loc, msg}; o resto como {message}/{error}/texto."""
+    if isinstance(corpo, dict):
+        det = corpo.get("detail") if isinstance(corpo.get("detail"), list) else corpo.get("errors")
+        if isinstance(det, list) and det:
+            partes = []
+            for d in det[:8]:
+                if isinstance(d, dict):
+                    loc = ".".join(str(x) for x in d.get("loc") or [] if str(x) != "body")
+                    partes.append((loc + ": " if loc else "") + str(d.get("msg") or d.get("message") or d))
+                else:
+                    partes.append(str(d))
+            return "; ".join(partes)[:600]
+        for k in ("message", "error_description", "error", "detail"):
+            if corpo.get(k):
+                return str(corpo[k])[:600]
+    return str(corpo or "")[:600]
+
+
+def _magalu_chamar(method: str, path: str, params: dict[str, Any] | None = None, payload: Any = None, *,
+                   timeout: int = MAGALU_HTTP_TIMEOUT) -> Any:
+    """V20.34: chamada JSON a api.magalu.com com o token da loja (401 renova uma vez). 4xx = MagaluRecusou;
+    rede/timeout/5xx = MagaluSemResposta. Resposta vazia (202 sem corpo) = {"status_http": codigo}."""
+    query = {k: v for k, v in (params or {}).items() if v is not None and v != ""}
+    url = MAGALU_API_BASE + path + (("?" + urlencode(query)) if query else "")
+
+    def enviar(token: str) -> Any:
+        dados = json.dumps(payload).encode("utf-8") if payload is not None else None
+        h = {"Authorization": f"Bearer {token}", "Accept": "application/json",
+             "User-Agent": f"NoromakExpedicao/{APP_VERSION}"}
+        if dados is not None:
+            h["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=dados, method=method.upper(), headers=h)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            texto = resp.read().decode("utf-8", "replace")
+            if not texto.strip():
+                return {"status_http": resp.status}
+            return json.loads(texto)
+
+    def uma(token: str) -> Any:
+        try:
+            return enviar(token)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401:
+                raise MagaluHttp401()
+            try:
+                bruto = exc.read().decode("utf-8", "replace")
+            except Exception:
+                bruto = ""
+            try:
+                corpo: Any = json.loads(bruto) if bruto.strip() else {}
+            except ValueError:
+                corpo = bruto[:600]
+            if exc.code >= 500 or exc.code == 408:
+                raise MagaluSemResposta(f"Magalu HTTP {exc.code}: {_magalu_erro_texto(corpo)}")
+            raise MagaluRecusou(f"Magalu HTTP {exc.code}: {_magalu_erro_texto(corpo)}", corpo, exc.code)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise MagaluSemResposta(f"sem resposta da Magalu ({getattr(exc, 'reason', exc)})")
+        except ValueError as exc:  # 2xx com corpo que nao e JSON
+            raise MagaluSemResposta(f"resposta da Magalu ilegível ({exc})")
+
+    try:
+        token = magalu_access_token()
+    except Exception as exc:
+        raise MagaluRecusou(f"Magalu sem conexão: {exc}")
+    try:
+        return uma(token)
+    except MagaluHttp401:
+        try:
+            return uma(magalu_access_token(force=True))
+        except MagaluHttp401:
+            raise MagaluRecusou("A Magalu recusou o acesso (401). Reconecte a conta em Integrações.", None, 401)
+
+
+def _magalu_ler(path: str, params: dict[str, Any] | None, amostra: str) -> Any:
+    """V20.34: leitura com amostra; erro vira RuntimeError (a tela mostra)."""
+    try:
+        dados = _magalu_chamar("GET", path, params)
+    except (MagaluRecusou, MagaluSemResposta) as exc:
+        if amostra:
+            _anuncio_amostra(f"{amostra} [erro]", {"erro": str(exc), "corpo": getattr(exc, "corpo", None)})
+        raise RuntimeError(str(exc))
+    if amostra:
+        _anuncio_amostra(amostra, dados)
+    return dados
+
+
+def _magalu_cache(chave: tuple[str, str], ler: Any) -> Any:
+    agora = time.time()
+    with _MAGALU_LEITURA_LOCK:
+        hit = _MAGALU_LEITURA_CACHE.get(chave)
+        if hit and agora - hit[0] < MAGALU_LEITURA_CACHE_S:
+            return hit[1]
+    valor = ler()
+    with _MAGALU_LEITURA_LOCK:
+        if len(_MAGALU_LEITURA_CACHE) > 500:
+            _MAGALU_LEITURA_CACHE.clear()
+        _MAGALU_LEITURA_CACHE[chave] = (agora, valor)
+    return valor
+
+
+def _magalu_texto(d: Any, *chaves: str) -> str:
+    if not isinstance(d, dict):
+        return ""
+    for k in chaves:
+        v = d.get(k)
+        if isinstance(v, (str, int, float)) and not isinstance(v, bool) and str(v).strip():
+            return str(v).strip()
+    return ""
+
+
+def _magalu_uuid_ok(texto: Any) -> bool:
+    return bool(re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                             str(texto or "").strip()))
+
+
+def magalu_categorias_buscar(nome: str) -> list[dict[str, Any]]:
+    """V20.34: categorias da Magalu pelo nome (GET /seller/v1/portfolios/category?name=). Leitura tolerante."""
+    nome = " ".join(str(nome or "").split())[:100]
+    if len(nome) < 2:
+        raise ValueError("Digite pelo menos 2 letras para buscar a categoria.")
+
+    def ler() -> list[dict[str, Any]]:
+        bruto = _magalu_ler("/seller/v1/portfolios/category", {"name": nome, "_limit": 50}, "magalu_categorias")
+        saida = []
+        for c in _magalu_lista(bruto) if not (isinstance(bruto, dict) and _magalu_texto(bruto, "id")) else [bruto]:
+            cid = _magalu_texto(c, "id", "category_id")
+            if not cid:
+                continue
+            caminho = c.get("path") or c.get("hierarchy") or c.get("full_path")
+            if isinstance(caminho, list):
+                caminho = " > ".join(_magalu_texto(x, "name", "title") if isinstance(x, dict) else str(x) for x in caminho)
+            filhos = c.get("children") if isinstance(c.get("children"), list) else None
+            folha = c.get("is_leaf") if isinstance(c.get("is_leaf"), bool) else (c.get("leaf") if isinstance(c.get("leaf"), bool) else None)
+            if folha is None and filhos is not None:
+                folha = not filhos
+            saida.append({"categoria": cid, "nome": _magalu_texto(c, "name", "title", "description") or cid,
+                          "caminho": str(caminho or _magalu_texto(c, "full_name") or ""), "folha": folha})
+        return saida
+    return list(_magalu_cache(("categorias", nome.lower()), ler))
+
+
+def _magalu_defs(bruto: Any) -> list[dict[str, Any]]:
+    """V20.34: lista de atributos/ficha tecnica da categoria: {nome, obrigatorio, recomendado, valores}."""
+    saida = []
+    vistos: set[str] = set()
+    for a in _magalu_lista(bruto) or ((bruto or {}).get("attributes") if isinstance(bruto, dict) else []) or []:
+        nome = _magalu_texto(a, "name", "attribute", "title", "id")
+        if not nome or nome.lower() in vistos:
+            continue
+        vistos.add(nome.lower())
+        req = a.get("required") if isinstance(a, dict) else None
+        req_txt = str(req).strip().lower() if not isinstance(req, bool) else ("required" if req else "optional")
+        valores = []
+        for v in (a.get("values") or a.get("allowed_values") or a.get("options") or []) if isinstance(a, dict) else []:
+            t = _magalu_texto(v, "value", "name", "id") if isinstance(v, dict) else str(v or "").strip()
+            if t and t not in valores:
+                valores.append(t)
+        saida.append({"nome": nome[:50], "obrigatorio": req_txt in ("required", "true", "1", "mandatory"),
+                      "recomendado": req_txt == "recommended", "valores": valores[:500]})
+    return saida
+
+
+def magalu_categoria_atributos(categoria: Any) -> dict[str, Any]:
+    """V20.34: atributos de variacao (/attributes) e ficha tecnica (/datasheet) da categoria."""
+    cid = str(categoria or "").strip()
+    if not _magalu_uuid_ok(cid):
+        raise ValueError("Categoria da Magalu inválida.")
+
+    def ler() -> dict[str, Any]:
+        attrs = _magalu_defs(_magalu_ler(f"/seller/v1/portfolios/category/{cid}/attributes", None, "magalu_atributos"))
+        ficha = _magalu_defs(_magalu_ler(f"/seller/v1/portfolios/category/{cid}/datasheet", None, "magalu_ficha_tecnica"))
+        return {"categoria": cid, "atributos": attrs, "ficha_tecnica": ficha}
+    return dict(_magalu_cache(("atributos", cid), ler))
+
+
+def magalu_fotos_do_ml(codigo: str) -> list[dict[str, str]]:
+    """V20.34: fotos (enderecos publicos do mlstatic) dos anuncios do ML desta ficha, na ordem do anuncio. Le o ML
+    agora (fora do DB_LOCK). Anuncio removido pelo Admin nao conta. Nada encontrado = []."""
+    cod = normalize(codigo)
+    with DB_LOCK:
+        linhas = [dict(r) for r in DB.execute(
+            "SELECT conta, anuncio_id FROM anuncio_canal_v2023 WHERE canal='ml' AND ficha_codigo=? "
+            "AND COALESCE(removido_em,'')='' ORDER BY CASE controle WHEN 'noromak' THEN 0 ELSE 1 END, conta, anuncio_id",
+            (cod,)).fetchall()]
+    saida: list[dict[str, str]] = []
+    vistos: set[str] = set()
+    for ln in linhas[:6]:
+        try:
+            with ml_na_casa(ln["conta"]):
+                det = ml_itens_detalhe([str(ln["anuncio_id"])], com_fotos=True)
+        except Exception as exc:
+            print(f"Aviso: fotos do {ln['anuncio_id']} nao lidas para a Magalu: {exc}", file=sys.stderr)
+            continue
+        for u in (det.get(str(ln["anuncio_id"])) or {}).get("fotos") or []:
+            url = str(u or "").strip()
+            if url.lower().startswith("http://"):
+                url = "https://" + url[7:]
+            if url and url not in vistos and _anuncio_foto_ml_url_ok(url):
+                vistos.add(url)
+                saida.append({"url": url, "mlb": str(ln["anuncio_id"])})
+        if saida:
+            break  # um anuncio basta (as mesmas fotos em todos)
+    return saida[:MAGALU_FOTOS_MAX]
+
+
+def _magalu_foto_conferir(url: str) -> str:
+    """V20.34: '' = a Magalu consegue usar (https do mlstatic, JPEG); senao o motivo. Baixa a foto (fora do DB_LOCK)."""
+    if not str(url or "").lower().startswith("https://") or not _anuncio_foto_ml_url_ok(url):
+        return "a foto precisa ser um endereço https do Mercado Livre (mlstatic.com)"
+    try:
+        dados = _anuncio_foto_ml_baixar(url)
+    except Exception as exc:
+        return f"não consegui abrir a foto ({str(exc)[:120]})"
+    if not dados.startswith(b"\xff\xd8\xff"):
+        return "a Magalu aceita só JPEG e esta foto não é JPEG"
+    return ""
+
+
+def magalu_conta_preco(codigo: str, preco: Any, comissao: Any = None, taxa_fixa: Any = None,
+                       frete: Any = None) -> dict[str, Any]:
+    """V20.34: conta do preco na Magalu (so le): comissao/taxa fixa/frete do Precificador (`marketplaces.magalu`,
+    comissao 0 = sem taxa cadastrada) ou os digitados na tela; imposto e custo de Araçatuba. Sem custo ou sem
+    comissao = sem lucro e sem preco ideal (nunca zero)."""
+    base = anuncio_custo_para_preco(codigo)
+
+    def num(v: Any) -> float | None:
+        if v in (None, "") or isinstance(v, bool):
+            return None
+        try:
+            x = float(str(v).replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+        return x if math.isfinite(x) and x >= 0 else None
+
+    p = num(preco)
+    p = p if p else None
+    try:
+        tx = _magalu_taxas_precificador().get(normalize(codigo)) or {}
+    except Exception as exc:
+        print(f"Aviso: taxas da Magalu do Precificador nao lidas: {exc}", file=sys.stderr)
+        tx = {}
+    com_dig = num(comissao)
+    com = (com_dig / 100.0 if com_dig is not None and com_dig >= 1 else com_dig) if com_dig is not None else tx.get("comissao")
+    fixa = num(taxa_fixa) if num(taxa_fixa) is not None else tx.get("taxa_fixa", 0.0 if com is not None else None)
+    fr = num(frete) if num(frete) is not None else tx.get("frete", 0.0 if com is not None else None)
+    origem = "digitada" if com_dig is not None else ("Precificador" if tx else "")
+    out: dict[str, Any] = {**base, "preco": p, "comissao_pct": com, "taxa_fixa": fixa, "frete": fr,
+                           "taxas_origem": origem, "comissao": None, "imposto_valor": None, "lucro": None,
+                           "margem": None, "preco_ideal": None}
+    if com is None or com >= 1:
+        out["comissao_pct"] = None
+        out["sem_taxa"] = "Sem a comissão da Magalu no Precificador: digite a comissão para ver o lucro."
+        if p:
+            out["imposto_valor"] = round(p * float(base.get("imposto") or 0), 2)
+        return out
+    imp = float(base.get("imposto") or 0)
+    custo = base.get("custo")
+    fixa_f, fr_f = float(fixa or 0), float(fr or 0)
+    if p:
+        out.update({"comissao": round(p * com, 2), "imposto_valor": round(p * imp, 2)})
+        if custo is not None:
+            lucro = p - p * com - fixa_f - fr_f - p * imp - float(custo)
+            out.update({"lucro": round(lucro, 2), "margem": round(lucro / p, 4)})
+    alvo = base.get("margem_alvo")
+    if custo is not None and alvo is not None:
+        den = 1 - com - imp - float(alvo)
+        if den > 0:
+            out["preco_ideal"] = round((float(custo) + fixa_f + fr_f) / den + 0.0049, 2)
+    return out
+
+
+# ---- rascunho ----
+def _magalu_rascunho_de_linha(row: Any) -> dict[str, Any]:
+    d = dict(row)
+    for campo, padrao in (("atributos_json", {}), ("ficha_tecnica_json", {}), ("fotos_json", []), ("erros_json", [])):
+        try:
+            v = json.loads(d.pop(campo) or "")
+        except (TypeError, ValueError):
+            v = padrao
+        d[campo[:-5]] = v if isinstance(v, type(padrao)) else padrao
+    d["canal"] = "magalu"
+    return d
+
+
+def magalu_rascunho_ler(rid: Any) -> dict[str, Any] | None:
+    try:
+        n = int(rid)
+    except (TypeError, ValueError):
+        return None
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM anuncio_rascunho_magalu_v2034 WHERE id=?", (n,)).fetchone()
+    return _magalu_rascunho_de_linha(row) if row else None
+
+
+def magalu_rascunhos_da_ficha(codigo: str) -> list[dict[str, Any]]:
+    with DB_LOCK:
+        rows = DB.execute("SELECT * FROM anuncio_rascunho_magalu_v2034 WHERE ficha_codigo=? ORDER BY id DESC",
+                          (normalize(codigo),)).fetchall()
+    return [_magalu_rascunho_de_linha(r) for r in rows]
+
+
+def _magalu_pares(brutos: Any, maximo: int, tam_nome: int, tam_valor: int) -> dict[str, str]:
+    """V20.34: {nome: valor} limpo (nome e valor como a Magalu aceita; vazio sai)."""
+    saida: dict[str, str] = {}
+    for k, v in (brutos.items() if isinstance(brutos, dict) else []):
+        nome = " ".join(str(k or "").split())[:tam_nome]
+        valor = " ".join(str(v or "").split())[:tam_valor]
+        if nome and valor:
+            saida[nome] = valor
+    if len(saida) > maximo:
+        raise ValueError(f"A Magalu aceita até {maximo} itens aqui.")
+    return saida
+
+
+def _magalu_preco(dados: dict[str, Any], chave: str) -> float | None:
+    p = dados.get(chave)
+    if p in (None, ""):
+        return None
+    if isinstance(p, bool):
+        raise ValueError("Preço inválido.")
+    try:
+        v = round(float(str(p).replace(",", ".")), 2)
+    except (TypeError, ValueError):
+        raise ValueError("Preço inválido.")
+    if not math.isfinite(v) or v <= 0 or v > 999999.99:
+        raise ValueError("O preço precisa ser um número maior que zero.")
+    return v
+
+
+def _magalu_rascunho_limpar(dados: dict[str, Any]) -> dict[str, Any]:
+    """V20.34: so os campos que vieram, conferidos (tipo e tamanho)."""
+    out: dict[str, Any] = {}
+    if "titulo" in dados:
+        out["titulo"] = " ".join(str(dados.get("titulo") or "").split())[:300]
+    if "categoria" in dados:
+        cat = str(dados.get("categoria") or "").strip()
+        if cat and not _magalu_uuid_ok(cat):
+            raise ValueError("Categoria da Magalu inválida.")
+        out["categoria"] = cat
+        out["categoria_nome"] = str(dados.get("categoria_nome") or "")[:300]
+    if "marca" in dados:
+        out["marca"] = " ".join(str(dados.get("marca") or "").split())[:100]
+    if "descricao" in dados:
+        out["descricao"] = str(dados.get("descricao") or "")[:MAGALU_DESC_MAX + 3000]
+    if "preco" in dados:
+        out["preco"] = _magalu_preco(dados, "preco")
+    if "preco_de" in dados:
+        out["preco_de"] = _magalu_preco(dados, "preco_de")
+    if "quantidade" in dados:
+        q = dados.get("quantidade")
+        if q in (None, ""):
+            out["quantidade"] = None
+        else:
+            try:
+                out["quantidade"] = int(str(q))
+            except (TypeError, ValueError):
+                raise ValueError("Quantidade inválida.")
+            if isinstance(q, bool) or not 1 <= out["quantidade"] <= ANUNCIO_ESTOQUE_MAX:
+                raise ValueError("A quantidade vai de 1 a 99999.")
+    if "atributos" in dados:
+        out["atributos"] = _magalu_pares(dados.get("atributos"), MAGALU_ATRIBUTOS_MAX, 20, 50)
+    if "ficha_tecnica" in dados:
+        out["ficha_tecnica"] = _magalu_pares(dados.get("ficha_tecnica"), MAGALU_FICHA_TECNICA_MAX, 50, 500)
+    if "fotos" in dados:
+        brutas = dados.get("fotos") or []
+        if not isinstance(brutas, list):
+            raise ValueError("Fotos inválidas.")
+        fotos = []
+        for u in brutas:
+            url = str(u or "").strip()
+            if not url:
+                continue
+            if not url.lower().startswith("https://") or not _anuncio_foto_ml_url_ok(url) or len(url) > 500:
+                raise ValueError("Foto da Magalu: só endereço https das fotos do anúncio do Mercado Livre (mlstatic.com).")
+            if url not in fotos:
+                fotos.append(url)
+        if len(fotos) > MAGALU_FOTOS_MAX:
+            raise ValueError(f"A Magalu aceita até {MAGALU_FOTOS_MAX} fotos.")
+        out["fotos"] = fotos
+    return out
+
+
+def magalu_rascunho_salvar(dados: dict[str, Any], ator: str, versao: Any) -> dict[str, Any]:
+    """V20.34: cria (sem `id`, com `codigo`) ou atualiza (com `id`; `versao` conferida, senao FichaConflito)."""
+    dados = dados if isinstance(dados, dict) else {}
+    limpos = _magalu_rascunho_limpar(dados)
+    agora = now_iso()
+    with DB_LOCK:
+        rid = dados.get("id")
+        if rid in (None, ""):
+            cod = normalize(dados.get("codigo"))
+            if not cod or _ficha_ler_sem_lock(cod) is None:
+                raise ValueError("Produto não encontrado.")
+            cur = DB.execute(
+                "INSERT INTO anuncio_rascunho_magalu_v2034(ficha_codigo,titulo,categoria,categoria_nome,marca,atributos_json,"
+                "ficha_tecnica_json,fotos_json,descricao,preco,preco_de,quantidade,situacao,versao,criado_em,criado_por,"
+                "atualizado_em,atualizado_por) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'rascunho',1,?,?,?,?)",
+                (cod, limpos.get("titulo", ""), limpos.get("categoria", ""), limpos.get("categoria_nome", ""),
+                 limpos.get("marca", ""), json.dumps(limpos.get("atributos", {}), ensure_ascii=False),
+                 json.dumps(limpos.get("ficha_tecnica", {}), ensure_ascii=False),
+                 json.dumps(limpos.get("fotos", []), ensure_ascii=False), limpos.get("descricao", ""),
+                 limpos.get("preco"), limpos.get("preco_de"), limpos.get("quantidade"), agora, str(ator or ""), agora,
+                 str(ator or "")))
+            novo_id = int(cur.lastrowid)
+        else:
+            row = DB.execute("SELECT * FROM anuncio_rascunho_magalu_v2034 WHERE id=?", (rid,)).fetchone()
+            if row is None:
+                raise ValueError("Rascunho não encontrado.")
+            atual = _magalu_rascunho_de_linha(row)
+            try:
+                ok_versao = versao is not None and int(versao) == int(atual["versao"])
+            except (TypeError, ValueError):
+                ok_versao = False
+            if not ok_versao:
+                raise FichaConflito(atual)
+            if atual["situacao"] not in MAGALU_RASCUNHO_EDITAVEL:
+                raise ValueError("Este rascunho já foi publicado ou está em publicação; não pode mais ser editado.")
+            novo = {k: limpos.get(k, atual.get(k)) for k in MAGALU_RASCUNHO_CAMPOS}
+            troca_cat = "categoria" in limpos and limpos["categoria"] != str(atual.get("categoria") or "")
+            attrs = limpos.get("atributos", {} if troca_cat else atual.get("atributos") or {})
+            ficha_t = limpos.get("ficha_tecnica", {} if troca_cat else atual.get("ficha_tecnica") or {})
+            fotos = limpos.get("fotos", atual.get("fotos") or [])
+            mudou = (any(novo[k] != atual.get(k) for k in MAGALU_RASCUNHO_CAMPOS) or attrs != (atual.get("atributos") or {})
+                     or ficha_t != (atual.get("ficha_tecnica") or {}) or fotos != (atual.get("fotos") or []))
+            if not mudou:
+                return atual
+            situacao = "rascunho" if atual["situacao"] == "validado" else atual["situacao"]
+            DB.execute(
+                "UPDATE anuncio_rascunho_magalu_v2034 SET titulo=?,categoria=?,categoria_nome=?,marca=?,atributos_json=?,"
+                "ficha_tecnica_json=?,fotos_json=?,descricao=?,preco=?,preco_de=?,quantidade=?,situacao=?,versao=versao+1,"
+                "atualizado_em=?,atualizado_por=? WHERE id=?",
+                (novo["titulo"], novo["categoria"], novo["categoria_nome"], novo["marca"],
+                 json.dumps(attrs, ensure_ascii=False), json.dumps(ficha_t, ensure_ascii=False),
+                 json.dumps(fotos, ensure_ascii=False), novo["descricao"], novo["preco"], novo["preco_de"],
+                 novo["quantidade"], situacao, agora, str(ator or ""), atual["id"]))
+            novo_id = int(atual["id"])
+        DB.commit()
+        row = DB.execute("SELECT * FROM anuncio_rascunho_magalu_v2034 WHERE id=?", (novo_id,)).fetchone()
+    return _magalu_rascunho_de_linha(row)
+
+
+def _magalu_trocar(rid: int, de: tuple[str, ...], para: str, erros: list[str], ator: str, *,
+                   versao: int | None = None, extra: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """V20.34: troca a situacao SOB o DB_LOCK so se ela ainda e uma das esperadas (e a versao, quando dada)."""
+    extra = extra or {}
+    sets, args = ["situacao=?", "erros_json=?", "versao=versao+1", "atualizado_em=?", "atualizado_por=?"], \
+        [para, json.dumps(list(erros), ensure_ascii=False), now_iso(), str(ator or "")]
+    for k in ("sku", "trace_id", "enviado_em", "etapa", "status_magalu"):
+        if k in extra:
+            sets.append(f"{k}=?")
+            args.append(extra[k])
+    with DB_LOCK:
+        cond, args_v = ("", ()) if versao is None else (" AND versao=?", (int(versao),))
+        cur = DB.execute(f"UPDATE anuncio_rascunho_magalu_v2034 SET {', '.join(sets)} WHERE id=? AND situacao IN "
+                         f"({','.join('?' * len(de))})" + cond, (*args, rid, *de, *args_v))
+        DB.commit()
+        if cur.rowcount != 1:
+            return None
+        row = DB.execute("SELECT * FROM anuncio_rascunho_magalu_v2034 WHERE id=?", (rid,)).fetchone()
+    return _magalu_rascunho_de_linha(row)
+
+
+def _magalu_pacote_da_ficha(campos: dict[str, Any]) -> tuple[dict[str, float | None], list[str]]:
+    """V20.34: peso (g) e medidas (cm) LIDOS DA FICHA agora; o que falta vai na lista."""
+    def n(v: Any) -> float | None:
+        try:
+            x = float(str(v).replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+        return x if math.isfinite(x) and x > 0 else None
+    m = {"peso_g": n(campos.get("peso_g")), "altura": n(campos.get("altura_cm")), "largura": n(campos.get("largura_cm")),
+         "comprimento": n(campos.get("comprimento_cm"))}
+    falta = [k.replace("_g", "") for k, v in m.items() if v is None]
+    return m, falta
+
+
+def _magalu_conferir_local(r: dict[str, Any], *, fotos_baixar: bool = True) -> tuple[list[str], dict[str, Any]]:
+    """V20.34: confere o rascunho contra o que a Magalu documenta (tamanhos, categoria e obrigatorios, fotos JPEG
+    publicas) e a ficha (peso, medidas). Devolve (erros, contexto). Leitura que falha = erro (nunca adivinha)."""
+    erros: list[str] = []
+    avisos: list[str] = []
+    ficha = ficha_ler(r["ficha_codigo"]) or {}
+    campos = ficha.get("campos") or {}
+    ctx: dict[str, Any] = {"avisos": avisos}
+    sku = normalize(r["ficha_codigo"])
+    if len(sku) > MAGALU_SKU_MAX:
+        erros.append(f"O código do produto ({sku}) tem {len(sku)} caracteres: a Magalu aceita SKU de até {MAGALU_SKU_MAX}.")
+    titulo = str(r.get("titulo") or "").strip()
+    if not titulo:
+        erros.append("Informe o título.")
+    elif len(titulo) > MAGALU_TITULO_MAX:
+        erros.append(f"Título com {len(titulo)} caracteres: a Magalu aceita até {MAGALU_TITULO_MAX}.")
+    desc = str(r.get("descricao") or "").strip()
+    if not desc:
+        erros.append("Informe a descrição.")
+    elif len(desc) > MAGALU_DESC_MAX:
+        erros.append(f"Descrição com {len(desc)} caracteres: a Magalu aceita até {MAGALU_DESC_MAX}.")
+    if "[CONFIRMAR]" in desc.upper():
+        erros.append("A descrição ainda tem [CONFIRMAR]: troque pelo texto certo.")
+    if not str(r.get("marca") or "").strip():
+        erros.append("Informe a marca (a Magalu pede a marca em todo produto).")
+    preco, preco_de = r.get("preco"), r.get("preco_de")
+    if not preco:
+        erros.append("Informe o preço.")
+    elif preco_de and float(preco) > float(preco_de):
+        erros.append("O preço “de” não pode ser menor que o preço de venda.")
+    if not r.get("quantidade") or int(r["quantidade"]) < 1:
+        erros.append("Informe a quantidade.")
+    medidas, falta = _magalu_pacote_da_ficha(campos)
+    ctx["medidas"] = medidas
+    if falta:
+        erros.append(f"Falta na ficha (Peso e medidas): {', '.join(falta)}. Preencha a ficha do produto.")
+    ean = re.sub(r"\D", "", str(campos.get("ean") or ""))
+    ctx["ean"] = ean if len(ean) in (8, 12, 13, 14) else ""
+    if not ctx["ean"]:
+        avisos.append("A ficha não tem EAN: o produto vai sem código de barras (a Magalu pode pedir depois).")
+    fotos = list(r.get("fotos") or [])
+    if not fotos:
+        erros.append("Escolha pelo menos uma foto (as fotos vêm do anúncio do Mercado Livre deste produto).")
+    elif fotos_baixar:
+        for pos, url in enumerate(fotos, 1):
+            motivo = _magalu_foto_conferir(url)
+            if motivo:
+                erros.append(f"Foto {pos}: {motivo}.")
+    cat = str(r.get("categoria") or "")
+    ctx["defs"] = {"atributos": [], "ficha_tecnica": []}
+    if not cat:
+        erros.append("Escolha a categoria.")
+        return erros, ctx
+    try:
+        defs = magalu_categoria_atributos(cat)
+    except (RuntimeError, ValueError) as exc:
+        erros.append(f"Não consegui ler a categoria na Magalu ({exc}).")
+        return erros, ctx
+    ctx["defs"] = defs
+    attrs, ficha_t = r.get("atributos") or {}, r.get("ficha_tecnica") or {}
+    for grupo, valores, rotulo in (("atributos", attrs, "Atributo"), ("ficha_tecnica", ficha_t, "Ficha técnica")):
+        for d in defs.get(grupo) or []:
+            v = str(valores.get(d["nome"]) or "").strip()
+            if d["obrigatorio"] and not v:
+                erros.append(f"{rotulo} obrigatório sem valor: {d['nome']}.")
+            elif v and d["valores"] and v not in d["valores"]:
+                erros.append(f"{d['nome']}: escolha um valor da lista da Magalu.")
+    return erros, ctx
+
+
+def magalu_sku_corpo(r: dict[str, Any], ficha: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """V20.34 (pura): corpo do POST /seller/v1/portfolios/skus (`additionalProperties: false`: so campos da spec)."""
+    campos = ficha.get("campos") or {}
+    m = ctx.get("medidas") or {}
+    sku = normalize(r["ficha_codigo"])
+
+    def dim(nome: str) -> dict[str, Any]:
+        return {"name": nome,
+                "height": {"value": round(max(0.001, float(m.get("altura") or 0)), 3), "unit": "cm"},
+                "width": {"value": round(max(0.001, float(m.get("largura") or 0)), 3), "unit": "cm"},
+                "length": {"value": round(max(0.001, float(m.get("comprimento") or 0)), 3), "unit": "cm"},
+                "weight": {"value": max(1, int(math.ceil(float(m.get("peso_g") or 0)))), "unit": "g"}}
+    ean = str(ctx.get("ean") or "")
+    corpo: dict[str, Any] = {
+        "sku": sku, "title": str(r.get("titulo") or "").strip(), "description": str(r.get("descricao") or "").strip(),
+        "brand": str(r.get("marca") or "").strip(), "type": "product", "active": True,
+        "group": {"id": sku[:50], "main_variation": True}, "channels": [{"id": MAGALU_CANAL_ID}],
+        "identifiers": [{"type": "ean", "value": ean}] if ean else [], "has_ean": bool(ean),
+        "datasheet": [{"name": k, "value": v} for k, v in (r.get("ficha_tecnica") or {}).items()],
+        "attributes": [{"name": k, "value": v} for k, v in (r.get("atributos") or {}).items()],
+        "dimensions": [dim("product"), dim("package")],
+        "images": [{"reference": u, "type": "image/jpeg"} for u in r.get("fotos") or []],
+        "videos": [], "podcasts": [], "extra_data": [], "origin": "national", "condition": "NEW",
+    }
+    if r.get("categoria"):
+        corpo["category"] = {"id": str(r["categoria"])}
+    ncm = re.sub(r"\D", "", str(campos.get("ncm") or ""))
+    if len(ncm) == 8:
+        corpo["ncm"] = ncm
+    return corpo
+
+
+def magalu_preco_corpo(r: dict[str, Any]) -> dict[str, Any]:
+    """V20.34 (pura): preco em centavos, moeda BRL SEMPRE (no POST o padrao da Magalu e USD)."""
+    por = int(round(float(r["preco"]) * 100))
+    de = int(round(float(r.get("preco_de") or r["preco"]) * 100))
+    return {"channel": {"id": MAGALU_CANAL_ID}, "list_price": max(de, por), "price": por, "currency": "BRL",
+            "normalizer": 100}
+
+
+def magalu_rascunho_conferir(rascunho_id: Any, ator: str) -> dict[str, Any]:
+    """V20.34: conferencia local (a Magalu nao tem "conferir sem criar"). Certo = `validado`; errado = `rascunho`."""
+    r = magalu_rascunho_ler(rascunho_id)
+    if r is None:
+        raise ValueError("Rascunho não encontrado.")
+    if r["situacao"] not in MAGALU_RASCUNHO_EDITAVEL:
+        raise ValueError("Este rascunho já foi publicado ou está em publicação.")
+    erros, ctx = _magalu_conferir_local(r)
+    para = "rascunho" if erros else "validado"
+    novo = _magalu_trocar(int(r["id"]), MAGALU_RASCUNHO_EDITAVEL, para, erros, ator, versao=int(r["versao"]))
+    if novo is None:
+        raise FichaConflito(magalu_rascunho_ler(r["id"]) or {})
+    return {"ok": not erros, "situacao": para, "erros": erros, "avisos": ctx.get("avisos") or [], "rascunho": novo}
+
+
+def _magalu_sku_ler(sku: str) -> dict[str, Any] | None:
+    """V20.34: o SKU na Magalu (None = nao existe). Erro de leitura sobe (MagaluRecusou/MagaluSemResposta)."""
+    try:
+        d = _magalu_chamar("GET", f"/seller/v1/portfolios/skus/{quote(sku, safe='')}")
+    except MagaluRecusou as exc:
+        if exc.status == 404:
+            return None
+        raise
+    _anuncio_amostra("magalu_sku_ler", d)
+    return d if isinstance(d, dict) else {}
+
+
+def _magalu_canal_noromak(sku: str, r: dict[str, Any], ator: str, status: str = "") -> None:
+    """V20.34: anuncio criado pelo Noromak entra na lista (canal magalu, `noromak`, estoque Manual). SOB o DB_LOCK."""
+    agora = now_iso()
+    DB.execute(
+        "INSERT INTO anuncio_canal_v2023(canal,conta,anuncio_id,ficha_codigo,sku_anuncio,controle,titulo,preco,estoque,"
+        "status,categoria,lido_em,controle_em,controle_por) VALUES('magalu',?,?,?,?,'noromak',?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(canal,conta,anuncio_id) DO UPDATE SET ficha_codigo=excluded.ficha_codigo,controle='noromak',"
+        "controle_em=excluded.controle_em,controle_por=excluded.controle_por",
+        (MAGALU_ANUNCIO_CONTA, sku, r["ficha_codigo"], sku, str(r.get("titulo") or ""), r.get("preco"),
+         r.get("quantidade"), str(status or ""), str(r.get("categoria") or ""), agora, agora, str(ator or "")))
+
+
+def _magalu_ja_anunciado(cod: str, rid: int) -> str:
+    """V20.34: o produto ja tem anuncio na Magalu criado pelo Noromak (ou outro rascunho em andamento)? SOB o DB_LOCK."""
+    ja = DB.execute("SELECT anuncio_id FROM anuncio_canal_v2023 WHERE canal='magalu' AND ficha_codigo=? "
+                    "AND COALESCE(removido_em,'')='' LIMIT 1", (cod,)).fetchone()
+    if ja:
+        return f"Este produto já tem anúncio na Magalu (SKU {ja['anuncio_id']})."
+    outro = DB.execute("SELECT id FROM anuncio_rascunho_magalu_v2034 WHERE ficha_codigo=? AND id<>? AND situacao IN "
+                       "('publicando','aguardando','incerto','publicado') LIMIT 1", (cod, rid)).fetchone()
+    if outro:
+        return f"O rascunho nº {outro['id']} deste produto já foi publicado ou está em publicação na Magalu."
+    return ""
+
+
+def magalu_publicar_reservar(rascunho_id: Any, ator: str) -> dict[str, Any]:
+    """V20.34: confere e troca `validado -> publicando` sob o DB_LOCK (um anuncio por produto). Erro = ValueError."""
+    try:
+        rid = int(rascunho_id)
+    except (TypeError, ValueError):
+        raise ValueError("Rascunho não encontrado.")
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM anuncio_rascunho_magalu_v2034 WHERE id=?", (rid,)).fetchone()
+        if row is None:
+            raise ValueError("Rascunho não encontrado.")
+        r = _magalu_rascunho_de_linha(row)
+        sit = r["situacao"]
+        if sit in ("publicando", "aguardando"):
+            raise ValueError("Este rascunho já está sendo publicado.")
+        if sit == "publicado":
+            raise ValueError(f"Este rascunho já foi publicado (SKU {r.get('sku') or ''}).")
+        if sit == "incerto":
+            raise ValueError("A última tentativa ficou sem confirmação da Magalu: confira e use “Conferir de novo” ou “Liberar”.")
+        if sit != "validado":
+            raise ValueError("Confira antes de publicar.")
+        motivo = _magalu_ja_anunciado(str(r["ficha_codigo"]), rid)
+        if motivo:
+            raise ValueError(motivo)
+        cur = DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET situacao='publicando', erros_json='[]', versao=versao+1, "
+                         "atualizado_em=?, atualizado_por=? WHERE id=? AND situacao='validado'", (now_iso(), str(ator or ""), rid))
+        DB.commit()
+        if cur.rowcount != 1:
+            raise ValueError("Este rascunho já está sendo publicado.")
+    return r
+
+
+def magalu_publicar_executar(r: dict[str, Any], ator: str) -> dict[str, Any]:
+    """V20.34: o trabalho do Publicar (rascunho ja em `publicando`). Falha antes do envio = `validado` (nada criado).
+    Enviado (202, ou sem resposta) = `aguardando`: o acompanhamento le o SKU na Magalu e manda preco e estoque."""
+    rid, cod = int(r["id"]), str(r["ficha_codigo"])
+    sku = normalize(cod)
+    estado: dict[str, Any] = {"fim": None, "enviado": False}
+
+    def fim(para: str, erros: list[str], **extra: Any) -> dict[str, Any]:
+        novo = _magalu_trocar(rid, ("publicando",), para, erros, ator, extra=extra)
+        estado["fim"] = novo or magalu_rascunho_ler(rid) or r
+        audit(ator, "anuncios.magalu_publicar", f"{cod}|{rid}|{para}|{'; '.join(erros)[:500]}")
+        return {"ok": para in ("aguardando", "publicado"), "situacao": para, "sku": sku, "erros": erros,
+                "rascunho": estado["fim"]}
+
+    try:
+        try:
+            ficha_ap = anuncio_ficha_payload(cod, ler_apollo=True, filiais=(MAGALU_ANUNCIO_CONTA,))
+        except Exception as exc:
+            ficha_ap = None
+            print(f"Aviso: Apollo nao lido para publicar {cod} na Magalu: {exc}", file=sys.stderr)
+        est = (((ficha_ap or {}).get("estoque") or {}).get(MAGALU_ANUNCIO_CONTA) or {})
+        dpm = est.get("da_para_montar") if isinstance(est, dict) else None
+        qtd = int(r.get("quantidade") or 0)
+        if dpm is None:
+            return fim("validado", ["O Apollo não respondeu (ou a fila não foi lida) — não publicado. Tente de novo."])
+        if int(dpm) <= 0:
+            return fim("validado", ["Sem estoque no Apollo de Araçatuba para montar este produto — não publicado."])
+        if qtd < 1 or qtd > int(dpm):
+            return fim("validado", [f"Quantidade {qtd} acima do que dá para montar no Apollo ({int(dpm)}) — não publicado."])
+        erros, ctx = _magalu_conferir_local(r)
+        if erros:
+            return fim("validado", erros)
+        try:
+            ja = _magalu_sku_ler(sku)
+        except (MagaluRecusou, MagaluSemResposta) as exc:
+            return fim("validado", [f"Não consegui conferir na Magalu se o SKU {sku} já existe ({exc}). Nada foi criado."])
+        if ja is not None:
+            return fim("validado", [f"Já existe um produto com o SKU {sku} na Magalu (criado fora do Noromak). Nada foi "
+                                    "enviado: o Noromak não sobrescreve produto de outra ferramenta."])
+        corpo = magalu_sku_corpo(r, ficha_ler(cod) or {"codigo": cod}, ctx)
+        estado["enviado"] = True
+        agora = now_iso()
+        try:
+            resp = _magalu_chamar("POST", "/seller/v1/portfolios/skus", payload=corpo)
+        except MagaluRecusou as exc:
+            _anuncio_amostra("magalu_criar_sku [erro]", {"erro": str(exc), "corpo": exc.corpo, "enviado": corpo})
+            if exc.status == 429:
+                return fim("validado", ["A Magalu está com muitas chamadas agora (429): nada foi criado. Tente em 1 minuto."])
+            if exc.status == 423:
+                return fim("validado", [f"A Magalu está com o cadastro bloqueado no momento (423): {exc}. Nada foi criado."])
+            return fim("erro", [f"A Magalu recusou: {exc}"])
+        except MagaluSemResposta as exc:
+            _anuncio_amostra("magalu_criar_sku [erro]", {"erro": str(exc), "enviado": corpo})
+            return fim("aguardando", [f"Sem resposta da Magalu no envio ({exc}). O Noromak confere sozinho se o SKU "
+                                      "apareceu."], sku=sku, enviado_em=agora, etapa="sku")
+        _anuncio_amostra("magalu_criar_sku", {"resposta": resp, "enviado": corpo})
+        trace = _magalu_texto(resp, "trace_id", "id") if isinstance(resp, dict) else ""
+        return fim("aguardando", [], sku=sku, trace_id=trace, enviado_em=agora, etapa="sku")
+    finally:
+        if estado["fim"] is None:
+            try:
+                if estado["enviado"]:
+                    fim("aguardando", ["Falha depois do envio: o Noromak confere sozinho se o SKU apareceu."],
+                        sku=sku, enviado_em=now_iso(), etapa="sku")
+                else:
+                    fim("validado", ["Falha inesperada antes de criar o anúncio; nada foi criado na Magalu."])
+            except Exception as exc:
+                print(f"Aviso: rascunho Magalu {rid} nao saiu de publicando: {exc}", file=sys.stderr)
+
+
+def magalu_publicar(rascunho_id: Any, ator: str) -> dict[str, Any]:
+    """V20.34: reserva e publica (sincrono; a rota usa magalu_publicar_iniciar)."""
+    return magalu_publicar_executar(magalu_publicar_reservar(rascunho_id, ator), ator)
+
+
+def magalu_publicar_iniciar(rascunho_id: Any, ator: str) -> dict[str, Any]:
+    """V20.34: a rota reserva aqui (erro = 400 na hora) e o resto roda numa thread que solta o ANUNCIOS_PUBLICAR_LOCK
+    no fim (conferir as fotos baixando cada uma pode passar dos 60 s do nginx). Chamar COM a trava pega."""
+    r = magalu_publicar_reservar(rascunho_id, ator)
+    resposta = {"ok": True, "iniciado": True, "rascunho": magalu_rascunho_ler(r["id"])}
+
+    def rodar() -> None:
+        try:
+            magalu_publicar_executar(r, ator)
+        except Exception as exc:
+            print(f"Aviso: publicar na Magalu {r['id']} falhou: {exc}", file=sys.stderr)
+        finally:
+            ANUNCIOS_PUBLICAR_LOCK.release()
+    try:
+        threading.Thread(target=rodar, name=f"magalu-publicar-{r['id']}", daemon=True).start()
+    except BaseException:
+        _magalu_trocar(int(r["id"]), ("publicando",), "validado", ["A publicação não começou; tente de novo."], ator)
+        raise
+    return resposta
+
+
+def _magalu_trace_erro(trace_id: str) -> str:
+    """V20.34: o resultado do 202 (GET /v0/traces/{id}): o texto do erro, ou '' (sem erro ou sem leitura)."""
+    if not trace_id:
+        return ""
+    try:
+        d = _magalu_chamar("GET", f"/v0/traces/{quote(trace_id, safe='')}")
+    except (MagaluRecusou, MagaluSemResposta):
+        return ""
+    _anuncio_amostra("magalu_trace", d)
+    msgs = []
+    for t in _magalu_lista(d) or ([d] if isinstance(d, dict) else []):
+        if isinstance(t, dict) and str(t.get("severity") or "").lower() in ("error", "critical"):
+            msgs.append(_magalu_texto(t, "message", "code") or "erro sem mensagem")
+    return "; ".join(msgs)[:600]
+
+
+def _magalu_acompanhar_trava(rid: int) -> threading.Lock:
+    with _MAGALU_ACOMPANHAR_LOCKS_LOCK:
+        return _MAGALU_ACOMPANHAR_LOCKS.setdefault(rid, threading.Lock())
+
+
+def magalu_acompanhar(rascunho_id: Any, ator: str = "sistema", *, forcar: bool = False) -> dict[str, Any] | None:
+    """V20.34: um rascunho `aguardando`: le o SKU na Magalu (fora do DB_LOCK). Existe = manda preco e estoque (cada um
+    202, absolutos: repetir nao faz mal) e vira `publicado` (entra na lista com estoque Manual). Nao existe: trace com
+    erro = `erro`; passou MAGALU_ACOMPANHAR_PRAZO_S = `incerto`; senao continua aguardando."""
+    try:
+        rid = int(rascunho_id)
+    except (TypeError, ValueError):
+        return None
+    agora_m = time.monotonic()
+    if not forcar and agora_m - _MAGALU_ACOMPANHAR_VISTO.get(rid, 0.0) < MAGALU_ACOMPANHAR_INTERVALO_S:
+        return magalu_rascunho_ler(rid)
+    trava = _magalu_acompanhar_trava(rid)
+    if not trava.acquire(blocking=False):
+        return magalu_rascunho_ler(rid)
+    try:
+        _MAGALU_ACOMPANHAR_VISTO[rid] = agora_m
+        r = magalu_rascunho_ler(rid)
+        if r is None or r["situacao"] != "aguardando":
+            return r
+        sku = str(r.get("sku") or normalize(r["ficha_codigo"]))
+        try:
+            lido = _magalu_sku_ler(sku)
+        except (MagaluRecusou, MagaluSemResposta) as exc:
+            _magalu_trocar(rid, ("aguardando",), "aguardando", [f"Magalu sem resposta ao conferir o SKU ({exc}); "
+                                                                "tento de novo em instantes."], ator)
+            return magalu_rascunho_ler(rid)
+        if lido is None:
+            erro = _magalu_trace_erro(str(r.get("trace_id") or ""))
+            if erro:
+                return _magalu_trocar(rid, ("aguardando",), "erro", [f"A Magalu recusou: {erro}"], ator)
+            try:
+                enviado = datetime.fromisoformat(str(r.get("enviado_em") or ""))
+                if enviado.tzinfo is None:
+                    enviado = enviado.replace(tzinfo=timezone.utc)
+                passou = (datetime.now(timezone.utc) - enviado).total_seconds()
+            except ValueError:
+                passou = MAGALU_ACOMPANHAR_PRAZO_S + 1
+            if passou > MAGALU_ACOMPANHAR_PRAZO_S:
+                return _magalu_trocar(rid, ("aguardando",), "incerto", [MAGALU_INCERTO_TEXTO], ator)
+            return r
+        status = _magalu_texto(lido, "status")[:60]
+        avisos: list[str] = []
+        etapa = str(r.get("etapa") or "sku")
+        try:
+            if etapa == "sku":
+                resp = _magalu_chamar("POST", f"/seller/v1/portfolios/prices/{quote(sku, safe='')}",
+                                      payload=magalu_preco_corpo(r))
+                _anuncio_amostra("magalu_preco", resp)
+                _magalu_trocar(rid, ("aguardando",), "aguardando", [], ator, extra={"etapa": "preco", "status_magalu": status})
+                etapa = "preco"
+            if etapa == "preco":
+                resp = _magalu_chamar("POST", f"/seller/v1/portfolios/stocks/{quote(sku, safe='')}",
+                                      payload={"channel": {"id": MAGALU_CANAL_ID}, "quantity": int(r.get("quantidade") or 0),
+                                               "type": "AVAILABLE"})
+                _anuncio_amostra("magalu_estoque_criar", resp)
+        except (MagaluRecusou, MagaluSemResposta) as exc:
+            _anuncio_amostra(f"magalu_{'preco' if etapa == 'sku' else 'estoque_criar'} [erro]",
+                             {"erro": str(exc), "corpo": getattr(exc, "corpo", None)})
+            o_que = "o preço" if etapa == "sku" else "o estoque"
+            _magalu_trocar(rid, ("aguardando",), "aguardando",
+                           [f"O SKU {sku} foi criado na Magalu, mas {o_que} não foi aceito ({exc}). Tento de novo em instantes."],
+                           ator, extra={"status_magalu": status})
+            return magalu_rascunho_ler(rid)
+        if status and status.lower() not in ("published", "publicado", "new", "draft", "policies_approved"):
+            avisos.append(f"A Magalu mostra o produto como “{status}”: confira no painel da Magalu se há bloqueio.")
+        with DB_LOCK:
+            try:
+                cur = DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET situacao='publicado', etapa='estoque', "
+                                 "status_magalu=?, erros_json=?, versao=versao+1, atualizado_em=?, atualizado_por=? "
+                                 "WHERE id=? AND situacao='aguardando'",
+                                 (status, json.dumps(avisos, ensure_ascii=False), now_iso(), str(ator or ""), rid))
+                if cur.rowcount == 1:
+                    _magalu_canal_noromak(sku, r, ator, status)
+                DB.commit()
+            except Exception:
+                DB.rollback()
+                raise
+        audit(ator, "anuncios.magalu_publicado", f"{r['ficha_codigo']}|{rid}|{sku}|{status}")
+        return magalu_rascunho_ler(rid)
+    finally:
+        trava.release()
+
+
+def magalu_acompanhar_pendentes(limite: int = 5) -> int:
+    """V20.34: o worker do estoque chama a cada volta: confere os rascunhos `aguardando` (sem nenhum, nem le a Magalu)."""
+    with DB_LOCK:
+        ids = [int(x[0]) for x in DB.execute("SELECT id FROM anuncio_rascunho_magalu_v2034 WHERE situacao='aguardando' "
+                                              "ORDER BY id LIMIT ?", (int(limite),)).fetchall()]
+    for rid in ids:
+        try:
+            magalu_acompanhar(rid)
+        except Exception as exc:
+            print(f"Aviso: acompanhar rascunho Magalu {rid}: {exc}", file=sys.stderr)
+    return len(ids)
+
+
+def magalu_incerto_liberar(rascunho_id: Any, acao: Any, ator: str) -> dict[str, Any]:
+    """V20.34: o Admin conferiu no painel da Magalu. `conferir` = volta a `aguardando` (o Noromak le o SKU de novo e,
+    se existir, segue com preco e estoque); `nao_criado` = volta a `validado` (pode publicar de novo - o Publicar
+    recusa se o SKU existir)."""
+    try:
+        rid = int(rascunho_id)
+    except (TypeError, ValueError):
+        raise ValueError("Rascunho não encontrado.")
+    acao = str(acao or "").strip()
+    if acao not in ("conferir", "nao_criado"):
+        raise ValueError("Ação inválida.")
+    if acao == "conferir":
+        novo = _magalu_trocar(rid, ("incerto", "erro"), "aguardando", [], ator,
+                              extra={"enviado_em": now_iso()})
+    else:
+        novo = _magalu_trocar(rid, ("incerto",), "validado", [], ator)
+    if novo is None:
+        raise ValueError("Este rascunho não está aguardando conferência na Magalu.")
+    audit(ator, "anuncios.magalu_liberar", f"{novo['ficha_codigo']}|{rid}|{acao}")
+    if acao == "conferir":
+        novo = magalu_acompanhar(rid, ator, forcar=True) or novo
+    return {"ok": True, "rascunho": novo}
+
+
+# ---- estoque da Magalu (a conta de estoque 'magalu' = linhas canal='magalu', conta='aracatuba') ----
+def _magalu_estoque_ler(sku: str) -> dict[str, Any]:
+    """V20.34: GET /seller/v1/portfolios/stocks/{sku}: {existe, estoque, branches}. Estoque = soma do AVAILABLE do
+    nosso canal; sem linha AVAILABLE ou quantidade sem numero = None (nunca 0)."""
+    try:
+        d = _magalu_chamar("GET", f"/seller/v1/portfolios/stocks/{quote(sku, safe='')}")
+    except MagaluRecusou as exc:
+        if exc.status == 404:
+            return {"existe": False, "estoque": None, "branches": []}
+        raise
+    _anuncio_amostra("magalu_estoque_ler", d)
+    linhas = [x for x in _magalu_lista(d) if isinstance(x, dict)]
+    disp = []
+    for x in linhas:
+        if str(x.get("type") or "AVAILABLE").upper() != "AVAILABLE":
+            continue
+        canal = x.get("channel") if isinstance(x.get("channel"), dict) else {}
+        if canal.get("id") and str(canal["id"]) != MAGALU_CANAL_ID:
+            continue
+        disp.append(x)
+    estoque: int | None = None
+    try:
+        if disp and all(isinstance(x.get("quantity"), (int, float)) and not isinstance(x.get("quantity"), bool) for x in disp):
+            estoque = int(sum(int(x["quantity"]) for x in disp))
+    except (TypeError, ValueError):
+        estoque = None
+    branches = sorted({str((x.get("branch") or {}).get("id") or "") for x in disp if isinstance(x.get("branch"), dict)} - {""})
+    return {"existe": True, "estoque": estoque, "branches": branches, "linhas": len(disp)}
+
+
+def _magalu_estoque_gravar_api(sku: str, qtd: int, ficha_codigo: str = "") -> dict[str, Any]:
+    """V20.34: le, grava (absoluto) e rele; so e ok quando a Magalu mostra o numero (a gravacao e assincrona)."""
+    res: dict[str, Any] = {"ok": False, "antes": None, "depois": None, "metodo": "stocks", "erro": "", "lido": {}}
+    if ficha_codigo and normalize(sku) != normalize(ficha_codigo):
+        res["erro"] = f"o SKU {sku} não é o código da ficha ({ficha_codigo}): nada enviado"
+        return res
+    try:
+        antes = _magalu_estoque_ler(sku)
+    except (MagaluRecusou, MagaluSemResposta) as exc:
+        res["erro"] = f"não consegui ler o estoque na Magalu ({exc})"
+        return res
+    res["antes"] = antes["estoque"]
+    if not antes["existe"]:
+        res["erro"] = "a Magalu não achou o SKU nesta loja"
+        return res
+    if len(antes["branches"]) > 1:
+        res["erro"] = ("o SKU tem estoque em mais de um centro de distribuição na Magalu (" + ", ".join(antes["branches"])
+                       + "): ajuste na Magalu, o Noromak não escolhe")
+        return res
+    corpo: dict[str, Any] = {"channel": {"id": MAGALU_CANAL_ID}, "quantity": int(qtd), "type": "AVAILABLE"}
+    if antes["branches"]:
+        corpo["branch"] = {"id": antes["branches"][0]}
+    metodo = "PATCH" if antes.get("linhas") else "POST"
+    res["metodo"] = f"stocks {metodo}"
+    try:
+        r = _magalu_chamar(metodo, f"/seller/v1/portfolios/stocks/{quote(sku, safe='')}", payload=corpo)
+        _anuncio_amostra(f"magalu_estoque_{metodo.lower()}", r)
+    except MagaluRecusou as exc:
+        _anuncio_amostra(f"magalu_estoque_{metodo.lower()} [erro]", {"erro": str(exc), "corpo": exc.corpo})
+        res["erro"] = f"a Magalu recusou: {exc}"
+        return res
+    except MagaluSemResposta as exc:
+        res["erro"] = f"sem resposta da Magalu ({exc}); relido abaixo"
+    for espera in MAGALU_ESTOQUE_RELEITURA_ESPERAS:
+        time.sleep(espera)
+        try:
+            depois = _magalu_estoque_ler(sku)["estoque"]
+        except (MagaluRecusou, MagaluSemResposta):
+            continue
+        if depois is None:
+            continue
+        res["depois"] = depois
+        if depois == qtd:
+            res.update(ok=True, erro="")
+            return res
+    if not res["erro"]:
+        res["erro"] = f"a Magalu aceitou mas ainda mostra {res['depois']} (enviado {qtd}); confere de novo na próxima volta"
+    return res
+
+
+# ---------------------------------------------------------------------------
 # V20.26 - Estoque dos anuncios (fase 3; plano docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md).
 # Excecao a regra "o Noromak nunca grava estoque": grava no ML, SO em anuncio `controle='noromak'` (nunca Full,
 # Alephee ou removido pelo ADMIN). Manual = o Admin digita e vai na hora; Automatico = Apollo da filial menos o
@@ -35428,17 +36513,22 @@ ANUNCIO_ESTOQUE_STATUS_PARADO = {"closed": "encerrado", "inactive": "inativo", "
 # V20.32: a "conta de estoque" e a chave do interruptor e da rodada: as casas do ML ('aracatuba', 'bauru') e 'shopee'
 # (a Shopee de Araçatuba: linhas canal='shopee', conta='aracatuba'; Apollo e fila de Araçatuba, o mesmo estoque do ML).
 ESTOQUE_CONTA_SHOPEE = "shopee"
+ESTOQUE_CONTA_MAGALU = "magalu"  # V20.34: a Magalu de Araçatuba (linhas canal='magalu', conta='aracatuba')
+# V20.34: contas de estoque que nao sao casa do ML (rodam numa thread na volta do worker; ML nao espera por elas)
+ESTOQUE_CONTAS_FORA = (ESTOQUE_CONTA_SHOPEE, ESTOQUE_CONTA_MAGALU)
 
 
 def _estoque_conta_valida(conta: Any) -> str:
     c = str(conta or "").strip().lower()
-    return ESTOQUE_CONTA_SHOPEE if c == ESTOQUE_CONTA_SHOPEE else ml_casa_valida(conta)
+    return c if c in ESTOQUE_CONTAS_FORA else ml_casa_valida(conta)
 
 
 def _estoque_alvo(conta: str) -> tuple[str, str, str]:
     """V20.32: (canal, conta da linha do anuncio, filial do Apollo/fila) da conta de estoque."""
     if conta == ESTOQUE_CONTA_SHOPEE:
         return "shopee", SHOPEE_ANUNCIO_CONTA, SHOPEE_ANUNCIO_CONTA
+    if conta == ESTOQUE_CONTA_MAGALU:
+        return "magalu", MAGALU_ANUNCIO_CONTA, MAGALU_ANUNCIO_CONTA
     return "ml", conta, conta
 
 
@@ -35927,14 +37017,34 @@ def shopee_estoque_gravar(conta: str, item_id: str, quantidade: Any, *, ator: st
                           conferir: Any = None) -> dict[str, Any]:
     """V20.32: a UNICA funcao que grava estoque na Shopee (mesmo contrato do ml_estoque_gravar). So anuncio
     `noromak` da Shopee de Araçatuba; `conferir()` roda dentro da trava do anuncio."""
-    canal, conta_linha = "shopee", SHOPEE_ANUNCIO_CONTA
+    return _estoque_gravar_fora(ESTOQUE_CONTA_SHOPEE, item_id, quantidade, _shopee_estoque_gravar_api, ator=ator,
+                                modo=modo, motivo=motivo, conferir=conferir)
+
+
+def magalu_estoque_gravar(conta: str, item_id: str, quantidade: Any, *, ator: str, modo: str, motivo: str,
+                          conferir: Any = None) -> dict[str, Any]:
+    """V20.34: a UNICA funcao que grava estoque na Magalu (mesmo contrato). `item_id` = o SKU na Magalu."""
+    return _estoque_gravar_fora(ESTOQUE_CONTA_MAGALU, item_id, quantidade, _magalu_estoque_gravar_api, ator=ator,
+                                modo=modo, motivo=motivo, conferir=conferir)
+
+
+def _estoque_gravador(canal: str) -> Any:
+    """V20.34: quem grava o estoque de cada canal."""
+    return {"shopee": shopee_estoque_gravar, "magalu": magalu_estoque_gravar}.get(canal, ml_estoque_gravar)
+
+
+def _estoque_gravar_fora(conta_est: str, item_id: str, quantidade: Any, api: Any, *, ator: str, modo: str, motivo: str,
+                         conferir: Any = None) -> dict[str, Any]:
+    """V20.32/V20.34: gravar estoque num marketplace que nao e o ML (Shopee, Magalu): elegibilidade, trava do anuncio,
+    `conferir()` dentro da trava, `api(item_id, qtd, ficha)` (le, grava, rele) e o registro."""
+    canal, conta_linha, _filial = _estoque_alvo(conta_est)
     item_id = str(item_id or "").strip()
     qtd = _anuncio_estoque_qtd(quantidade)
     with DB_LOCK:
         recusa = _anuncio_estoque_elegivel(_anuncio_estoque_linha(canal, conta_linha, item_id))
     if recusa:
         raise ValueError(recusa)
-    trava = _anuncio_estoque_trava(ESTOQUE_CONTA_SHOPEE, item_id)
+    trava = _anuncio_estoque_trava(conta_est, item_id)
     if not trava.acquire(timeout=ANUNCIO_ESTOQUE_TRAVA_S):
         return {"ok": False, "resultado": "erro", "antes": None, "depois": None, "metodo": "",
                 "erro": "Outro envio de estoque deste anúncio ainda está em andamento."}
@@ -35952,7 +37062,7 @@ def shopee_estoque_gravar(conta: str, item_id: str, quantidade: Any, *, ator: st
             return {"ok": False, "resultado": "ignorado", "antes": None, "depois": None, "metodo": "", "erro": recusa}
         with DB_LOCK:
             ficha_linha = str((_anuncio_estoque_linha(canal, conta_linha, item_id) or {}).get("ficha_codigo") or "")
-        res = _shopee_estoque_gravar_api(item_id, qtd, ficha_linha)
+        res = api(item_id, qtd, ficha_linha)
         ok = bool(res["ok"])
         resultado = "ok" if ok else ("ignorado" if res.get("ignorado") else "erro")
         detalhe = res["metodo"] + (": " + res["erro"] if res.get("erro") else "")
@@ -35971,7 +37081,7 @@ def shopee_estoque_gravar(conta: str, item_id: str, quantidade: Any, *, ator: st
                            (1 if lido.get("variacoes") else 0, str(lido.get("status") or ""), canal, conta_linha, item_id))
             DB.commit()
         if ok and modo == "manual":
-            audit(ator, "anuncios.estoque_manual", f"shopee|{item_id}|{res['antes']}->{qtd}")
+            audit(ator, "anuncios.estoque_manual", f"{canal}|{item_id}|{res['antes']}->{qtd}")
         return {"ok": ok, "resultado": resultado, "antes": res["antes"], "depois": res.get("depois"),
                 "metodo": res["metodo"], "erro": res.get("erro") or "", "quantidade": qtd,
                 "ignorado": str(res.get("ignorado") or "")}
@@ -36153,8 +37263,9 @@ def _anuncios_codigos_automatico(filial: str) -> dict[str, str]:
     """V20.26: codigos do Apollo (normalize) das pecas dos anuncios em Automatico da filial."""
     with DB_LOCK:
         linhas = _anuncios_automatico_linhas(filial)
-        if filial == SHOPEE_ANUNCIO_CONTA:  # V20.32: a Shopee le o mesmo Apollo de Araçatuba
+        if filial == SHOPEE_ANUNCIO_CONTA:  # V20.32: a Shopee (V20.34: e a Magalu) le o mesmo Apollo de Araçatuba
             linhas += _anuncios_automatico_linhas(ESTOQUE_CONTA_SHOPEE)
+            linhas += _anuncios_automatico_linhas(ESTOQUE_CONTA_MAGALU)
     if not linhas:
         return {}
     catalogo = _load_kit_catalog()
@@ -36373,7 +37484,7 @@ ANUNCIO_ESTOQUE_RECALCULO_S = 600      # o worker refaz a conta mesmo sem mudanc
 ANUNCIO_ESTOQUE_ERROS_PARAR = 3        # V20.26 (revisao): erros seguidos no mesmo numero = para ate o numero/anuncio mudar
 # (conta, mlb) -> (quando, numero, erros seguidos, assinatura do anuncio, ultimo erro). Memoria do processo.
 _ANUNCIO_ESTOQUE_ERRO: dict[tuple[str, str], tuple[float, int, int, str, str]] = {}
-_ANUNCIO_ESTOQUE_RODADA_LOCKS: dict[str, threading.Lock] = {c: threading.Lock() for c in (*CASAS, "shopee")}
+_ANUNCIO_ESTOQUE_RODADA_LOCKS: dict[str, threading.Lock] = {c: threading.Lock() for c in (*CASAS, *ESTOQUE_CONTAS_FORA)}
 
 
 def _anuncio_estoque_motivo_envio(it: dict[str, Any]) -> str:
@@ -36396,7 +37507,7 @@ def anuncios_estoque_rodada(conta: str, *, ator: str, forcar: bool = False) -> d
     V20.32: tambem a conta 'shopee' (grava pelo shopee_estoque_gravar)."""
     conta = _estoque_conta_valida(conta)
     canal, conta_linha, _filial = _estoque_alvo(conta)
-    gravar = shopee_estoque_gravar if canal == "shopee" else ml_estoque_gravar
+    gravar = _estoque_gravador(canal)  # V20.34: Shopee, Magalu ou ML
     trava = _ANUNCIO_ESTOQUE_RODADA_LOCKS[conta]
     if not trava.acquire(timeout=30 if forcar else 0.01):
         return {"ok": False, "ocupado": True, "erro": "Outra rodada do estoque desta conta está em andamento."}
@@ -36532,7 +37643,7 @@ def anuncios_estoque_erros_repetidos() -> list[dict[str, Any]]:
 # de cada vez; a tela acompanha pelo `envio` do GET /api/anuncios/estoque.
 ANUNCIOS_ESTOQUE_ENVIO: dict[str, dict[str, Any]] = {}
 ANUNCIOS_ESTOQUE_ENVIO_LOCK = threading.Lock()
-_ANUNCIOS_ESTOQUE_ENVIO_TRAVAS: dict[str, threading.Lock] = {c: threading.Lock() for c in (*CASAS, "shopee")}
+_ANUNCIOS_ESTOQUE_ENVIO_TRAVAS: dict[str, threading.Lock] = {c: threading.Lock() for c in (*CASAS, *ESTOQUE_CONTAS_FORA)}
 
 
 def anuncios_estoque_envio_situacao(conta: str) -> dict[str, Any]:
@@ -36608,7 +37719,7 @@ def anuncio_estoque_manual(conta: str, anuncio_id: str, quantidade: Any, ator: s
             return None, "o anúncio passou para Automático"
         return qtd, ""
 
-    gravar = shopee_estoque_gravar if canal == "shopee" else ml_estoque_gravar
+    gravar = _estoque_gravador(canal)  # V20.34: Shopee, Magalu ou ML
     return gravar(conta, anuncio_id, qtd, ator=ator, modo="manual", motivo="digitado pelo Admin", conferir=conferir)
 
 
@@ -36619,12 +37730,15 @@ def anuncios_estoque_volta(estado: dict[str, Any]) -> list[str]:
         contas = [str(r[0]) for r in DB.execute(
             "SELECT DISTINCT conta FROM anuncio_canal_v2023 WHERE canal='ml' AND estoque_modo='automatico' "
             "AND controle='noromak' AND COALESCE(removido_em,'')='' AND COALESCE(logistica,'')<>'fulfillment'").fetchall()]
-        tem_shopee = DB.execute(
-            "SELECT 1 FROM anuncio_canal_v2023 WHERE canal='shopee' AND estoque_modo='automatico' AND controle='noromak' "
-            "AND COALESCE(removido_em,'')='' LIMIT 1").fetchone() is not None
+        fora = [c for c in ESTOQUE_CONTAS_FORA if DB.execute(
+            "SELECT 1 FROM anuncio_canal_v2023 WHERE canal=? AND estoque_modo='automatico' AND controle='noromak' "
+            "AND COALESCE(removido_em,'')='' LIMIT 1", (_estoque_alvo(c)[0],)).fetchone() is not None]
+    try:  # V20.34: rascunhos da Magalu esperando o SKU aparecer (sem nenhum, nem le a Magalu)
+        magalu_acompanhar_pendentes()
+    except Exception as exc:
+        print(f"[anuncios_estoque] acompanhar Magalu: {exc}", file=sys.stderr, flush=True)
     contas = sorted(c for c in contas if c in ANUNCIO_REVENDA)
-    if tem_shopee:  # V20.32: a Shopee entra como conta propria, com a filial de Araçatuba
-        contas.append(ESTOQUE_CONTA_SHOPEE)
+    contas += fora  # V20.32: a Shopee (V20.34: e a Magalu) entram como conta propria, com a filial de Araçatuba
     if not contas:
         return []
     mudancas: set[str] = set()
@@ -36633,8 +37747,9 @@ def anuncios_estoque_volta(estado: dict[str, Any]) -> list[str]:
     with DB_LOCK:
         versao = _ml_versoes_storage("conf_pedidos", PENDING_ORDER_DELETE_KEY_V1766)
     afetadas = {c for c in contas if _estoque_alvo(c)[2] in mudancas}
-    if estado.get("shopee_pendente") and ESTOQUE_CONTA_SHOPEE in contas:
-        afetadas.add(ESTOQUE_CONTA_SHOPEE)  # 2a revisao: mudanca que chegou com a rodada da Shopee ocupada
+    for c in ESTOQUE_CONTAS_FORA:
+        if estado.get(f"{c}_pendente") and c in contas:
+            afetadas.add(c)  # 2a revisao: mudanca que chegou com a rodada da Shopee/Magalu ocupada
     if versao != estado.get("versao"):
         estado["versao"] = versao
         afetadas |= set(contas)
@@ -36643,15 +37758,16 @@ def anuncios_estoque_volta(estado: dict[str, Any]) -> list[str]:
         estado["recalculo"] = agora
         afetadas |= set(contas)
     for c in sorted(afetadas):
-        if c == ESTOQUE_CONTA_SHOPEE:
+        if c in ESTOQUE_CONTAS_FORA:
             # revisao (06/11): Shopee fora do ar (35 s por chamada) nao pode segurar o ML na mesma volta: roda numa
             # thread e a volta espera no maximo ANUNCIO_ESTOQUE_SHOPEE_ESPERA_S (a trava da rodada impede duas juntas)
+            # V20.34: o mesmo para a Magalu (a gravacao dela e assincrona e a releitura espera ate ~30 s)
             if _ANUNCIO_ESTOQUE_RODADA_LOCKS[c].locked():
-                estado["shopee_pendente"] = True  # 2a revisao: a mudanca fica para a proxima volta (nao se perde)
+                estado[f"{c}_pendente"] = True  # 2a revisao: a mudanca fica para a proxima volta (nao se perde)
                 continue
-            estado["shopee_pendente"] = False
+            estado[f"{c}_pendente"] = False
             t = threading.Thread(target=_anuncios_estoque_rodada_segura, args=(c,), daemon=True,
-                                 name="anuncios-estoque-shopee")
+                                 name=f"anuncios-estoque-{c}")
             t.start()
             t.join(ANUNCIO_ESTOQUE_SHOPEE_ESPERA_S)
             continue
@@ -44339,6 +45455,37 @@ class AppHandler(BaseHTTPRequestHandler):
                                                                     str((query.get("filtro") or [""])[0]),
                                                                     conta_q)})
             return
+        if path in ("/api/anuncios/magalu/categorias", "/api/anuncios/magalu/atributos", "/api/anuncios/magalu/conta",
+                    "/api/anuncios/magalu/fotos", "/api/anuncios/magalu/rascunhos"):
+            # V20.34: leituras da Magalu (e das fotos do anuncio do ML) para criar anuncio. Ver os rascunhos = modulo
+            # admin (so le o banco); o resto chama a Magalu/o ML = perfil Admin.
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                def _qm(nome: str) -> str:
+                    return str((query.get(nome) or [""])[0]).strip()
+                if str(ctx.get("app_role") or "") != "admin" and not path.endswith("/rascunhos"):
+                    self.send_json({"ok": False, "error": "Somente o perfil Admin."}, 403)
+                    return
+                try:
+                    if path.endswith("/categorias"):
+                        res = {"ok": True, "categorias": magalu_categorias_buscar(_qm("nome"))}
+                    elif path.endswith("/atributos"):
+                        res = {"ok": True, **magalu_categoria_atributos(_qm("categoria"))}
+                    elif path.endswith("/conta"):
+                        res = {"ok": True, **magalu_conta_preco(_qm("codigo"), _qm("preco"), _qm("comissao"),
+                                                                _qm("taxa_fixa"), _qm("frete"))}
+                    elif path.endswith("/fotos"):
+                        res = {"ok": True, "fotos": magalu_fotos_do_ml(_qm("codigo"))}
+                    else:
+                        res = {"ok": True, "rascunhos": magalu_rascunhos_da_ficha(_qm("codigo"))}
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                    return
+                except RuntimeError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 502)
+                    return
+                self.send_json(res)
+            return
         if path in ("/api/anuncios/shopee/categorias", "/api/anuncios/shopee/atributos", "/api/anuncios/shopee/conta",
                     "/api/anuncios/shopee/rascunhos"):
             # V20.32: leituras da Shopee para criar anuncio (so GET; chamam a Shopee: perfil Admin)
@@ -46762,7 +47909,7 @@ class AppHandler(BaseHTTPRequestHandler):
             try:
                 body = self.read_json() or {}
                 if not str(body.get("conta") or "").strip():
-                    raise ValueError("Informe a conta (aracatuba, bauru ou shopee).")  # V20.26: nunca cai na principal calado
+                    raise ValueError("Informe a conta (aracatuba, bauru, shopee ou magalu).")  # V20.26: nunca cai na principal calado
                 conta_e = _estoque_conta_valida(body.get("conta"))  # V20.32: 'shopee' = a Shopee de Araçatuba
                 if path == "/api/anuncios/estoque/modo":
                     canal_l, conta_l, _f = _estoque_alvo(conta_e)
@@ -46806,6 +47953,9 @@ class AppHandler(BaseHTTPRequestHandler):
                     # V20.32: anuncio na Shopee (rascunho, conferir, publicar, liberar)
                     "/api/anuncios/shopee/rascunho", "/api/anuncios/shopee/conferir", "/api/anuncios/shopee/publicar",
                     "/api/anuncios/shopee/liberar",
+                    # V20.34: anuncio na Magalu (rascunho, conferir, publicar, acompanhar o 202, liberar)
+                    "/api/anuncios/magalu/rascunho", "/api/anuncios/magalu/conferir", "/api/anuncios/magalu/publicar",
+                    "/api/anuncios/magalu/acompanhar", "/api/anuncios/magalu/liberar",
                     # V20.31: agente de anúncios (pedir, trocar a categoria, aceitar)
                     "/api/anuncios/agente/pedir", "/api/anuncios/agente/atributos", "/api/anuncios/agente/aceitar",
                     "/api/anuncios/agente/cancelar"):
@@ -47016,6 +48166,28 @@ class AppHandler(BaseHTTPRequestHandler):
                         raise
                 elif path == "/api/anuncios/shopee/liberar":
                     res = shopee_incerto_liberar(body.get("id"), body.get("item_id"), ctx["username"])
+                elif path == "/api/anuncios/magalu/rascunho":  # V20.34: grava so no banco (a Magalu so no Publicar)
+                    rasc = magalu_rascunho_salvar(body, ctx["username"], body.get("versao"))
+                    audit(ctx["username"], "anuncios.magalu_rascunho", f"{rasc.get('ficha_codigo')}|{rasc.get('id')}|v{rasc.get('versao')}")
+                    res = {"ok": True, "rascunho": rasc}
+                elif path == "/api/anuncios/magalu/conferir":
+                    res = magalu_rascunho_conferir(body.get("id"), ctx["username"])
+                elif path == "/api/anuncios/magalu/publicar":  # V20.34: a UNICA escrita da criacao na Magalu
+                    if not ANUNCIOS_PUBLICAR_LOCK.acquire(blocking=False):
+                        self.send_json({"ok": False, "error": "Outra publicação em andamento."}, 409)
+                        return
+                    try:  # em segundo plano (a thread solta a trava no fim)
+                        res = magalu_publicar_iniciar(body.get("id"), ctx["username"])
+                    except BaseException:
+                        ANUNCIOS_PUBLICAR_LOCK.release()
+                        raise
+                elif path == "/api/anuncios/magalu/acompanhar":  # a tela pede enquanto o SKU nao aparece
+                    rasc_m = magalu_acompanhar(body.get("id"), ctx["username"])
+                    if rasc_m is None:
+                        raise ValueError("Rascunho não encontrado.")
+                    res = {"ok": True, "rascunho": rasc_m}
+                elif path == "/api/anuncios/magalu/liberar":
+                    res = magalu_incerto_liberar(body.get("id"), body.get("acao"), ctx["username"])
                 elif path == "/api/anuncios/rascunho/liberar":  # V20.24: o Admin conferiu o `incerto` no ML
                     res = anuncio_incerto_liberar(body.get("id"), body.get("mlb"), ctx["username"])
                 elif path == "/api/anuncios/foto/ordenar":

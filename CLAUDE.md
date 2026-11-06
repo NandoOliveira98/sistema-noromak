@@ -927,6 +927,25 @@ pública pelo **código** de erro do corpo; renova também em 403 com código de
 que não começa (thread) volta a `validado`; mudança que chega com a rodada da Shopee ocupada fica para a volta seguinte
 (`estado["shopee_pendente"]`); trocar de ficha durante a publicação não trava o painel.
 
+**V20.34 — anúncios na Magalu (Araçatuba)** (dono, 06/11: "vamos para o magalu agr"; desenho
+`docs/superpowers/specs/2026-11-06-anuncios-magalu-design.md`). Escopos de gravação pedidos pelo `idm client add-scope` (AVAILABLE
+em 06/11); o token só recebe extra se o link pedir: `MAGALU_OAUTH_SCOPE` pede os quatro — **reconectar a Magalu uma vez depois de
+publicar**. Painel **"Criar anúncio na Magalu"** na aba Anúncios em todos os canais: rascunho `anuncio_rascunho_magalu_v2034`
+(título ≤ 150, categoria por busca de nome, ficha técnica/atributos da categoria, marca, fotos, descrição ≤ 7000, preço, preço "de",
+quantidade; `versao` → 409). **Tudo na Magalu é assíncrono (202)**: o SKU enviado = código da ficha, e `aguardando` só vira
+`publicado` quando o `GET` do SKU mostra o produto — aí manda o preço (centavos, `currency: BRL` sempre) e o estoque e a linha entra
+(`canal='magalu'`, `anuncio_id` = SKU, estoque Manual). Acompanhamento: worker do estoque a cada volta + a tela (no máximo 1 leitura
+por rascunho a cada 20 s). Sem resposta no envio = `aguardando` (não incerto); trace com erro = `erro`; 30 min sem o SKU = `incerto`
+("Conferir de novo" / "Não foi criado"); `publicando` no boot = `aguardando`. **SKU que já existe na Magalu nunca é sobrescrito**
+(o Publicar recusa). **Fotos = endereços do anúncio do ML** (`mlstatic.com`, JPEG; a Magalu baixa pelo endereço e as fotos do Noromak
+estão atrás do login); a página não mostra imagem de fora (CSP): link "ver". Estoque: conta `magalu` (`ESTOQUE_CONTAS_FORA`, com a
+`shopee`), interruptor próprio, o mesmo disponível de Araçatuba; `magalu_estoque_gravar` lê o AVAILABLE do canal (RESERVED fora),
+`PATCH`/`POST` absoluto com o `branch` único, dois CDs = recusa, relê até ~30 s. `shopee_estoque_gravar` e o da Magalu passam pelo
+mesmo `_estoque_gravar_fora`. Rotas `GET /api/anuncios/magalu/{categorias,atributos,conta,fotos,rascunhos}` e
+`POST /api/anuncios/magalu/{rascunho,conferir,publicar,acompanhar,liberar}`. 1ª resposta de cada chamada em `anuncio_amostra_v2024`
+(`magalu_*`) — **conferir no 1º uso**. Prévia: `dev_magalu_anuncio.py` ("recusar"/"sumir" no título). Teste:
+`TESTES/test_anuncios_magalu_v2034.py`.
+
 **V20.26 — fase 3: controle de estoque dos anúncios do ML** (decisões do dono 05/11; plano
 `docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md`). **Exceção à regra "o Noromak nunca grava estoque": o Noromak grava
 estoque no ML só em anúncio `controle='noromak'`** (nunca Full, Alephee ou removido pelo ADMIN; como já é no TikTok). Cada anúncio tem
