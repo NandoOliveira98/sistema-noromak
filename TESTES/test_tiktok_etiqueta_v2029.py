@@ -252,3 +252,52 @@ class TelaConferencia(TesteNoromak):
         self.assertIn('marketplace === "tiktok"', self._funcao("prepararDadosImpressaoMarketplace"))
         self.assertIn('"TikTok Shop"', self._funcao("nomeMarketplace"))
         self.assertNotIn("nkToast", self.html, "a Conferência fica com alert() (trava o leitor de propósito)")
+
+
+class Cancelamento(Base):
+
+    def _pedidos(self):
+        return {l.get("Pedido") for l in self._fila()}
+
+    def test_cancelado_sai_da_fila(self):
+        self._importar([_pedido("TT1"), _pedido("TT2")])
+        self._importar([_pedido("TT2")])
+        self.assertNotIn("TT1", self._pedidos())
+        self.assertIn("TT2", self._pedidos())
+
+    def test_linha_protegida_pelo_admin_fica(self):
+        self._importar([_pedido("TT1")])
+        linhas = self._fila()
+        for l in linhas:
+            if l.get("Pedido") == "TT1":
+                l["ManualAdminProtegido"] = "SIM"  # regra do _admin_manual_pending_protected (V17.51/V18.52)
+        self.salvar_admin(linhas)
+        self._importar([])
+        self.assertIn("TT1", self._pedidos(), "a linha protegida pelo ADMIN não pode sair pela integração")
+
+    def test_concluido_nao_volta(self):
+        self._importar([_pedido("TT1")])
+        status, corpo = self.cliente.pedir("POST", "/api/order-complete", {"pedido": "TT1"})
+        self.assertEqual(status, 200, corpo)
+        self._importar([_pedido("TT1")])
+        self.assertNotIn("TT1", self._pedidos())
+
+    def test_unidade_cancelada_baixa_a_quantidade(self):
+        p = _pedido("TT1", itens=(("SK1", "0893600022"), ("SK1", "0893600022")))
+        p["line_items"][1]["display_status"] = "CANCELLED"
+        self._importar([p])
+        self.assertEqual(self._linha("TT1")["Quantidade"], "1")
+
+    def test_cancelado_depois_de_vinculado_nao_imprime(self):
+        S.tiktok_etiqueta_definir(True, "dono")
+        self._importar([_pedido("TT1")])
+        self._importar([])
+        with self.assertRaises(ValueError):
+            S.tiktok_etiqueta_pdf("TT1", "bauru")
+
+    def test_pedido_com_cancelamento_pedido_nao_organiza_envio(self):
+        S.tiktok_etiqueta_definir(True, "dono")
+        self._importar([_pedido("TT1", cancel_reason="Buyer requested")])
+        self.assertFalse(self._chamadas("/ship"))
+        self.assertFalse(self._chamadas("/shipping_documents"))
+        self.assertEqual(self._linha("TT1")["Etiqueta API TikTok"], "AGUARDANDO")

@@ -9928,6 +9928,12 @@ def _tiktok_guardar_etiqueta(pedido: str, pacote: str) -> None:
                  client_ip="127.0.0.1")
 
 
+def _tiktok_cancelamento_pedido(pedido: dict[str, Any]) -> bool:
+    """V20.29: comprador pediu cancelamento (ou o pedido está retido): não organiza o envio.
+    Nomes dos campos a conferir na 1ª resposta real (leitura tolerante)."""
+    return any(pedido.get(c) for c in ("cancel_reason", "cancellation_initiator", "is_on_hold"))
+
+
 def tiktok_etiquetas_rodada(pedidos: list[dict[str, Any]]) -> dict[str, Any]:
     """Organiza o envio (AWAITING_SHIPMENT) e confere o documento de cada pacote ainda sem etiqueta.
     Chamadas ao TikTok fora do DB_LOCK; falha de um pacote não para os outros nem a importação."""
@@ -9937,6 +9943,8 @@ def tiktok_etiquetas_rodada(pedidos: list[dict[str, Any]]) -> dict[str, Any]:
     for pedido in pedidos:
         numero = str(pedido.get("id") or "").strip()
         status = str(pedido.get("status") or "").upper()
+        if _tiktok_cancelamento_pedido(pedido):
+            continue
         for pacote in _tiktok_pacotes(pedido)[:1]:
             if pacote in vinculados:
                 continue
