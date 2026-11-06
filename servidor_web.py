@@ -7250,7 +7250,9 @@ TIKTOK_ESTOQUE_BAIXO = 3
 TIKTOK_SKU_LIMITE = 50             # V20.08: o TikTok corta o SKU do vendedor aqui; o kit chega sem o fim
 TIKTOK_PEDIDOS_INTERVALO = 120
 TIKTOK_PEDIDOS_STATUS = ("AWAITING_SHIPMENT", "AWAITING_COLLECTION")
-TIKTOK_CAMPOS_OPERACIONAIS = ("StatusTikTok", "PrazoEnvioTikTok", "TikTokAtualizadoEm")
+TIKTOK_CAMPOS_OPERACIONAIS = ("StatusTikTok", "PrazoEnvioTikTok", "TikTokAtualizadoEm",
+                              "Etiqueta API TikTok", "PacoteTikTok")  # V20.29: etiqueta
+TIKTOK_ETIQUETA_REPETIR_S = 600  # V20.29: pacote que falhou (ex.: sem NF) só é tentado de novo depois disto
 TIKTOK_MODOS = ("simulacao", "lote", "automatico")
 TIKTOK_SYNC_LOCK = threading.Lock()
 TIKTOK_ESTOQUE_LOCK = threading.Lock()
@@ -9817,10 +9819,169 @@ def tiktok_pedidos_abertos() -> list[dict[str, Any]]:
     return pedidos
 
 
-def _tiktok_linhas_do_pedido(pedido: dict[str, Any], products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+# ---------------------------------------------------------------------------
+# V20.29 — etiqueta do TikTok (decisões do dono, 06/11): o servidor organiza o envio do pacote
+# sozinho e vincula a etiqueta; a Conferência de Bauru imprime em PDF, baixado na hora pela rota
+# /api/etiqueta-tiktok-pdf (o link do TikTok vence: nunca é guardado, e o PDF não vai para o
+# banco — o registro em conf_etiquetas guarda só o marcador TIKTOK_PDF:<pacote>). A nota sai
+# pelo Linx: sem ela o TikTok recusa e a linha mostra AGUARDANDO NF. É a única ação que GRAVA
+# no TikTok, por isso tem chave própria e começa DESLIGADA. Endpoints de fontes de terceiros:
+# a 1ª resposta fica em tiktok_amostra_v1963 (conferir ao ligar o app de parceiro).
+# ---------------------------------------------------------------------------
+_TIKTOK_ETIQUETA_TENTATIVA: dict[str, float] = {}   # pacote -> epoch da última tentativa que falhou
+_TIKTOK_ETIQUETA_ESTADO: dict[str, str] = {}        # pacote -> AGUARDANDO NF / ERRO (memória do processo)
+
+
+class TikTokSemNota(RuntimeError):
+    """O TikTok recusou porque a NF-e do pedido ainda não foi enviada a ele."""
+
+
+def tiktok_etiqueta_ligada() -> bool:
+    return _tiktok_config_ler("etiqueta") == "1"  # sem escolha = DESLIGADA
+
+
+def tiktok_etiqueta_definir(ligada: bool, usuario: str) -> None:
+    _tiktok_config_gravar("etiqueta", "1" if ligada else "0", usuario)
+    tiktok_log_event("etiqueta", "", "LIGADA" if ligada else "DESLIGADA", f"por {usuario}")
+
+
+def _tiktok_pacotes(pedido: dict[str, Any]) -> list[str]:
+    return [str(p.get("id") or "").strip() for p in (pedido.get("packages") or [])
+            if isinstance(p, dict) and str(p.get("id") or "").strip()]
+
+
+def _tiktok_sem_nota(exc: Exception) -> bool:
+    return bool(re.search(r"invoice|nota|nf-?e", str(exc), re.I))
+
+
+def tiktok_organizar_envio(pacote: str) -> None:
+    try:
+        tiktok_api("POST", f"/fulfillment/202309/packages/{pacote}/ship", body={})
+    except RuntimeError as exc:
+        if _tiktok_sem_nota(exc):
+            raise TikTokSemNota(str(exc))
+        raise
+
+
+def tiktok_documento_url(pacote: str) -> str:
+    try:
+        resp = tiktok_api("GET", f"/fulfillment/202309/packages/{pacote}/shipping_documents",
+                          params={"document_type": "SHIPPING_LABEL", "document_size": "A6"})
+    except RuntimeError as exc:
+        if _tiktok_sem_nota(exc):
+            raise TikTokSemNota(str(exc))
+        raise
+    dados = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+    url = str(dados.get("doc_url") or "").strip()
+    if not url:
+        raise RuntimeError("O TikTok não devolveu o link da etiqueta.")
+    return url
+
+
+def _tiktok_etiquetas_vinculadas() -> set[str]:
+    raw, _, _ = get_storage("conf_etiquetas")
+    try:
+        bank = json.loads(raw) if raw else {}
+    except Exception:
+        bank = {}
+    registros = bank.get("registros") if isinstance(bank, dict) and isinstance(bank.get("registros"), dict) else {}
+    return {str((rec.get("metadados") or {}).get("pacote") or "") for rec in registros.values()
+            if isinstance(rec, dict) and rec.get("marketplace") == "tiktok"
+            and isinstance(rec.get("metadados"), dict) and str(rec["metadados"].get("pacote") or "")}
+
+
+def _tiktok_guardar_etiqueta(pedido: str, pacote: str) -> None:
+    """Mesma montagem de _magalu_guardar_etiqueta, com o marcador do PDF no lugar do ZPL."""
+    raw, _, _ = get_storage("conf_etiquetas")
+    try:
+        bank = json.loads(raw) if raw else {}
+    except Exception:
+        bank = {}
+    if not isinstance(bank, dict):
+        bank = {}
+    bank["version"] = max(8, int(bank.get("version") or 0))
+    for chave, padrao in (("registros", {}), ("ordem", []), ("porChave", {}), ("avisos", []),
+                          ("auditoria", []), ("resumo", {}), ("vinculados", {})):
+        bank.setdefault(chave, padrao)
+    rid = "etq_tiktok_api_" + hashlib.sha1(pacote.encode("utf-8")).hexdigest()[:18]
+    chaves = [x for x in (pedido, pacote) if x]
+    bank["registros"][rid] = {
+        "id": rid, "marketplace": "tiktok", "envio": f"TIKTOK_PDF:{pacote}", "danfe": "",
+        "arquivo": f"TikTok API · pacote {pacote}",
+        "metadados": {"pedido": pedido, "pacote": pacote},
+        "chaves": chaves, "vinculadoA": [pedido], "pedido": pedido,
+        "vinculo": "api_tiktok", "origem": "api_tiktok",
+        "adicionadaEm": now_iso(), "adicionadaPor": "tiktok-api",
+    }
+    if rid not in bank["ordem"]:
+        bank["ordem"].append(rid)
+    for chave in chaves:
+        bank["porChave"].setdefault(chave, [])
+        if rid not in bank["porChave"][chave]:
+            bank["porChave"][chave].append(rid)
+    bank["atualizadoEm"] = now_iso()
+    bank["auditoria"].append({"marketplace": "tiktok", "pedido": pedido, "criterio": "api_tiktok",
+                              "etiqueta": rid, "arquivo": bank["registros"][rid]["arquivo"]})
+    bank["auditoria"] = bank["auditoria"][-250:]
+    save_storage("conf_etiquetas", raw, json_dumps(bank), False, actor="tiktok-api", actor_role="sistema",
+                 source_screen="API TikTok", change_method="Etiqueta automática (envio organizado)",
+                 client_ip="127.0.0.1")
+
+
+def tiktok_etiquetas_rodada(pedidos: list[dict[str, Any]]) -> dict[str, Any]:
+    """Organiza o envio (AWAITING_SHIPMENT) e confere o documento de cada pacote ainda sem etiqueta.
+    Chamadas ao TikTok fora do DB_LOCK; falha de um pacote não para os outros nem a importação."""
+    vinculados = _tiktok_etiquetas_vinculadas()
+    resumo = {"novas": 0, "aguardando_nf": 0, "erros": 0}
+    agora = time.time()
+    for pedido in pedidos:
+        numero = str(pedido.get("id") or "").strip()
+        status = str(pedido.get("status") or "").upper()
+        for pacote in _tiktok_pacotes(pedido)[:1]:
+            if pacote in vinculados:
+                continue
+            if agora - _TIKTOK_ETIQUETA_TENTATIVA.get(pacote, 0.0) < TIKTOK_ETIQUETA_REPETIR_S:
+                if _TIKTOK_ETIQUETA_ESTADO.get(pacote) == "AGUARDANDO NF":
+                    resumo["aguardando_nf"] += 1
+                continue
+            try:
+                if status == "AWAITING_SHIPMENT":
+                    tiktok_organizar_envio(pacote)
+                tiktok_documento_url(pacote)  # só confere que o documento existe; o PDF é baixado na impressão
+                _tiktok_guardar_etiqueta(numero, pacote)
+                vinculados.add(pacote)
+                _TIKTOK_ETIQUETA_TENTATIVA.pop(pacote, None)
+                _TIKTOK_ETIQUETA_ESTADO.pop(pacote, None)
+                resumo["novas"] += 1
+            except TikTokSemNota as exc:
+                _TIKTOK_ETIQUETA_TENTATIVA[pacote] = agora
+                _TIKTOK_ETIQUETA_ESTADO[pacote] = "AGUARDANDO NF"
+                resumo["aguardando_nf"] += 1
+                tiktok_log_event_se_mudou("etiqueta", f"pedido={numero} pacote={pacote}", "AGUARDANDO NF", str(exc)[:800])
+            except Exception as exc:
+                _TIKTOK_ETIQUETA_TENTATIVA[pacote] = agora
+                _TIKTOK_ETIQUETA_ESTADO[pacote] = "ERRO"
+                resumo["erros"] += 1
+                tiktok_log_event_se_mudou("etiqueta", f"pedido={numero} pacote={pacote}", "ERRO", str(exc)[:800])
+    return resumo
+
+
+def _tiktok_etiqueta_situacao(pacote: str, vinculados: set[str], ligada: bool) -> str:
+    if pacote and pacote in vinculados:
+        return "VINCULADA"
+    if not ligada:
+        return ""
+    return _TIKTOK_ETIQUETA_ESTADO.get(pacote) or "AGUARDANDO"
+
+
+def _tiktok_linhas_do_pedido(pedido: dict[str, Any], products: list[dict[str, Any]],
+                             etiqueta: tuple[set[str], bool] | None = None) -> list[dict[str, Any]]:
     numero = str(pedido.get("id") or "").strip()
     if not numero:
         return []
+    pacotes = _tiktok_pacotes(pedido)
+    pacote = pacotes[0] if pacotes else ""
+    situacao = _tiktok_etiqueta_situacao(pacote, *etiqueta) if etiqueta else ""
     endereco = pedido.get("recipient_address") if isinstance(pedido.get("recipient_address"), dict) else {}
     agrupado: dict[tuple[str, str], dict[str, Any]] = {}
     for item in pedido.get("line_items") or []:
@@ -9845,6 +10006,7 @@ def _tiktok_linhas_do_pedido(pedido: dict[str, Any], products: list[dict[str, An
             "Rua": "", "Módulo": "", "Prateleira": "", "Nível": "", "Posição": "", "Foto": "",
             "StatusTikTok": str(pedido.get("status") or ""),
             "PrazoEnvioTikTok": _tiktok_iso(pedido.get("rts_sla_time")),
+            "PacoteTikTok": pacote, "Etiqueta API TikTok": situacao,  # V20.29
             "OrigemCadastro": "API_TIKTOK", "SkuOrigemImportacao": sku,
             "TikTokAtualizadoEm": now_iso(), "CriadoEm": now_iso(),
             "__uidLinha": "TIKTOKAPI_" + hashlib.sha1(identidade.encode("utf-8")).hexdigest()[:20],
@@ -9862,11 +10024,15 @@ def _tiktok_linhas_do_pedido(pedido: dict[str, Any], products: list[dict[str, An
 def tiktok_importar_pedidos() -> dict[str, Any]:
     with TIKTOK_SYNC_LOCK:
         pedidos = tiktok_pedidos_abertos()  # erro aqui = nada gravado
+        # V20.29: etiqueta antes de montar as linhas, para a linha já sair VINCULADA.
+        ligada = tiktok_etiqueta_ligada()
+        etiquetas = tiktok_etiquetas_rodada(pedidos) if ligada else {"novas": 0, "aguardando_nf": 0, "erros": 0}
+        vinculados = _tiktok_etiquetas_vinculadas()
         products_raw, _, _ = get_storage("conf_produtos")
         products = _rows_from_storage_value(products_raw)
         api_linhas: list[dict[str, Any]] = []
         for pedido in pedidos:
-            api_linhas.extend(_tiktok_linhas_do_pedido(pedido, products))
+            api_linhas.extend(_tiktok_linhas_do_pedido(pedido, products, (vinculados, ligada)))
         atual_raw, _, _ = get_storage("conf_pedidos")
         atual = _rows_from_storage_value(atual_raw)
         fila, removidas, pulados = _magalu_merge(atual, api_linhas, origem="API_TIKTOK",
@@ -9876,7 +10042,8 @@ def tiktok_importar_pedidos() -> dict[str, Any]:
                      change_method="Sincronização API TikTok", client_ip="127.0.0.1",
                      allow_completed_reimport=False, remove_pending_identities=removidas)
         resumo = {"ok": True, "pedidos": len({order_number(r) for r in api_linhas}), "linhas": len(api_linhas),
-                  "removidas": len(removidas), "ja_na_fila_por_outra_origem": pulados}
+                  "removidas": len(removidas), "ja_na_fila_por_outra_origem": pulados,
+                  "etiquetas": etiquetas}
         tiktok_log_event_se_mudou("pedidos", "/order/202309/orders/search", "OK",
                                   f"{resumo['pedidos']} pedido(s), {resumo['linhas']} linha(s), "
                                   f"{len(removidas)} removida(s), {pulados} já na fila")
