@@ -381,3 +381,95 @@ class RevisaoFinal(Base):
         self.assertIn("POST /fulfillment/202309/packages/{id}/ship", tipos)
         self.assertEqual(len([t for t in tipos if "/ship" in t]), 1)
         self.assertIn("GET /finance/202501/orders/{id}/statement_transactions", tipos)
+
+
+KIT = "0893600022/0893764272"
+
+
+class RevisaoAntesDeSubir(Base):
+    """Achados da revisar-antes-de-subir (06/11)."""
+
+    def _cadastrar_kit(self):
+        atual, _, _ = S.get_storage("conf_kits")
+        kits = [{"sku_kit": KIT, "nome": "Kit teste", "ativo": True,
+                 "componentes": [{"sku": "0893600022", "quantidade": 1}, {"sku": "0893764272", "quantidade": 1}]}]
+        S.save_storage("conf_kits", atual, json.dumps(kits), False, actor="admin_teste", actor_role="admin",
+                       source_screen="teste", change_method="teste", client_ip="127.0.0.1")
+
+    def test_barreiras_do_admin_lidas_sob_a_trava(self):
+        S.tiktok_etiqueta_definir(True, "dono")
+        vistos = []
+        original = S.filter_completed_orders_v1772
+
+        def espiao(valor):
+            vistos.append(S.DB_LOCK._lock._is_owned())
+            return original(valor)
+        with mock.patch.object(S, "filter_completed_orders_v1772", side_effect=espiao):
+            self._importar([_pedido("TT1")])
+        self.assertTrue(vistos and all(vistos), "a barreira do ADMIN leu o banco sem o DB_LOCK")
+
+    def test_falha_ao_ler_as_barreiras_nao_organiza_e_nao_derruba_a_importacao(self):
+        S.tiktok_etiqueta_definir(True, "dono")
+        original = S.filter_completed_orders_v1772
+        chamadas = []
+
+        def falha_na_barreira(valor):  # a 1ª chamada é a barreira da etiqueta; as outras, a gravação
+            chamadas.append(1)
+            if len(chamadas) == 1:
+                raise RuntimeError("banco ocupado")
+            return original(valor)
+        with mock.patch.object(S, "filter_completed_orders_v1772", side_effect=falha_na_barreira):
+            r = self._importar([_pedido("TT1")])
+        self.assertFalse(self._chamadas("/ship"), "sem saber o que o ADMIN tirou, não grava no TikTok")
+        self.assertIn("TT1", {l.get("Pedido") for l in self._fila()}, "a importação continua")
+        self.assertEqual(r["etiquetas"]["erros"], 1)
+
+    def test_kit_excluido_linha_a_linha_nao_organiza_envio(self):
+        self._cadastrar_kit()
+        self._importar([_pedido("TT1", itens=(("SK9", KIT),))])
+        linhas = [l for l in self._fila() if l.get("Pedido") == "TT1"]
+        self.assertEqual(len(linhas), 2, "o kit tem de abrir em duas peças")
+        for l in linhas:
+            st, corpo = self.cliente.pedir("POST", "/api/order-line-delete", {
+                "pedido": "TT1", "uid": l["__uidLinha"], "uidLinha": l["__uidLinha"], "sku": l["SKU"],
+                "marketplace": "TIKTOK"})
+            self.assertEqual(st, 200, corpo)
+        S.tiktok_etiqueta_definir(True, "dono")
+        self._importar([_pedido("TT1", itens=(("SK9", KIT),))])
+        self.assertFalse(self._chamadas("/ship"), "o ADMIN excluiu as linhas do kit: nada no TikTok")
+
+    def test_sincronizar_roda_em_segundo_plano_e_recusa_quando_ja_roda(self):
+        with S.TIKTOK_SYNC_LOCK:
+            st, corpo = self.cliente.pedir("POST", "/api/integracoes/tiktok/sincronizar", {})
+        self.assertEqual(st, 409, corpo)
+        with self._api([_pedido("TT1")]):
+            st, corpo = self.cliente.pedir("POST", "/api/integracoes/tiktok/sincronizar", {})
+            self.assertEqual(st, 200, corpo)
+            self.assertTrue(corpo.get("iniciado"))
+            for _ in range(50):
+                if any(l.get("Pedido") == "TT1" for l in self._fila()):
+                    break
+                time.sleep(0.1)
+        self.assertIn("TT1", {l.get("Pedido") for l in self._fila()})
+        html = (Path(S.__file__).resolve().parent / "APP" / "admin.html").read_text(encoding="utf-8")
+        self.assertTrue("Sincronização iniciada" in html, "a tela tem de dizer que começou em segundo plano")
+
+    def test_amostra_guarda_tambem_a_primeira_resposta_boa(self):
+        respostas = iter([{"code": 21011001, "message": "invoice not uploaded"},
+                          {"code": 0, "data": {"doc_url": DOC_URL}}])
+        with mock.patch.object(S, "_tiktok_http", side_effect=lambda *a, **k: next(respostas)):
+            with self.assertRaises(RuntimeError):
+                S.tiktok_api("GET", "/fulfillment/202309/packages/PK1/shipping_documents")
+            S.tiktok_api("GET", "/fulfillment/202309/packages/PK2/shipping_documents")
+        with S.DB_LOCK:
+            tipos = {r[0]: r[1] for r in S.DB.execute("SELECT tipo, resposta FROM tiktok_amostra_v1963").fetchall()}
+        ok = tipos.get("GET /fulfillment/202309/packages/{id}/shipping_documents")
+        self.assertTrue(ok and "doc_url" in ok, f"a resposta boa tem de ficar guardada: {list(tipos)}")
+        self.assertTrue(any(t.endswith("[erro]") for t in tipos))
+
+    def test_link_de_outro_dominio_nao_vira_vinculada(self):
+        S.tiktok_etiqueta_definir(True, "dono")
+        self.doc_url = "https://documentos.outro-dominio.com/etiqueta.pdf"
+        self._importar([_pedido("TT1")])
+        self.assertEqual(self._linha("TT1")["Etiqueta API TikTok"], "ERRO")
+        self.assertFalse(self._etiquetas_tiktok(), "etiqueta que a Conferência não consegue baixar não é vinculada")

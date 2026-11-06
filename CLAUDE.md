@@ -451,7 +451,11 @@ vendas de 3 a 60 dias, 20 por volta, `/finance/202501/orders/{id}/statement_tran
 somados das transações, campo ausente = NULL; erro espera 6 h. **Revisão final (06/11):** o envio só é organizado para pedido que fica na
 fila (`_tiktok_pedidos_que_ficam_na_fila`: tombstone, linha excluída e concluído do ADMIN valem antes da escrita no TikTok); `/ship` nunca
 duas vezes no mesmo pacote (`_TIKTOK_ETIQUETA_ORGANIZADO`); acerto sem transação não conta como lido (relê); amostra uma por rota
-(id do pacote/pedido vira `{id}`). Testes: `TESTES/test_tiktok_etiqueta_v2029.py`, `TESTES/test_tiktok_vendas_v2029.py`.
+(id do pacote/pedido vira `{id}`). **revisar-antes-de-subir (06/11):** as barreiras do ADMIN rodam sob o `DB_LOCK` e
+também depois de abrir o kit (linha `KITDB_` excluída); falha ao lê-las = nenhuma escrita no TikTok naquela volta (a importação
+segue); "Sincronizar agora" só inicia em segundo plano (`tiktok_sincronizar_iniciar`, 409 se já roda); a recusa vai para a amostra
+`<rota> [erro]` e a 1ª resposta boa fica na `<rota>`; link do documento fora de `TIKTOK_PDF_HOSTS` já dá ERRO ao vincular (com o
+host no log). Testes: `TESTES/test_tiktok_etiqueta_v2029.py`, `TESTES/test_tiktok_vendas_v2029.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

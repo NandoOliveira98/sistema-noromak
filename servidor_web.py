@@ -6635,7 +6635,10 @@ def tiktok_api(metodo: str, path: str, params: dict[str, Any] | None = None,
     if not isinstance(resp, dict):
         raise RuntimeError("Resposta inválida do TikTok.")
     # V20.29: uma amostra por ROTA — o id do pacote/pedido vira {id} (senão uma linha por pedido).
-    _tiktok_guardar_amostra(f"{metodo} " + re.sub(r"/(packages|orders)/[^/]+/", r"/\1/{id}/", path), resp)
+    # revisar-antes-de-subir: a 1ª recusa (ex.: sem NF) fica em "<rota> [erro]" e não ocupa o lugar
+    # da 1ª resposta BOA, que é a que mostra o formato real a conferir.
+    rota = f"{metodo} " + re.sub(r"/(packages|orders)/[^/]+/", r"/\1/{id}/", path)
+    _tiktok_guardar_amostra(rota if int(resp.get("code") or 0) == 0 else rota + " [erro]", resp)
     if int(resp.get("code") or 0) != 0:
         raise RuntimeError(f"TikTok {path}: {resp.get('code')} {resp.get('message') or ''}".strip())
     return resp
@@ -9891,6 +9894,12 @@ def tiktok_documento_url(pacote: str) -> str:
     url = str(dados.get("doc_url") or "").strip()
     if not url:
         raise RuntimeError("O TikTok não devolveu o link da etiqueta.")
+    # revisar-antes-de-subir (06/11): os hosts aceitos foram deduzidos. Conferir já ao vincular —
+    # senão a linha fica VINCULADA e toda impressão em Bauru falha. O erro diz o host que veio.
+    alvo = urlparse(url)
+    host = (alvo.hostname or "").lower()
+    if alvo.scheme != "https" or not any(host.endswith(h) for h in TIKTOK_PDF_HOSTS):
+        raise RuntimeError(f"Link da etiqueta fora do TikTok ({alvo.scheme}://{host}); ajustar TIKTOK_PDF_HOSTS se for do TikTok.")
     return url
 
 
@@ -9952,7 +9961,13 @@ def _tiktok_pedidos_que_ficam_na_fila(pedidos: list[dict[str, Any]],
     linhas: list[dict[str, Any]] = []
     for pedido in pedidos:
         linhas.extend(_tiktok_linhas_do_pedido(pedido, products))
-    valor = filter_completed_orders_v1772(_pending_filter_manual_deleted_orders_value(json_dumps(linhas)))
+    # revisar-antes-de-subir (06/11): a linha de kit que o ADMIN excluiu é gravada pelo UID da peça
+    # (KITDB_…), que só existe depois de abrir o kit — filtra de novo aqui.
+    linhas = _sem_linhas_excluidas_admin_v2022(linhas)
+    # Conexão compartilhada: as barreiras leem o banco e nunca podem rodar sem a trava (V18.06).
+    # Erro aqui sobe: quem chama não organiza nada (sem saber o que o ADMIN tirou, não grava).
+    with DB_LOCK:
+        valor = filter_completed_orders_v1772(_pending_filter_manual_deleted_orders_value(json_dumps(linhas)))
     ficam = {normalize(order_number(r)) for r in _rows_from_storage_value(valor) if isinstance(r, dict)}
     return [p for p in pedidos if normalize(str(p.get("id") or "")) in ficam]
 
@@ -10071,7 +10086,14 @@ def tiktok_importar_pedidos() -> dict[str, Any]:
         if ligada:
             # Revisão final: só organiza o envio (escrita no TikTok) de pedido que vai ficar na
             # fila — o que o ADMIN excluiu (tombstone/linha) ou que já foi concluído fica de fora.
-            etiquetas = tiktok_etiquetas_rodada(_tiktok_pedidos_que_ficam_na_fila(pedidos, products))
+            try:
+                ficam = _tiktok_pedidos_que_ficam_na_fila(pedidos, products)
+            except Exception as exc:
+                ficam = None  # sem as barreiras do ADMIN: nenhuma escrita no TikTok nesta volta
+                etiquetas["erros"] += 1
+                tiktok_log_event_se_mudou("etiqueta", "barreiras do ADMIN", "ERRO", str(exc)[:800])
+            if ficam is not None:
+                etiquetas = tiktok_etiquetas_rodada(ficam)
         vinculados = _tiktok_etiquetas_vinculadas()
         api_linhas: list[dict[str, Any]] = []
         for pedido in pedidos:
@@ -10091,6 +10113,20 @@ def tiktok_importar_pedidos() -> dict[str, Any]:
                                   f"{resumo['pedidos']} pedido(s), {resumo['linhas']} linha(s), "
                                   f"{len(removidas)} removida(s), {pulados} já na fila")
         return resumo
+
+
+def tiktok_sincronizar_iniciar() -> bool:
+    """Botão "Sincronizar agora": roda a importação numa thread. False = já tem uma rodando."""
+    if TIKTOK_SYNC_LOCK.locked():
+        return False
+
+    def rodar() -> None:
+        try:
+            tiktok_importar_pedidos()
+        except Exception as exc:
+            tiktok_log_event_se_mudou("pedidos", "sincronizar agora", "ERRO", str(exc)[:800])
+    threading.Thread(target=rodar, name="tiktok-sincronizar-agora", daemon=True).start()
+    return True
 
 
 _TIKTOK_LOG_ULTIMO: dict[tuple[str, str], tuple[str, str]] = {}
@@ -12337,11 +12373,7 @@ def tiktok_etiqueta_pdf(pedido: str, filial: str) -> bytes:
                    if str(r.get("PacoteTikTok") or "").strip()), "")
     if not pacote:
         raise ValueError(f"Pedido {pedido} ainda sem pacote do TikTok.")
-    url = tiktok_documento_url(pacote)
-    alvo = urlparse(url)
-    host = (alvo.hostname or "").lower()
-    if alvo.scheme != "https" or not any(host.endswith(h) for h in TIKTOK_PDF_HOSTS):
-        raise RuntimeError("Link da etiqueta fora do TikTok.")
+    url = tiktok_documento_url(pacote)  # já recusa link fora de TIKTOK_PDF_HOSTS
     bruto = _tiktok_baixar_pdf(url)
     if not bruto.startswith(b"%PDF"):
         raise RuntimeError("O TikTok não devolveu a etiqueta em PDF.")
@@ -44142,7 +44174,12 @@ class AppHandler(BaseHTTPRequestHandler):
                     if not tiktok_importacao_ligada():
                         self.send_json({"ok": False, "error": "A importação do TikTok está desligada."}, 409)
                         return
-                    res = tiktok_importar_pedidos()
+                    # revisar-antes-de-subir (06/11): com a etiqueta ligada a rodada pode passar dos
+                    # 60 s do nginx (504) — o clique só inicia em segundo plano; rodando = 409.
+                    if not tiktok_sincronizar_iniciar():
+                        self.send_json({"ok": False, "error": "Já tem uma sincronização do TikTok rodando. Aguarde."}, 409)
+                        return
+                    res = {"ok": True, "iniciado": True}
                 elif path == "/api/tiktok-estoque/config":
                     modo = str(body.get("modo_estoque") or "")
                     if modo == "automatico" and tiktok_estoque_config()["modo_estoque"] != "automatico" \

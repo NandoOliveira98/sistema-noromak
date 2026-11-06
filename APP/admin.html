@@ -9970,7 +9970,8 @@ async function sincronizarTiktokAdmin(){
   if(bs){bs.disabled=true;bs.textContent="Sincronizando…";}
   try{
     const d=await mlApiAdmin("/expedicao/api/integracoes/tiktok/sincronizar",{method:"POST",body:"{}"});
-    if(msg)msg.textContent=`✅ TikTok: ${d.pedidos} pedido(s) na fila de Bauru${d.ja_na_fila_por_outra_origem?`, ${d.ja_na_fila_por_outra_origem} já estavam na fila por outra origem`:""}.`;
+    // V20.29: a rodada roda em segundo plano (com a etiqueta ligada passava dos 60 s do nginx).
+    if(msg)msg.textContent="✅ Sincronização iniciada. Os pedidos do TikTok entram na fila de Bauru em instantes.";
     if(typeof appStorage?.sincronizarAgora==="function")await appStorage.sincronizarAgora();
   }catch(e){if(msg)msg.textContent="❌ "+e.message;}
   finally{if(bs)bs.textContent="↻ Sincronizar agora";await carregarIntegracaoTiktokAdmin();}
