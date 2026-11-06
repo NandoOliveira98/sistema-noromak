@@ -224,6 +224,57 @@ class KitFichaTeste(TesteNoromak):
         self.assertEqual(pend.get(S._exp_norm_codigo(DUPLO)), 3)
         self.assertEqual(pend.get("0893764272"), 5)
 
+    def test_prefixo_de_anuncio_peca_continua_no_codigo(self):
+        """Revisao: "151490-0893270212" (prefixo de anuncio) nao vira o codigo inteiro, mesmo confirmado."""
+        cod = "151490-0893270212"
+        S.ficha_importar(cod, {"nome": "Peca com prefixo"}, "anuncio_ml")
+        fila([linha("PED1", cod, 2)])
+        res = S.anuncio_ficha_tipo_definir(cod, "peca", "luis")
+        self.assertTrue(res.get("sem_mudanca"))
+        self.assertEqual(S.ficha_ler(cod)["tipo_confirmado_por"], "")  # nada gravado
+        # mesmo com uma confirmacao gravada (versao anterior da revisao), estoque e pendente ficam na peca
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE anuncio_ficha_v2023 SET tipo_confirmado_por='luis' WHERE codigo=?", (S.normalize(cod),))
+            S.DB.commit()
+        pecas, motivo = S._anuncio_estoque_pecas(cod, S._load_kit_catalog(), S._anuncios_conhecidos_lazy())
+        self.assertEqual(([(p["codigo"], p["quantidade"]) for p in pecas], motivo), ([("0893270212", 1)], ""))
+        pend = S.pendentes_por_filial(("aracatuba",))["aracatuba"]
+        self.assertEqual(pend, {"0893270212": 2})
+
+    def test_kit_com_linha_comum_na_fila_recusado(self):
+        """Revisao: criar ou religar o kit com venda do codigo na fila (linha comum) e recusado."""
+        puxada_cria_peca()
+        fila([linha("PED1", DUPLO, 1)])
+        with self.assertRaises(ValueError) as cm:
+            S.anuncio_ficha_tipo_definir(DUPLO, "kit", "luis", COMPS)
+        self.assertIn("marcar como kit só depois", str(cm.exception))
+        self.assertNotIn(S.normalize(DUPLO), cadastro())
+        self.assertEqual(S.ficha_ler(DUPLO)["tipo"], "peca")
+        fila([])
+        S.anuncio_ficha_tipo_definir(DUPLO, "kit", "luis", COMPS)
+        S.anuncio_ficha_tipo_definir(DUPLO, "peca", "luis")
+        fila([linha("PED2", DUPLO, 1)])
+        with self.assertRaises(ValueError):
+            S.anuncio_ficha_tipo_definir(DUPLO, "kit", "luis")  # religar tambem espera
+        self.assertIs(cadastro()[S.normalize(DUPLO)]["ativo"], False)
+
+    def test_peca_de_outros_kits_pede_confirmacao(self):
+        S.kit_salvar("KITX28", "X", [{"sku": "PX28", "quantidade": 2}], "luis", None)
+        S.ficha_importar("PX28", {"nome": "Peca X"}, "anuncio_ml")
+        with self.assertRaises(S.KitCodigoDeProduto) as cm:
+            S.anuncio_ficha_tipo_definir("PX28", "kit", "luis", [{"sku": "P1", "quantidade": 1}])
+        self.assertIn("KITX28", str(cm.exception))
+        self.assertNotIn("PX28", cadastro())
+        S.anuncio_ficha_tipo_definir("PX28", "kit", "luis", [{"sku": "P1", "quantidade": 1}], confirmar_produto=True)
+        self.assertTrue(cadastro()["PX28"]["ativo"])
+
+    def test_busca_guardada_acompanha_ficha_nova(self):
+        self.assertFalse(S.anuncio_produtos_buscar("NOVA28")["exato"])
+        S.ficha_importar("NOVA28", {"nome": "Nova"}, "anuncio_ml")
+        self.assertTrue(S.anuncio_produtos_buscar("NOVA28")["exato"])
+        with mock.patch.object(S, "get_storage", side_effect=AssertionError("releu")):
+            self.assertTrue(S.anuncio_produtos_buscar("NOVA")["itens"])  # mesma versao: nao rele o conf_produtos
+
     def test_busca_de_produtos(self):
         S.ficha_importar("0893600022", {"nome": "Desengripante 300ml"}, "anuncio_ml")
         r = S.anuncio_produtos_buscar("desengrip")

@@ -536,6 +536,8 @@ async function escolherTipo(t) {
     if (antigas.length) nkToast("As peças do kit desativado voltaram para a tela: confira e salve.", "info", {duracao: 8000});
     return;
   }
+  // V20.28 (revisao): Peça numa peça comum (sem selo "kit?") não muda nada: nem pergunta nem grava
+  if (t === "peca" && atual === "peca" && !F.kit_suspeito) return;
   if (t === atual && F.tipo_confirmado_por) { if (t === "kit") trocarAba("composicao"); return; }
   const txt = t === "peca" && atual === "kit"
     ? `Marcar ${F.codigo} como peça?\nO kit fica desativado no Cadastro de Kits (não é apagado): a venda deste código deixa de abrir nas peças na Conferência. Anúncios em Automático voltam a Manual.`

@@ -860,7 +860,12 @@ registro). **Peça confirmada = 1 × o código INTEIRO** no estoque e no pendent
 (`anuncio_sku_parece_kit`, heurística conservadora): exatamente um hífen, cada lado só 0-9/A-Z/ponto com **7+ caracteres e 5+
 dígitos** (o prefixo de anúncio "151490-"/"157507-" tem 5–6 e fica fora; "KIT…" e "A/B" também), sem kit no Cadastro e tipo não
 escolhido. Na lista, na ficha e na linha do anúncio; o **Automático é recusado** até o Admin escolher (e o anúncio que já estava em
-Automático não envia: motivo "confirme na ficha se é Peça ou Kit"). Prévia: MLB8000000007 com esse SKU; `PREVIA_PORTA` sobe uma 2ª
+Automático não envia: motivo "confirme na ficha se é Peça ou Kit"). **Revisão (05/11):** o código inteiro vale **só** para o SKU com cara de dois códigos (`anuncio_sku_parece_kit`): "151490-0893270212"
+continua em 0893270212 mesmo confirmado, e "Peça" numa peça comum (sem selo, sem kit no Cadastro) não muda nem grava nada
+(`sem_mudanca`). Criar ou religar o kit com venda do código na fila em linha comum (SKU = o kit, `_kit_codigo_na_fila`) é recusado
+("marcar como kit só depois que o pedido sair"; KITn-X fica fora). Código que é peça de outros kits (`kits_da_peca`) também pede a
+confirmação (`confirmar_produto`, lista os kits). A busca de peças guarda os candidatos 60 s (`_anuncio_produtos_candidatos`,
+refeita quando muda Precificador, `conf_produtos`, ficha ou leitura do Apollo). Prévia: MLB8000000007 com esse SKU; `PREVIA_PORTA` sobe uma 2ª
 cópia. Teste: `TESTES/test_anuncios_kit_ficha_v2028.py`.
 
 ### Estúdio de Imagens (V20.17: servidor, tela e agente)

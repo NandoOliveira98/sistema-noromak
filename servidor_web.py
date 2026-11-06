@@ -7748,6 +7748,14 @@ def _kit_tem_pedido_na_fila(sku: str) -> bool:
     return False
 
 
+def _kit_codigo_na_fila(sku: str) -> bool:
+    """V20.28 (revisao): ha linha pendente na Conferencia com o SKU igual ao codigo do kit (linha comum, ainda nao
+    aberta em pecas)? Concluido ja saiu do get_storage."""
+    alvo = normalize(sku)
+    bruto, _, _ = get_storage("conf_pedidos")
+    return any(isinstance(row, dict) and normalize(row.get("SKU")) == alvo for row in _rows_from_storage_value(bruto))
+
+
 def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator: str,
                versao_storage: int | None, admin_tipo: bool = False,
                confirmar_produto: bool = False) -> dict[str, Any]:
@@ -7784,7 +7792,10 @@ def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator:
     eh_produto = _kit_salvar_codigo_de_produto(sku)  # V20.23: le o Precificador antes da vez do banco
     # V20.28: na escolha explicita do Admin so pede confirmacao o produto real ou a peca decidida por ele
     produto_real = admin_tipo and _kit_codigo_produto_real(sku)
-    pede_confirmar = admin_tipo and (produto_real or _ficha_peca_do_admin(sku))
+    # V20.28 (revisao): o codigo e peca de outros kits? Virar kit muda o que esses kits consomem: confirmacao explicita
+    usado_em = ([k["sku_kit"] for k in kits_da_peca(sku) if normalize(k["sku_kit"]) != normalize(sku)]
+                if admin_tipo else [])
+    pede_confirmar = admin_tipo and (produto_real or bool(usado_em) or _ficha_peca_do_admin(sku))
     with DB_LOCK:  # RLock: leitura e gravacao na mesma vez, sem outra gravacao no meio
         bruto, versao, _ = get_storage("conf_kits")
         if versao_storage is not None and int(versao_storage) != int(versao):
@@ -7814,13 +7825,26 @@ def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator:
             raise ValueError("Este kit tem pedido na fila de conferência: tirar ou pôr peça só depois que o pedido "
                              "sair. Mudar a quantidade pode.")
         inativo = posicao is not None and not bool(linhas[posicao].get("ativo", True))
+        # V20.28 (revisao): criar ou religar o kit com venda do codigo na fila (linha comum, SKU = o kit) faria a
+        # proxima sincronizacao abrir essa linha em pecas no meio da conferencia. Simetrico ao "Peca" com fila.
+        if (posicao is None or (admin_tipo and inativo)) and not _infer_quantity_kit_from_sku(sku) \
+                and _kit_codigo_na_fila(sku):
+            raise ValueError("Este código tem pedido na fila de conferência: marcar como kit só depois que o pedido "
+                             "sair.")
         if admin_tipo:
             # V20.28: ADMIN > sistema - a escolha explicita vence; produto real so com a confirmacao da tela
             if (posicao is None or inativo) and pede_confirmar and not confirmar_produto:
-                raise KitCodigoDeProduto(
-                    ("Este código existe como produto no Precificador." if produto_real else
-                     "Este código foi criado como peça pelo Admin.") +
-                    " Marcar como kit faz TODA venda dele abrir nestas peças na Conferência. Confirmar?")
+                motivos = []
+                if produto_real:
+                    motivos.append("Este código existe como produto no Precificador.")
+                elif _ficha_peca_do_admin(sku):
+                    motivos.append("Este código foi criado como peça pelo Admin.")
+                if usado_em:
+                    motivos.append("Este código é peça dos kits " + ", ".join(usado_em[:10])
+                                   + (f" e mais {len(usado_em) - 10}" if len(usado_em) > 10 else "")
+                                   + ": eles passam a usar este kit no lugar da peça.")
+                raise KitCodigoDeProduto(" ".join(motivos) + " Marcar como kit faz TODA venda dele abrir nestas peças "
+                                         "na Conferência. Confirmar?")
         elif posicao is None and eh_produto:
             raise KitCodigoDeProduto(f"Este código é de um produto, não de um kit: {sku}. Um kit com ele faria toda "
                                      "venda desse produto virar os componentes. Para marcar como kit, use "
@@ -7957,6 +7981,11 @@ def anuncio_ficha_tipo_definir(codigo: str, tipo: str, ator: str, componentes: A
         raise ValueError("Tipo inválido (peca ou kit).")
     antes = _ficha_tipo_efetivo(cod)
     comp = kit_composicao(texto)
+    # V20.28 (revisao): "Peca" numa peca comum (sem cara de dois codigos e sem kit no Cadastro) nao muda nada e nao
+    # grava confirmacao - a regra do codigo inteiro so existe para o SKU com cara de kit.
+    if tipo == "peca" and antes == "peca" and not comp and not anuncio_sku_parece_kit(cod):
+        return {"ok": True, "codigo": cod, "tipo": "peca", "antes": antes, "kit": None, "voltaram_manual": [],
+                "sem_mudanca": True}
     kit = None
     if tipo == "kit":
         if isinstance(componentes, list) and componentes:
@@ -7993,6 +8022,32 @@ def anuncio_produtos_buscar(busca: str, limite: int = 20) -> dict[str, Any]:
     texto = str(busca or "").strip().lower()
     if not termo:
         return {"itens": [], "exato": False}
+    achados = _anuncio_produtos_candidatos()
+    exato = termo in achados
+    itens = [v for k, v in achados.items() if termo in k or (len(texto) >= 3 and texto in v["nome"].lower())]
+    itens.sort(key=lambda v: (normalize(v["codigo"]) != termo, not normalize(v["codigo"]).startswith(termo),
+                              normalize(v["codigo"])))
+    return {"itens": [dict(v) for v in itens[:max(1, min(50, int(limite or 20)))]], "exato": exato}
+
+
+# V20.28 (revisao): a busca roda a cada tecla; a lista de candidatos e guardada por ANUNCIO_PRODUTOS_CACHE_S e
+# refeita quando muda o Precificador, o conf_produtos, uma ficha ou as leituras do Apollo.
+ANUNCIO_PRODUTOS_CACHE_S = 60
+_ANUNCIO_PRODUTOS_CACHE: dict[str, Any] = {}
+_ANUNCIO_PRODUTOS_LOCK = threading.Lock()
+
+
+def _anuncio_produtos_candidatos() -> dict[str, dict[str, Any]]:
+    """So leitura: nao alterar o dicionario devolvido."""
+    with DB_LOCK:
+        chave = (id(DB), tuple(_ml_versoes_storage("conf_produtos", "precificador_online_v1")),
+                 tuple(DB.execute("SELECT COUNT(*), MAX(versao), MAX(atualizado_em) FROM anuncio_ficha_v2023").fetchone()),
+                 DB.execute("SELECT COUNT(*) FROM anuncio_apollo_v2026").fetchone()[0])
+    agora = time.monotonic()
+    with _ANUNCIO_PRODUTOS_LOCK:
+        if (_ANUNCIO_PRODUTOS_CACHE.get("chave") == chave
+                and agora - float(_ANUNCIO_PRODUTOS_CACHE.get("em") or 0) < ANUNCIO_PRODUTOS_CACHE_S):
+            return _ANUNCIO_PRODUTOS_CACHE["achados"]
     achados: dict[str, dict[str, Any]] = {}
 
     def _por(codigo: Any, nome: Any, fonte: str) -> None:
@@ -8026,11 +8081,9 @@ def anuncio_produtos_buscar(busca: str, limite: int = 20) -> dict[str, Any]:
                  "produtos")
     for c in apollo:
         _por(c, "", "apollo")
-    exato = termo in achados
-    itens = [v for k, v in achados.items() if termo in k or (len(texto) >= 3 and texto in v["nome"].lower())]
-    itens.sort(key=lambda v: (normalize(v["codigo"]) != termo, not normalize(v["codigo"]).startswith(termo),
-                              normalize(v["codigo"])))
-    return {"itens": itens[:max(1, min(50, int(limite or 20)))], "exato": exato}
+    with _ANUNCIO_PRODUTOS_LOCK:
+        _ANUNCIO_PRODUTOS_CACHE.update(chave=chave, em=agora, achados=achados)
+    return achados
 
 
 # V20.23: puxar os anuncios do ML (so leitura) e ligar cada um a ficha do produto.
@@ -8662,12 +8715,14 @@ def _anuncio_sku_partes(sku: Any, catalogo: dict[str, dict[str, Any]],
     comp = _kit_composicao(cod, catalogo)
     if comp and comp.get("ativo", True):
         return [(c["sku"], int(c["quantidade"])) for c in comp["componentes"]], comp
-    # V20.28: Peca confirmada pelo Admin = 1 x o codigo INTEIRO ("0893600022-0893764272" vai assim ao Apollo e a fila
-    # desse SKU desconta dele). Nunca a leitura antiga que tira o "prefixo" e fica so com "0893764272". Regra unica
-    # para o estoque do anuncio e para o pendente.
-    if pecas_confirmadas and cod in pecas_confirmadas:
+    confirmada = bool(pecas_confirmadas) and cod in pecas_confirmadas
+    # V20.28: Peca confirmada pelo Admin num SKU com cara de dois codigos (anuncio_sku_parece_kit) = 1 x o codigo
+    # INTEIRO ("0893600022-0893764272" vai assim ao Apollo e a fila desse SKU desconta dele), nunca a leitura que tira
+    # o "prefixo". V20.28 (revisao): SO nesse caso - "151490-0893270212" (prefixo de anuncio) continua 0893270212.
+    # Regra unica para o estoque do anuncio e para o pendente.
+    if confirmada and anuncio_sku_parece_kit(cod):
         return [(cod, 1)], None
-    if comp:  # kit inativo (sem Peca confirmada): o estoque recusa ("kit inativo"); o pendente segue como antes
+    if comp and not confirmada:  # kit inativo sem Peca escolhida: o estoque recusa ("kit inativo")
         return [(c["sku"], int(c["quantidade"])) for c in comp["componentes"]], comp
     return _separacao_partes(cod, conhecidos() if "/" in cod else set()), None
 
