@@ -40828,13 +40828,16 @@ def _imagem_custo(modelo: str, entrada: int, saida: int) -> float:
     return (entrada * pe + saida * ps) / 1_000_000
 
 
-def _imagem_registrar_gasto(trabalho_id: int, modelo: str, entrada: int, saida: int, buscas: int = 0) -> None:
-    """Uma linha por entrega do agente (fica mesmo se a imagem for apagada: o crédito foi gasto)."""
+def _imagem_registrar_gasto(trabalho_id: int, modelo: str, entrada: int, saida: int, buscas: int = 0,
+                            origem: str = "imagem") -> None:
+    """Uma linha por entrega do agente (fica mesmo se a imagem for apagada: o crédito foi gasto).
+    V20.31: `origem` separa o gasto das imagens do gasto dos textos de anúncio."""
     if not entrada and not saida and not buscas:
         return
-    DB.execute("INSERT INTO imagem_gasto_v2017(dia,quando,trabalho_id,modelo,entrada,saida,usd,buscas) VALUES(?,?,?,?,?,?,?,?)",
+    DB.execute("INSERT INTO imagem_gasto_v2017(dia,quando,trabalho_id,modelo,entrada,saida,usd,buscas,origem) "
+               "VALUES(?,?,?,?,?,?,?,?,?)",
                (datetime.now(BR_TZ).date().isoformat(), now_iso(), trabalho_id, modelo, entrada, saida,
-                round(_imagem_custo(modelo, entrada, saida) + buscas * IMAGEM_PRECO_BUSCA, 6), buscas))
+                round(_imagem_custo(modelo, entrada, saida) + buscas * IMAGEM_PRECO_BUSCA, 6), buscas, origem))
 
 
 def imagens_saldo(hoje: date | None = None) -> dict[str, Any]:
@@ -40849,9 +40852,14 @@ def imagens_saldo(hoje: date | None = None) -> dict[str, Any]:
     row = DB.execute("SELECT COALESCE(SUM(usd),0) AS usd, COUNT(*) AS n FROM imagem_gasto_v2017 WHERE dia>=? AND dia<?",
                      (inicio.isoformat(), renova.isoformat())).fetchone()
     usado = round(float(row["usd"] or 0), 4)
+    # V20.31: gasto separado por origem (imagem × anúncio), no mesmo crédito.
+    por_origem = {"imagem": 0.0, "anuncio": 0.0}
+    for r in DB.execute("SELECT COALESCE(origem,'imagem') AS o, COALESCE(SUM(usd),0) AS usd FROM imagem_gasto_v2017 "
+                        "WHERE dia>=? AND dia<? GROUP BY o", (inicio.isoformat(), renova.isoformat())).fetchall():
+        por_origem[str(r["o"])] = round(float(r["usd"] or 0), 4)
     return {"valor": valor, "dia": dia, "inicio": inicio.isoformat(), "renova_em": renova.isoformat(),
             "usado": usado, "restante": round(max(0.0, valor - usado), 4), "entregas": int(row["n"] or 0),
-            "pct": round(min(100.0, usado / valor * 100), 2) if valor > 0 else 0.0}
+            "pct": round(min(100.0, usado / valor * 100), 2) if valor > 0 else 0.0, "por_origem": por_origem}
 
 
 def imagens_agente_status() -> dict[str, Any]:
@@ -41131,6 +41139,161 @@ def anuncio_agente_estado(rascunho_id: Any) -> dict[str, Any] | None:
             "proposta": _imagem_json(row["textos_json"], {}), "atualizado_em": row["atualizado_em"]}
 
 
+ANUNCIO_AGENTE_ORIGENS = ("ficha", "rotulo", "catalogo", "internet")
+
+
+def _anuncio_agente_categoria(titulo: str, conta: str, categoria: str = "") -> dict[str, Any]:
+    """Fora do DB_LOCK: categoria pelo título (1ª sugestão do ML) e os atributos dela. Erro = só a mensagem."""
+    try:
+        sugeridas: list[dict[str, Any]] = []
+        if not categoria:
+            sugeridas = ml_categoria_sugerir(titulo, conta)
+            if not sugeridas:
+                raise RuntimeError("o ML não sugeriu categoria para o título")
+            categoria = sugeridas[0]["categoria"]
+        defs = ml_categoria_atributos(categoria, conta)
+    except Exception as exc:
+        return {"erro": f"Categoria não lida no ML: {exc}"[:500]}
+    nome = str(defs.get("nome") or next((s.get("categoria_nome") for s in sugeridas
+                                         if s.get("categoria") == categoria), "") or "")
+    return {"categoria": categoria, "categoria_nome": nome, "atributos_ml": defs.get("atributos") or [],
+            **({"categorias": sugeridas} if sugeridas else {})}
+
+
+def _anuncio_agente_titulos(brutos: Any) -> list[dict[str, Any]]:
+    titulos = []
+    for t in (brutos if isinstance(brutos, list) else [])[:3]:
+        texto = " ".join(str((t or {}).get("texto") if isinstance(t, dict) else t or "").split())
+        if texto and len(texto) <= 60:  # acima de 60 sai da lista (nunca é cortado)
+            titulos.append({"texto": texto, "recomendado": bool(isinstance(t, dict) and t.get("recomendado"))})
+    if titulos and sum(t["recomendado"] for t in titulos) != 1:
+        for i, t in enumerate(titulos):
+            t["recomendado"] = i == 0
+    return titulos
+
+
+def _anuncio_agente_atributos(brutos: Any, defs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Só id da categoria; com lista de valores do ML, só valor da lista (id ou nome); fora disso, descartado."""
+    por_id = {str(d.get("id")): d for d in defs if isinstance(d, dict) and d.get("id")}
+    saida = []
+    for a in (brutos if isinstance(brutos, list) else []):
+        if not isinstance(a, dict) or str(a.get("id") or "") not in por_id:
+            continue
+        d = por_id[str(a["id"])]
+        valores = [v for v in d.get("valores") or [] if isinstance(v, dict)]
+        valor = " ".join(str(a.get("valor") or "").split())
+        valor_id = str(a.get("valor_id") or "").strip()
+        if valores:
+            achado = next((v for v in valores if valor_id and str(v.get("id")) == valor_id), None) or \
+                next((v for v in valores if valor and _anuncio_sem_acento(v.get("nome")) == _anuncio_sem_acento(valor)), None)
+            if achado is None:
+                continue
+            valor, valor_id = str(achado.get("nome") or ""), str(achado.get("id") or "")
+        elif not valor:
+            continue
+        else:
+            valor_id = ""
+            if d.get("max"):
+                valor = valor[:int(d["max"])]
+        origem = str(a.get("origem") or "")
+        saida.append({"id": str(a["id"]), "valor": valor, "valor_id": valor_id,
+                      "origem": origem if origem in ANUNCIO_AGENTE_ORIGENS else "internet",
+                      "fonte": str(a.get("fonte") or "")[:300]})
+    return saida
+
+
+def anuncio_agente_entregar(req: dict[str, Any]) -> dict[str, Any]:
+    """Entrega do agente (token do agente). Etapa de textos: grava e, fora do lock, busca a categoria e os
+    atributos no ML; etapa de atributos: valida contra a lista da categoria e deixa a proposta pronta."""
+    etapa = str(req.get("etapa") or "")
+    te, ts, modelo = _imagem_tokens(req)
+
+    def _reservado() -> sqlite3.Row:
+        row = _imagem_agente_reservado(req, ("analisando",))
+        if row["tipo"] != "anuncio":
+            raise ValueError("Este trabalho não é de anúncio.")
+        return row
+
+    def _gasto(row: sqlite3.Row) -> None:
+        _imagem_registrar_gasto(row["id"], modelo or row["modelo"] or _imagem_cfg("modelo", IMAGEM_MODELO_PADRAO), te, ts,
+                                _imagem_buscas(req), origem="anuncio")
+
+    if str(req.get("situacao") or "") == "erro":
+        with DB_LOCK:
+            row = _reservado()
+            DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='erro', mensagem=?, reservado_ate=NULL, versao=versao+1, "
+                       "atualizado_em=? WHERE id=?", (str(req.get("mensagem") or "")[:1000], now_iso(), row["id"]))
+            _gasto(row)
+            DB.commit()
+        return {"ok": True}
+    if etapa == "anuncio_textos":
+        titulos = _anuncio_agente_titulos(req.get("titulos"))
+        if not titulos:
+            raise ValueError("A proposta não trouxe nenhum título válido (até 60 caracteres).")
+        textos = {"titulos": titulos, "descricao": str(req.get("descricao") or "")[:50000],
+                  "fontes": req.get("fontes") if isinstance(req.get("fontes"), dict) else {}}
+        with DB_LOCK:
+            row = _reservado()
+            produto = _imagem_json(row["produto_json"], {})
+            DB.execute("UPDATE imagem_trabalho_v2017 SET textos_json=?, reservado_ate=?, versao=versao+1, atualizado_em=?, "
+                       "modelo=COALESCE(NULLIF(?,''),modelo), tokens_entrada=tokens_entrada+?, tokens_saida=tokens_saida+? "
+                       "WHERE id=?", (json.dumps(textos, ensure_ascii=False), time.time() + IMAGEM_RESERVA_S, now_iso(),
+                                      modelo, te, ts, row["id"]))
+            _gasto(row)
+            DB.commit()
+        recomendado = next(t["texto"] for t in titulos if t["recomendado"])
+        cat = _anuncio_agente_categoria(recomendado, str(produto.get("conta") or ""))
+        with DB_LOCK:
+            row = _reservado()  # apagado enquanto o ML respondia = 409, nada gravado
+            textos.update({k: v for k, v in cat.items() if k != "erro"})
+            situacao = "proposta" if cat.get("erro") else "aguardando_atributos"
+            DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, textos_json=?, mensagem=?, reservado_ate=NULL, "
+                       "tentativas=0, versao=versao+1, atualizado_em=? WHERE id=?",
+                       (situacao, json.dumps(textos, ensure_ascii=False), cat.get("erro") or "", now_iso(), row["id"]))
+            DB.commit()
+        return {"ok": True, "situacao": situacao}
+    if etapa == "anuncio_atributos":
+        with DB_LOCK:
+            row = _reservado()
+            textos = _imagem_json(row["textos_json"], {})
+            pedidos = [d for d in textos.get("atributos_ml") or []  # só os que foram pedidos ao agente
+                       if isinstance(d, dict) and (d.get("obrigatorio") or d.get("condicional"))]
+            textos["atributos"] = _anuncio_agente_atributos(req.get("atributos"), pedidos)
+            DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='proposta', textos_json=?, mensagem='', reservado_ate=NULL, "
+                       "tentativas=0, versao=versao+1, atualizado_em=?, modelo=COALESCE(NULLIF(?,''),modelo), "
+                       "tokens_entrada=tokens_entrada+?, tokens_saida=tokens_saida+? WHERE id=?",
+                       (json.dumps(textos, ensure_ascii=False), now_iso(), modelo, te, ts, row["id"]))
+            _gasto(row)
+            DB.commit()
+        return {"ok": True, "situacao": "proposta"}
+    raise ValueError("Etapa desconhecida.")
+
+
+def anuncio_agente_trocar_categoria(trabalho_id: Any, categoria: str, ator: str) -> dict[str, Any]:
+    """O Admin troca a categoria da proposta: só os atributos são pedidos de novo ao agente."""
+    with DB_LOCK:
+        row = _imagem_row(trabalho_id)
+    if row["tipo"] != "anuncio" or row["apagado_em"] or row["situacao"] != "proposta":
+        raise ImagemConflito("A proposta não está pronta para trocar a categoria.")
+    produto = _imagem_json(row["produto_json"], {})
+    cat = _anuncio_agente_categoria("", str(produto.get("conta") or ""), str(categoria or "").strip().upper())
+    if cat.get("erro"):
+        raise ValueError(cat["erro"])
+    with DB_LOCK:
+        atual = _imagem_row(trabalho_id)
+        if atual["apagado_em"] or atual["situacao"] != "proposta":
+            raise ImagemConflito("A proposta mudou enquanto o ML respondia.")
+        textos = _imagem_json(atual["textos_json"], {})
+        textos.update(cat)
+        textos["atributos"] = []
+        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aguardando_atributos', textos_json=?, mensagem='', "
+                   "tentativas=0, versao=versao+1, atualizado_em=? WHERE id=?",
+                   (json.dumps(textos, ensure_ascii=False), now_iso(), atual["id"]))
+        DB.commit()
+    audit(str(ator or ""), "anuncios.agente.categoria", f"#{atual['id']}|{cat['categoria']}")
+    return {"ok": True}
+
+
 # ---------- agente ----------
 
 def imagens_agente_ping(req: dict[str, Any]) -> None:
@@ -41159,14 +41322,19 @@ def imagens_agente_proximo() -> dict[str, Any]:
                            (f"O agente não terminou depois de {IMAGEM_TENTATIVAS} tentativas.", now_iso(), v["id"]))
             else:
                 volta = "aguardando_arte" if v["situacao"] == "gerando" else "aguardando"
+                if v["tipo"] == "anuncio" and _imagem_json(v["textos_json"], {}).get("titulos"):
+                    volta = "aguardando_atributos"  # V20.31: a etapa de textos já foi entregue
                 DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, reservado_ate=NULL, atualizado_em=? WHERE id=?",
                            (volta, now_iso(), v["id"]))
         row = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE apagado_em IS NULL AND situacao IN "
-                         "('aguardando','aguardando_arte') ORDER BY id LIMIT 1").fetchone()
+                         "('aguardando','aguardando_arte','aguardando_atributos') ORDER BY id LIMIT 1").fetchone()
         if row is None:
             DB.commit()
             return {"ok": True, "trabalho": None}
-        if row["situacao"] == "aguardando_arte":
+        if row["tipo"] == "anuncio":  # V20.31: agente de anúncios
+            etapa = "anuncio_atributos" if row["situacao"] == "aguardando_atributos" else "anuncio_textos"
+            nova = "analisando"
+        elif row["situacao"] == "aguardando_arte":
             etapa, nova = "arte", "gerando"
         elif row["tipo"] in ("principal", "juntos"):
             # Kit juntos sai sem texto (foto dos itens juntos em fundo branco): mesmo caminho da principal.
@@ -41178,13 +41346,18 @@ def imagens_agente_proximo() -> dict[str, Any]:
         modelo = _imagem_cfg("modelo", IMAGEM_MODELO_PADRAO)
         DB.commit()
     textos = _imagem_json(row["textos_json"], {})
-    return {"ok": True, "trabalho": {
+    trabalho = {
         "id": row["id"], "tipo": row["tipo"], "sku": row["sku"], "etapa": etapa, "modelo": modelo,
         "arquivos": _imagem_json(row["arquivos_json"], []), "obs": row["obs"],
         "produto": _imagem_json(row["produto_json"], {}),
         "textos": {"campos": textos.get("campos") or []} if etapa == "arte" else None,
         "reservado_s": IMAGEM_RESERVA_S,
-    }}
+    }
+    if etapa == "anuncio_atributos":  # V20.31: só os obrigatórios/condicionais da categoria + o que já foi proposto
+        trabalho["atributos"] = [a for a in textos.get("atributos_ml") or []
+                                 if isinstance(a, dict) and (a.get("obrigatorio") or a.get("condicional"))]
+        trabalho["proposta"] = {k: textos.get(k) for k in ("titulos", "descricao", "categoria", "categoria_nome")}
+    return {"ok": True, "trabalho": trabalho}
 
 
 def _imagem_agente_reservado(req: dict[str, Any], situacoes: tuple[str, ...]) -> sqlite3.Row:
@@ -43159,6 +43332,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.imagem_responder(lambda: imagens_agente_analise(self.read_json()))
             elif path == "/api/imagens/agente/resultado":
                 self.imagem_responder(lambda: imagens_agente_resultado(self.read_json()))
+            elif path == "/api/imagens/agente/anuncio":  # V20.31: textos/atributos do anúncio
+                self.imagem_responder(lambda: anuncio_agente_entregar(self.read_json()))
             else:
                 self.send_json({"ok": False, "error": "Rota do agente desconhecida."}, 404)
             return
@@ -44474,6 +44649,13 @@ class AppHandler(BaseHTTPRequestHandler):
                     try:
                         res = anuncio_agente_pedir(body.get("rascunho_id"), ctx["username"],
                                                    str(body.get("nome") or ""), str(body.get("link") or ""))
+                    except ImagemConflito as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 409)
+                        return
+                elif path == "/api/anuncios/agente/atributos":  # V20.31: trocar a categoria da proposta
+                    try:
+                        res = anuncio_agente_trocar_categoria(body.get("trabalho_id"), str(body.get("categoria") or ""),
+                                                              ctx["username"])
                     except ImagemConflito as exc:
                         self.send_json({"ok": False, "error": str(exc)}, 409)
                         return
