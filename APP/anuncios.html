@@ -170,7 +170,7 @@ function trocarCasa(v) {
 const CONTROLE = {noromak: ["Noromak", "ok"], alephee: ["Alephee", "warn"], full: ["Full", "info"]};
 const STATUS = {active: "Ativo", paused: "Pausado", closed: "Encerrado", under_review: "Em revisão", inactive: "Inativo"};
 const TIPO_ANUNCIO = {gold_special: "Clássico", gold_pro: "Premium", gold_premium: "Premium", free: "Grátis"};
-const ORIGEM = {admin: "da ficha", anuncio_ml: "do anúncio ML", alephee: "da Alephee", apollo: "do Apollo"};
+const ORIGEM = {admin: "da ficha", anuncio_ml: "do anúncio ML", alephee: "da Alephee", apollo: "do Apollo", agente: "do agente (confira)"};
 // Ordem decidida pelo dono: título → categoria → o resto (a criação de anúncio segue essa ordem).
 const SECOES = [
   {id: "sec-produto", nome: "Produto", sub: "O nome é o título do produto: o anúncio é montado a partir dele.", campos: [
@@ -1539,7 +1539,7 @@ function desenharCriar() {
 // ---------------------------------------------------------------- V20.31: agente de anúncios
 // O agente do Estúdio (PC do dono) propõe 3 títulos, a descrição e os atributos obrigatórios. Nada vai ao ML:
 // o Admin escolhe e aceita no rascunho; Conferir e Publicar continuam só no clique.
-const AG_ABERTO = ["enviando", "aguardando", "analisando", "aguardando_atributos"];
+const AG_ABERTO = ["enviando", "aguardando", "analisando", "aguardando_atributos", "buscando_categoria", "aceitando"];  // revisão 06/11
 const AG_ORIGEM = {ficha: "da ficha", rotulo: "lido no rótulo", catalogo: "lido no catálogo — confira", internet: "da internet — confira"};
 let agTimer = null;
 async function carregarAgente() {
@@ -1573,7 +1573,7 @@ function cartaoAgente() {
     <label class="nk-campo"><span>Link do fornecedor (opcional)</span><input value="${esc(ag.link || "")}" oninput="CR.ag.link=this.value"></label></div>
     <div class="barra"><span class="esp"></span><button type="button" class="nk-btn pri" ${btOcupado()} onclick="pedirAgente()">Pedir ao agente</button></div>`;
   if (ag.carregando) return `<section class="passo">${cab}<p class="muted">Carregando…</p></section>`;
-  if (aberto) return `<section class="passo">${cab}${t.agente_antigo ? '<div class="nk-aviso bad">O agente do PC está numa versão antiga (precisa da 0.4): ele não pega este pedido. Atualize e reinicie o agente, ou cancele.</div>' : ""}<div class="nk-aviso info">Aguardando o agente${t.situacao === "aguardando_atributos" ? " (atributos da categoria)" : ""}… Com o PC do agente desligado, o pedido espera na fila.</div><div class="barra"><span class="esp"></span><button type="button" class="nk-btn" ${btOcupado()} onclick="cancelarAgente()">Cancelar pedido</button></div></section>`;
+  if (aberto) return `<section class="passo">${cab}${t.agente_antigo ? '<div class="nk-aviso bad">O agente do PC está numa versão antiga (precisa da 0.4): ele não pega este pedido. Atualize e reinicie o agente, ou cancele.</div>' : ""}<div class="nk-aviso info">${t.situacao === "buscando_categoria" ? "Buscando a categoria no Mercado Livre" : t.situacao === "aceitando" ? "Gravando no rascunho" : "Aguardando o agente"}${t.situacao === "aguardando_atributos" ? " (atributos da categoria)" : ""}… Com o PC do agente desligado, o pedido espera na fila.</div><div class="barra"><span class="esp"></span><button type="button" class="nk-btn" ${btOcupado()} onclick="cancelarAgente()">Cancelar pedido</button></div></section>`;
   if (!t || ["aceita", "erro"].includes(t.situacao)) {
     return `<section class="passo">${cab}${t && t.situacao === "erro" ? `<div class="nk-aviso bad">O agente não conseguiu: ${esc(t.mensagem || "erro")}</div>` : ""}${t && t.situacao === "aceita" ? '<div class="nk-aviso info">A última proposta já foi aceita.</div>' : ""}${pedir}</section>`;
   }

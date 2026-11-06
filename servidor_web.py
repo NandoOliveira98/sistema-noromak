@@ -7334,7 +7334,9 @@ def ensure_tiktok_estoque_schema() -> None:
 # V20.23: plataforma de anuncios, fase 1 - ficha do produto (um registro por codigo, com a origem de cada campo).
 ANUNCIO_CAMPOS_FICHA = ("nome", "marca", "modelo", "ean", "ncm", "peso_g", "altura_cm", "largura_cm",
                         "comprimento_cm", "descricao", "categoria_ml")
-ANUNCIO_ORIGENS = {"admin": 1, "alephee": 2, "anuncio_ml": 3, "apollo": 4}  # menor = mais autoridade
+# revisar-antes-de-subir (06/11): "agente" = o que o agente de anúncios propôs e o Admin aceitou (abaixo do
+# anúncio do ML: o Puxar corrige; nunca vira "admin").
+ANUNCIO_ORIGENS = {"admin": 1, "alephee": 2, "anuncio_ml": 3, "agente": 4, "apollo": 5}  # menor = mais autoridade
 
 
 class FichaConflito(Exception):
@@ -10124,6 +10126,10 @@ def tiktok_sincronizar_iniciar() -> bool:
 
     def rodar() -> None:
         try:
+            if _tiktok_extensao_em_uso():  # revisão das correções (06/11): uma fonte de cada vez, também no botão
+                tiktok_log_event_se_mudou("pedidos", "sincronizar agora", "IGNORADO",
+                                          "a extensão do Seller Center está lendo os pedidos: a API não importa")
+                return
             tiktok_importar_pedidos()
         except Exception as exc:
             tiktok_log_event_se_mudou("pedidos", "sincronizar agora", "ERRO", str(exc)[:800])
@@ -10154,14 +10160,12 @@ TIKTOK_SC_NA_FILA = ("AWAITING_SHIPMENT", "AWAITING_COLLECTION", "PARTIALLY_SHIP
 TIKTOK_SC_SAIU = ("IN_TRANSIT", "DELIVERED", "COMPLETED", "CANCELLED")
 TIKTOK_SC_MAX_PEDIDOS = 500
 TIKTOK_SC_SEM_LEITURA_S = 30 * 60   # Painel de saúde
+TIKTOK_SC_FONTE_UNICA_S = 6 * 3600  # revisão 06/11: extensão leu nas últimas 6 h = a API não importa pedidos
 TIKTOK_SC_ORIGEM = "API_TIKTOK"
 
 
 class TikTokImportacaoDesligada(Exception):
     pass
-
-
-TIKTOK_SC_TENTATIVAS_CPF = 5        # revisão 06/11: detalhe sem CPF é reaberto até aqui
 
 
 TIKTOK_SC_TENTATIVAS_CPF = 5        # revisão 06/11: detalhe sem CPF é reaberto até aqui
@@ -10213,7 +10217,42 @@ def _tiktok_sc_sem_comprador(o: Any) -> Any:
     for chave in ("delivery_module", "logistics_info_module", "note_module"):
         if chave in copia:
             copia[chave] = "***"
-    return copia
+    # revisar-antes-de-subir (06/11): também em módulo que ainda não conhecemos (nota, destinatário...)
+    return _tiktok_sc_mascarar(copia)
+
+
+_TIKTOK_SC_CHAVE_PESSOAL = re.compile(
+    r"cpf|cnpj|tax|phone|mobile|email|address|zip|street|recipient|receiver|buyer|nick|document|contact|"
+    r"^name$|full_name|first_name|last_name|real_name|user_name", re.I)
+
+
+def _tiktok_sc_so_chaves(v: Any, nivel: int = 0) -> Any:
+    """Mantém as chaves (o formato) e troca todo valor por ***."""
+    if nivel > 12:
+        return "***"
+    if isinstance(v, dict):
+        return {k: _tiktok_sc_so_chaves(x, nivel + 1) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_tiktok_sc_so_chaves(x, nivel + 1) for x in v[:3]]
+    return "***"
+
+
+def _tiktok_sc_mascarar(v: Any, nivel: int = 0) -> Any:
+    """Troca por *** o valor de toda chave que parece dado da pessoa, em qualquer nível."""
+    if nivel > 12:
+        return "***"
+    if isinstance(v, dict):
+        saida: dict[str, Any] = {}
+        rotulo = str(v.get("key") or "")
+        for k, x in v.items():
+            if _TIKTOK_SC_CHAVE_PESSOAL.search(str(k)) or (k == "value" and _TIKTOK_SC_CHAVE_PESSOAL.search(rotulo)):
+                saida[k] = _tiktok_sc_so_chaves(x, nivel + 1)
+            else:
+                saida[k] = _tiktok_sc_mascarar(x, nivel + 1)
+        return saida
+    if isinstance(v, list):
+        return [_tiktok_sc_mascarar(x, nivel + 1) for x in v]
+    return v
 
 
 def tiktok_sc_pedido(o: Any) -> dict[str, Any] | None:
@@ -10227,10 +10266,16 @@ def tiktok_sc_pedido(o: Any) -> dict[str, Any] | None:
     if not numero.isdigit():
         return None
     por_linha: dict[str, str] = {}
+    desconhecidos: set[str] = set()  # revisar-antes-de-subir (06/11): vão para o Painel de saúde
     for s in o.get("order_status_module") or []:
         if isinstance(s, dict):
-            por_linha[str(s.get("order_line_id") or "")] = TIKTOK_SC_STATUS.get(
-                _tiktok_quantidade(s.get("sku_display_status")) or -1, "")
+            codigo = _tiktok_quantidade(s.get("sku_display_status"))
+            por_linha[str(s.get("order_line_id") or "")] = TIKTOK_SC_STATUS.get(codigo or -1, "")
+            if (codigo or -1) not in TIKTOK_SC_STATUS:
+                desconhecidos.add(str(s.get("sku_display_status") if s.get("sku_display_status") not in (None, "")
+                                      else "sem situação")[:20])
+    if not por_linha:
+        desconhecidos.add("sem situação")
     nomes = set(por_linha.values())
     if not nomes or "" in nomes:
         status = ""                                   # alguma linha com situação desconhecida
@@ -10256,7 +10301,13 @@ def tiktok_sc_pedido(o: Any) -> dict[str, Any] | None:
             abertas.update(minhas)
             qtd = len(minhas)
         else:
-            qtd = _tiktok_quantidade(sk.get("quantity")) or 0
+            qtd = _tiktok_quantidade(sk.get("quantity"))
+            if qtd is None:
+                # revisar-antes-de-subir (06/11): quantidade que não veio é desconhecida, nunca zero —
+                # o pedido inteiro fica como está (não entra nem sai nada) e vai para o Painel de saúde.
+                desconhecidos.add("sem quantidade")
+                status = ""
+                qtd = 0
         if sku:
             skus_vistos.add(normalize(sku))
         if qtd <= 0:
@@ -10282,7 +10333,8 @@ def tiktok_sc_pedido(o: Any) -> dict[str, Any] | None:
             "_fora_uids": fora_uids,                       # linha comum: pela variação exata
             "_apelido": str(comprador.get("buyer_nickname") or ""),
             "_cpf": re.sub(r"\D", "", str(comprador.get("cpf") or "")),
-            "_cpf_nome": re.sub(r"\s+", " ", str(comprador.get("cpf_name") or "")).strip()}
+            "_cpf_nome": re.sub(r"\s+", " ", str(comprador.get("cpf_name") or "")).strip(),
+            "_desconhecidos": sorted(desconhecidos)}
 
 
 def _tiktok_uid_api(numero: str, sku_id: str, sku: str) -> str:
@@ -10446,61 +10498,20 @@ def tiktok_pedidos_da_extensao(pedidos: Any, detalhes: Any, completo: bool, ator
             det.pop(n, None)
         abertos = [p for p in lidos.values() if p["status"] in TIKTOK_SC_NA_FILA]
         saiu = {n for n, p in det.items() if p["status"] in TIKTOK_SC_SAIU}  # só com o TikTok confirmando
-        products_raw, _, _ = get_storage("conf_produtos")
-        products = _rows_from_storage_value(products_raw)
-        api_linhas: list[dict[str, Any]] = []
-        for p in abertos:
-            if not p["recipient_address"]["name"]:
-                p["recipient_address"]["name"] = ((guardados.get(p["id"]) or {}).get("nome")
-                                                  or p["_cpf_nome"] or p["_apelido"])
-            api_linhas.extend(_tiktok_linhas_do_pedido(p, products))
-        novas = list(api_linhas)
-        atual_raw, _, _ = get_storage("conf_pedidos")
-        atual = _rows_from_storage_value(atual_raw)
-        # Quem sumiu da aba sem o TikTok confirmar fica como está (a linha antiga volta igual).
-        # (pedido aberto que não gerou linha — sem SKU, por exemplo — também fica como está)
-        com_linhas = {str(order_number(r) or "").strip() for r in api_linhas}
-        ficam = _tiktok_sc_pedidos_na_fila(atual) - com_linhas - saiu
-        for r in atual:
-            if isinstance(r, dict) and normalize(r.get("OrigemCadastro")) == normalize(TIKTOK_SC_ORIGEM) \
-                    and str(order_number(r) or "").strip() in ficam:
-                api_linhas.append(r)
-        fila, removidas, pulados = _magalu_merge(atual, api_linhas, origem=TIKTOK_SC_ORIGEM,
-                                                 campos=TIKTOK_CAMPOS_OPERACIONAIS + ("Cliente",))
-        _tiktok_sc_acertar_existentes(fila, atual, novas)
-        # Revisão 06/11 — remoção NOMEADA (a linha protegida pelo ADMIN nunca sai por aqui). O merge
-        # já deixou estas linhas de fora; sem o nome, o preserve_pending_records_v1714 as traria de volta:
-        # (a) SKU do pedido aberto sem nenhuma unidade a enviar (cancelado inteiro ou já enviado);
-        # (b) pedido que o ADMIN incluiu por outra origem depois da importação: a cópia da
-        #     extensão sem bip sai (com bip fica: o progresso da conferência não se perde).
-        abertos_por_id = {p["id"]: p for p in abertos}
-        outra_origem = {normalize(order_number(r)) for r in atual
-                        if isinstance(r, dict) and normalize(r.get("OrigemCadastro")) != normalize(TIKTOK_SC_ORIGEM)}
-        no_resultado = {str(r.get("__uidLinha") or "") for r in fila if isinstance(r, dict)}
-        for indice, r in enumerate(atual):
-            if not isinstance(r, dict) or normalize(r.get("OrigemCadastro")) != normalize(TIKTOK_SC_ORIGEM):
-                continue
-            if str(r.get("__uidLinha") or "") in no_resultado:
-                continue
-            numero = str(order_number(r) or "").strip()
-            p = abertos_por_id.get(numero)
-            bipado = _tiktok_quantidade(r.get("Lido")) or 0
-            if p and _tiktok_sc_linha_fora(r, p):
-                if bipado:
-                    # Já bipada: não some calada (a peça está separada) — fica com o aviso.
-                    fica = dict(r)
-                    _tiktok_sc_aviso(fica, f"cancelado ou já enviado no TikTok, já bipado {bipado}. "
-                                           "Confira antes de enviar.")
-                    fila.append(fica)
-                else:
-                    removidas.add(_pending_identity_v1714(r, indice))
-            elif normalize(numero) in outra_origem and not bipado:
-                removidas.add(_pending_identity_v1714(r, indice))
-        save_storage("conf_pedidos", atual_raw, json_dumps(fila), False,
-                     actor=f"extensao-tiktok:{ator}", actor_role="sistema",
-                     source_screen="Extensão TikTok (Seller Center)", change_method="Pedidos do Seller Center TikTok",
-                     client_ip="127.0.0.1", allow_completed_reimport=False,
-                     remove_pending_identities=removidas)
+        # revisar-antes-de-subir (06/11): leitura da fila, conta e gravação na mesma vez do DB_LOCK — um bip
+        # entre a leitura e a gravação deixava a Quantidade abaixo do bipado até a rodada seguinte.
+        with DB_LOCK:
+            products_raw, _, _ = get_storage("conf_produtos")
+            products = _rows_from_storage_value(products_raw)
+            atual_raw, _, _ = get_storage("conf_pedidos")
+            atual = _rows_from_storage_value(atual_raw)
+            fila, removidas, pulados, api_linhas, ficam = _tiktok_sc_montar_fila(atual, abertos, saiu, guardados,
+                                                                                products)
+            save_storage("conf_pedidos", atual_raw, json_dumps(fila), False,
+                         actor=f"extensao-tiktok:{ator}", actor_role="sistema",
+                         source_screen="Extensão TikTok (Seller Center)", change_method="Pedidos do Seller Center TikTok",
+                         client_ip="127.0.0.1", allow_completed_reimport=False,
+                         remove_pending_identities=removidas)
         agora_epoch = time.time()
         with DB_LOCK:
             for numero in saiu:
@@ -10510,8 +10521,102 @@ def tiktok_pedidos_da_extensao(pedidos: Any, detalhes: Any, completo: bool, ator
                                   saiu_epoch=excluded.saiu_epoch, detalhe_em=excluded.detalhe_em""",
                            (numero, det[numero]["status"], now_iso(), now_iso(), agora_epoch))
             DB.commit()
+        fiscais, cpf_ok = _tiktok_sc_guardar_fiscais(det)
+        # revisar-antes-de-subir (06/11): o registro dos lidos também dentro da vez (outro PC não grava por cima)
+        _tiktok_sc_registrar_lidos(lidos, det, cpf_ok)
     finally:
         TIKTOK_SYNC_LOCK.release()
+    # revisar-antes-de-subir (06/11): situação/quantidade que o sistema não conhece vai para o Painel de saúde
+    # (sem isso nenhum pedido entrava e o painel dizia "ok").
+    todos = list(lidos.values()) + list(det.values())
+    desconhecidos = sorted({c for p in todos for c in p.get("_desconhecidos") or []})
+    if completo or desconhecidos:
+        _tiktok_config_gravar("pedidos_desconhecidos", json.dumps(
+            {"epoch": int(time.time()), "codigos": desconhecidos[:10],
+             "pedidos": sorted({p["id"] for p in todos if p.get("_desconhecidos")})[:10]}, ensure_ascii=False), ator)
+    if completo:
+        _tiktok_config_gravar("pedidos_extensao_epoch", str(int(time.time())), ator)
+    resumo = {"ok": True, "pedidos": len({order_number(r) for r in api_linhas if isinstance(r, dict)}),
+              "abertos": len(abertos), "linhas": len(api_linhas), "removidas": len(removidas),
+              "saiu_confirmado": len(saiu), "mantidos_sem_confirmar": len(ficam - saiu),
+              "ignorados_leitura_antiga": len(atrasados), "situacao_desconhecida": desconhecidos,
+              "ja_na_fila_por_outra_origem": pulados, "nome_cpf_guardados": fiscais, "completo": bool(completo)}
+    tiktok_log_event_se_mudou("pedidos", "extensao Seller Center", "OK" if completo else "PARCIAL",
+                              f"{len(abertos)} pedido(s) a enviar, {len(removidas)} linha(s) removida(s), "
+                              f"{len(saiu)} confirmado(s) enviado/cancelado"
+                              + (f"; situação desconhecida: {', '.join(desconhecidos)}" if desconhecidos else ""))
+    return resumo
+
+
+def _tiktok_sc_montar_fila(atual: list[dict[str, Any]], abertos: list[dict[str, Any]], saiu: set[str],
+                           guardados: dict[str, dict[str, Any]], products: list[dict[str, Any]]):
+    """Fila nova (sob o DB_LOCK, sem rede): linhas dos pedidos a enviar, os que ficam e as remoções nomeadas."""
+    cliente_atual: dict[str, str] = {}
+    for r in atual:
+        if isinstance(r, dict) and normalize(r.get("OrigemCadastro")) == normalize(TIKTOK_SC_ORIGEM):
+            nome_linha = str(r.get("Cliente") or "").strip()
+            if nome_linha:
+                cliente_atual.setdefault(str(order_number(r) or "").strip(), nome_linha)
+    api_linhas: list[dict[str, Any]] = []
+    for p in abertos:
+        if not p["recipient_address"]["name"]:
+            # revisar-antes-de-subir (06/11): o Cliente que a linha já tem vale mais que o apelido (ou vazio)
+            p["recipient_address"]["name"] = ((guardados.get(p["id"]) or {}).get("nome")
+                                              or p["_cpf_nome"] or cliente_atual.get(p["id"]) or p["_apelido"])
+        api_linhas.extend(_tiktok_linhas_do_pedido(p, products))
+    novas = list(api_linhas)
+    # Quem sumiu da aba sem o TikTok confirmar fica como está (a linha antiga volta igual).
+    # (pedido aberto que não gerou linha — sem SKU, por exemplo — também fica como está)
+    com_linhas = {str(order_number(r) or "").strip() for r in api_linhas}
+    ficam = _tiktok_sc_pedidos_na_fila(atual) - com_linhas - saiu
+    for r in atual:
+        if isinstance(r, dict) and normalize(r.get("OrigemCadastro")) == normalize(TIKTOK_SC_ORIGEM) \
+                and str(order_number(r) or "").strip() in ficam:
+            api_linhas.append(r)
+    fila, removidas, pulados = _magalu_merge(atual, api_linhas, origem=TIKTOK_SC_ORIGEM,
+                                             campos=TIKTOK_CAMPOS_OPERACIONAIS + ("Cliente",))
+    _tiktok_sc_acertar_existentes(fila, atual, novas)
+    # Revisão 06/11 — remoção NOMEADA (a linha protegida pelo ADMIN nunca sai por aqui). O merge
+    # já deixou estas linhas de fora; sem o nome, o preserve_pending_records_v1714 as traria de volta:
+    # (a) SKU do pedido aberto sem nenhuma unidade a enviar (cancelado inteiro ou já enviado);
+    # (b) pedido que o ADMIN incluiu por outra origem depois da importação: a cópia da
+    #     extensão sem bip sai (com bip fica: o progresso da conferência não se perde).
+    abertos_por_id = {p["id"]: p for p in abertos}
+    outra_origem = {normalize(order_number(r)) for r in atual
+                    if isinstance(r, dict) and normalize(r.get("OrigemCadastro")) != normalize(TIKTOK_SC_ORIGEM)}
+    no_resultado = {str(r.get("__uidLinha") or "") for r in fila if isinstance(r, dict)}
+    for indice, r in enumerate(atual):
+        if not isinstance(r, dict) or normalize(r.get("OrigemCadastro")) != normalize(TIKTOK_SC_ORIGEM):
+            continue
+        if str(r.get("__uidLinha") or "") in no_resultado:
+            continue
+        numero = str(order_number(r) or "").strip()
+        p = abertos_por_id.get(numero)
+        bipado = _tiktok_quantidade(r.get("Lido")) or 0
+        if numero in saiu and bipado:
+            # revisar-antes-de-subir (06/11): pedido cancelado/enviado INTEIRO com peça já bipada também
+            # não some calado (o _magalu_merge já tinha posto a linha na remoção nomeada).
+            removidas.discard(_pending_identity_v1714(r, indice))
+            fica = dict(r)
+            _tiktok_sc_aviso(fica, f"cancelado ou já enviado no TikTok, já bipado {bipado}. "
+                                   "Confira antes de enviar.")
+            fila.append(fica)
+            continue
+        if p and _tiktok_sc_linha_fora(r, p):
+            if bipado:
+                # Já bipada: não some calada (a peça está separada) — fica com o aviso.
+                fica = dict(r)
+                _tiktok_sc_aviso(fica, f"cancelado ou já enviado no TikTok, já bipado {bipado}. "
+                                       "Confira antes de enviar.")
+                fila.append(fica)
+            else:
+                removidas.add(_pending_identity_v1714(r, indice))
+        elif normalize(numero) in outra_origem and not bipado:
+            removidas.add(_pending_identity_v1714(r, indice))
+    return fila, removidas, pulados, api_linhas, ficam
+
+
+def _tiktok_sc_guardar_fiscais(det: dict[str, dict[str, Any]]) -> tuple[int, set[str]]:
     # Nome/CPF da nota (para o cadastro no Apollo): só quando o pedido ainda não tem nada guardado
     # — o que outra extensão ou o Admin gravou nunca é sobrescrito (conferido de novo por pedido).
     fiscais = 0
@@ -10524,12 +10629,20 @@ def tiktok_pedidos_da_extensao(pedidos: Any, detalhes: Any, completo: bool, ator
             continue
         if p["status"] in TIKTOK_SC_NA_FILA and len(p["_cpf"]) in (11, 14) and p["_cpf_nome"]:
             try:
-                if salvar_cliente_fiscal(numero, p["_cpf"], p["_cpf_nome"], fonte="tiktok_sc",
-                                         usuario="extensao-tiktok").get("ok"):
-                    fiscais += 1
+                # revisar-antes-de-subir (06/11): `so_se_vazio` confere e grava na mesma vez do DB_LOCK
+                r_fiscal = salvar_cliente_fiscal(numero, p["_cpf"], p["_cpf_nome"], fonte="tiktok_sc",
+                                                 usuario="extensao-tiktok", so_se_vazio=True)
+                if r_fiscal.get("ok") or r_fiscal.get("ja_existia"):
                     cpf_ok.add(numero)
+                if r_fiscal.get("ok"):
+                    fiscais += 1
             except Exception as exc:
                 tiktok_log_event_se_mudou("pedidos", f"cliente_fiscal {numero}", "ERRO", str(exc)[:300])
+    return fiscais, cpf_ok
+
+
+def _tiktok_sc_registrar_lidos(lidos: dict[str, dict[str, Any]], det: dict[str, dict[str, Any]],
+                               cpf_ok: set[str]) -> None:
     agora_iso = now_iso()
     with DB_LOCK:
         for p in lidos.values():
@@ -10548,17 +10661,6 @@ def tiktok_pedidos_da_extensao(pedidos: Any, detalhes: Any, completo: bool, ator
         DB.execute("DELETE FROM tiktok_sc_pedido_v2030 WHERE visto_em < ?",
                    ((datetime.now(timezone.utc) - timedelta(days=60)).astimezone().isoformat(timespec="milliseconds"),))
         DB.commit()
-    if completo:
-        _tiktok_config_gravar("pedidos_extensao_epoch", str(int(time.time())), ator)
-    resumo = {"ok": True, "pedidos": len({order_number(r) for r in api_linhas if isinstance(r, dict)}),
-              "abertos": len(abertos), "linhas": len(api_linhas), "removidas": len(removidas),
-              "saiu_confirmado": len(saiu), "mantidos_sem_confirmar": len(ficam - saiu),
-              "ignorados_leitura_antiga": len(atrasados),
-              "ja_na_fila_por_outra_origem": pulados, "nome_cpf_guardados": fiscais, "completo": bool(completo)}
-    tiktok_log_event_se_mudou("pedidos", "extensao Seller Center", "OK" if completo else "PARCIAL",
-                              f"{len(abertos)} pedido(s) a enviar, {len(removidas)} linha(s) removida(s), "
-                              f"{len(saiu)} confirmado(s) enviado/cancelado")
-    return resumo
 
 
 _TIKTOK_LOG_ULTIMO: dict[tuple[str, str], tuple[str, str]] = {}
@@ -10580,7 +10682,22 @@ def tiktok_rodada() -> dict[str, Any]:
     tiktok_access_token()
     if not tiktok_importacao_ligada():
         return {"importou": False, "motivo": "importacao_desligada"}
+    # revisar-antes-de-subir (06/11): uma fonte de cada vez. A API e a extensão do Seller Center gravam as mesmas
+    # linhas com regras diferentes (a extensão só tira com o TikTok confirmando); juntas, a fila alternava.
+    if _tiktok_extensao_em_uso():
+        tiktok_log_event_se_mudou("pedidos", "worker", "IGNORADO",
+                                  "a extensão do Seller Center está lendo os pedidos: a API não importa")
+        return {"importou": False, "motivo": "extensao_em_uso"}
     return {"importou": True, **tiktok_importar_pedidos()}
+
+
+def _tiktok_extensao_em_uso() -> bool:
+    """A extensão do Seller Center leu os pedidos nas últimas TIKTOK_SC_FONTE_UNICA_S (6 h)?"""
+    try:
+        ultima = float(_tiktok_config_ler("pedidos_extensao_epoch") or 0)
+    except (TypeError, ValueError):
+        return False
+    return bool(ultima) and time.time() - ultima < TIKTOK_SC_FONTE_UNICA_S
 
 
 def tiktok_pedidos_loop(stop_event: threading.Event) -> None:
@@ -18189,8 +18306,10 @@ def _nome_unico_valido(nome: str) -> bool:
 
 
 def salvar_cliente_fiscal(pedido: str, documento: str, nome: str, *, linx_cliente: str = "",
-                          fonte: str = "", usuario: str = "") -> dict[str, Any]:
-    """V17.86 — guarda o que a extensão leu na venda (e o código no Linx)."""
+                          fonte: str = "", usuario: str = "", so_se_vazio: bool = False) -> dict[str, Any]:
+    """V17.86 — guarda o que a extensão leu na venda (e o código no Linx).
+    V20.30 (revisão 06/11): `so_se_vazio` = só grava se o pedido ainda não tem nada (conferido na mesma vez
+    do DB_LOCK da gravação; o que outra extensão gravou nunca é sobrescrito)."""
     pedido = str(pedido or "").strip()
     numero = re.sub(r"\D", "", str(documento or ""))
     nome = re.sub(r"\s+", " ", str(nome or "")).strip()
@@ -18208,6 +18327,9 @@ def salvar_cliente_fiscal(pedido: str, documento: str, nome: str, *, linx_client
             return {"ok": False, "error": f"Pedido {pedido} não encontrado."}
         if not _nome_fiscal_valido(nome) and not any(_linha_shopee_v1866(r) for r in linhas):
             return {"ok": False, "error": "Nome da NF-e inválido: precisa de nome e sobrenome."}
+        if so_se_vazio and DB.execute("SELECT 1 FROM cliente_fiscal WHERE order_key=?",
+                                      (normalize(pedido),)).fetchone():
+            return {"ok": False, "ja_existia": True, "error": "O pedido já tem nome/CPF da NF-e guardado."}
         agora = now_iso()
         DB.execute(
             """INSERT INTO cliente_fiscal(order_key,pedido,documento_tipo,documento_numero,nome_fiscal,
@@ -41143,6 +41265,8 @@ def imagens_refazer(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
         row = _imagem_row(req.get("id"))
         if row["apagado_em"]:
             raise ImagemNaoEncontrada("Este trabalho já foi apagado.")
+        if row["tipo"] == "anuncio":  # revisar-antes-de-subir (06/11): pedido de anúncio é do perfil Admin
+            raise ImagemNaoEncontrada("Trabalho não encontrado.")
         if int(req.get("versao") or 0) != int(row["versao"]):
             raise ImagemConflito("Outra pessoa mexeu nesta imagem. Recarregue a lista.")
         if row["situacao"] in IMAGEM_EM_TRABALHO or row["situacao"] in ("aguardando", "aguardando_arte"):
@@ -41169,8 +41293,9 @@ def imagens_apagar(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             continue
         with DB_LOCK:
-            row = DB.execute("SELECT id, apagado_em FROM imagem_trabalho_v2017 WHERE id=?", (id_,)).fetchone()
-            if row is None or row["apagado_em"]:
+            row = DB.execute("SELECT id, apagado_em, tipo FROM imagem_trabalho_v2017 WHERE id=?", (id_,)).fetchone()
+            # revisar-antes-de-subir (06/11): pedido de anúncio só sai pelo Cancelar do perfil Admin
+            if row is None or row["apagado_em"] or row["tipo"] == "anuncio":
                 continue
             DB.execute("UPDATE imagem_trabalho_v2017 SET apagado_em=?, apagado_por=?, bytes=0, reservado_ate=NULL, "
                        "versao=versao+1 WHERE id=?", (now_iso(), usuario, id_))
@@ -41217,14 +41342,16 @@ def imagens_config(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, **mudar, "saldo": saldo}
 
 
-def imagens_arquivo(id_: Any, nome: Any, so_originais: bool = False) -> tuple[bytes, str, str]:
+def imagens_arquivo(id_: Any, nome: Any, so_originais: bool = False, anuncio_ok: bool = False) -> tuple[bytes, str, str]:
     """Lê um arquivo do trabalho. O nome tem de estar na lista do próprio trabalho (nunca um caminho
-    vindo do navegador)."""
+    vindo do navegador). revisar-antes-de-subir (06/11): pedido de anúncio só para o agente (`anuncio_ok`)."""
     nome = str(nome or "")
     with DB_LOCK:
         row = _imagem_row(id_)
     if row["apagado_em"]:
         raise ImagemNaoEncontrada("Este trabalho já foi apagado.")
+    if row["tipo"] == "anuncio" and not anuncio_ok:
+        raise ImagemNaoEncontrada("Arquivo não encontrado.")
     lista = _imagem_json(row["arquivos_json"], [])
     if not so_originais:
         lista = lista + _imagem_json(row["resultados_json"], [])
@@ -41244,7 +41371,11 @@ def imagens_arquivo(id_: Any, nome: Any, so_originais: bool = False) -> tuple[by
 # ---------- V20.31: agente de anúncios (pedido do Admin no rascunho) ----------
 # Desenho: docs/superpowers/specs/2026-11-06-agente-anuncios-design.md. Usa a fila do Estúdio (tipo 'anuncio'):
 # o agente já busca e baixa por lá. Nada aqui escreve no ML; o aceito vai ao rascunho e aos vazios da ficha.
-ANUNCIO_AGENTE_ABERTO = ("enviando", "aguardando", "analisando", "aguardando_atributos")
+ANUNCIO_AGENTE_ABERTO = ("enviando", "aguardando", "analisando", "aguardando_atributos",
+                         "buscando_categoria", "aceitando")  # revisar-antes-de-subir (06/11)
+ANUNCIO_AGENTE_ACEITAR_S = 120  # revisão das correções: 'aceitando' que passou disso (processo caiu) volta a proposta
+ANUNCIO_AGENTE_ESPERA_ML = 40  # s que a entrega espera o ML (o nginx corta em 60 s); depois termina sozinha
+ANUNCIO_AGENTE_MAX_FONTES = 20
 ANUNCIO_AGENTE_MAX_FOTOS = 12
 ANUNCIO_AGENTE_FOTOS_PECA = 3
 
@@ -41305,11 +41436,6 @@ def anuncio_agente_pedir(rascunho_id: Any, ator: str, nome: str = "", link: str 
                             (rasc["id"], *ANUNCIO_AGENTE_ABERTO)).fetchone()
         if aberto is not None:
             raise ImagemConflito("Já tem um pedido ao agente para este rascunho.")
-        # V20.31 (revisão final): pedido novo aposenta a proposta anterior do rascunho (e as fotos copiadas dela).
-        antigos = [r["id"] for r in DB.execute("SELECT id FROM imagem_trabalho_v2017 WHERE tipo='anuncio' AND rascunho_id=? "
-                                               "AND apagado_em IS NULL", (rasc["id"],)).fetchall()]
-        for aid in antigos:
-            DB.execute("UPDATE imagem_trabalho_v2017 SET apagado_em=?, apagado_por=? WHERE id=?", (agora, str(ator or ""), aid))
         cur = DB.execute(
             "INSERT INTO imagem_trabalho_v2017(tipo,sku,situacao,criado_por,criado_em,atualizado_em,arquivos_json,bytes,"
             "produto_json,rascunho_id) VALUES('anuncio',?,'enviando',?,?,?,?,?,?,?)",
@@ -41325,12 +41451,32 @@ def anuncio_agente_pedir(rascunho_id: Any, ator: str, nome: str = "", link: str 
     except Exception as exc:
         shutil.rmtree(pasta, ignore_errors=True)
         with DB_LOCK:
-            DB.execute("DELETE FROM imagem_trabalho_v2017 WHERE id=?", (id_,))
+            cancelado = bool(DB.execute("SELECT apagado_em FROM imagem_trabalho_v2017 WHERE id=?",
+                                        (id_,)).fetchone()["apagado_em"])
+            if not cancelado:
+                DB.execute("DELETE FROM imagem_trabalho_v2017 WHERE id=?", (id_,))
             DB.commit()
+        if cancelado:  # revisar-antes-de-subir (06/11): o Cancelar apagou a pasta no meio da cópia
+            raise ImagemConflito("O pedido foi cancelado enquanto as fotos eram preparadas.")
         raise ValueError(f"Não foi possível preparar as fotos para o agente: {exc}")
     with DB_LOCK:
-        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aguardando' WHERE id=?", (id_,))
-        DB.commit()
+        if DB.execute("SELECT apagado_em FROM imagem_trabalho_v2017 WHERE id=?", (id_,)).fetchone()["apagado_em"]:
+            cancelado = True  # revisar-antes-de-subir (06/11): cancelado enquanto as fotos eram copiadas
+        else:
+            cancelado = False
+            # V20.31 (revisão final): pedido novo aposenta a proposta anterior do rascunho (e as fotos copiadas dela).
+            # revisar-antes-de-subir (06/11): só depois de a cópia dar certo (falha = a proposta antiga continua).
+            antigos = [r["id"] for r in DB.execute(
+                "SELECT id FROM imagem_trabalho_v2017 WHERE tipo='anuncio' AND rascunho_id=? AND apagado_em IS NULL "
+                "AND id<>?", (rasc["id"], id_)).fetchall()]
+            for aid in antigos:
+                DB.execute("UPDATE imagem_trabalho_v2017 SET apagado_em=?, apagado_por=?, versao=versao+1 WHERE id=?",
+                           (now_iso(), str(ator or ""), aid))
+            DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aguardando' WHERE id=?", (id_,))
+            DB.commit()
+    if cancelado:
+        _anuncio_agente_limpar_pasta(id_)
+        raise ImagemConflito("O pedido foi cancelado enquanto as fotos eram preparadas.")
     for aid in antigos:
         _anuncio_agente_limpar_pasta(aid)
     audit(str(ator or ""), "anuncios.agente.pedir", f"rascunho={rasc['id']}|{ficha['codigo']}|{len(arquivos)} foto(s)|#{id_}")
@@ -41350,12 +41496,25 @@ def _anuncio_agente_versao_ok(versao: str) -> bool:
     return tuple(partes + [0] * (2 - len(partes))) >= (0, 4)
 
 
+def _anuncio_agente_destravar(agora: float) -> None:
+    """revisar-antes-de-subir (06/11), sob o DB_LOCK: busca da categoria que não terminou e aceite que parou no meio
+    (servidor reiniciou) voltam a proposta — sem isso o pedido ficava preso. Chamado pelo agente e pela tela."""
+    for v in DB.execute("SELECT id, situacao FROM imagem_trabalho_v2017 WHERE apagado_em IS NULL AND tipo='anuncio' "
+                        "AND situacao IN ('buscando_categoria','aceitando') AND reservado_ate < ?", (agora,)).fetchall():
+        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='proposta', reservado_ate=NULL, versao=versao+1, "
+                   "mensagem=?, atualizado_em=? WHERE id=?",
+                   ("Categoria não lida no ML (a busca não terminou). Use Trocar categoria."
+                    if v["situacao"] == "buscando_categoria" else "", now_iso(), v["id"]))
+
+
 def anuncio_agente_estado(rascunho_id: Any) -> dict[str, Any] | None:
     try:
         rid = int(rascunho_id)
     except (TypeError, ValueError):
         return None
     with DB_LOCK:
+        _anuncio_agente_destravar(time.time())
+        DB.commit()
         row = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE tipo='anuncio' AND rascunho_id=? AND apagado_em IS NULL "
                          "ORDER BY id DESC LIMIT 1", (rid,)).fetchone()
         versao = _imagem_cfg("agente_versao", "")
@@ -41435,8 +41594,7 @@ def _anuncio_agente_atributos(brutos: Any, defs: list[dict[str, Any]]) -> list[d
             continue
         else:
             valor_id = ""
-            if d.get("max"):
-                valor = valor[:int(d["max"])]
+            valor = valor[:int(d["max"]) if d.get("max") else 255]  # revisar-antes-de-subir (06/11): sempre com limite
         origem = str(a.get("origem") or "")
         fonte = str(a.get("fonte") or "").strip()[:300]
         if not re.match(r"https?://", fonte, re.I):  # revisão final: link vindo da internet só http(s)
@@ -41452,12 +41610,26 @@ def anuncio_agente_entregar(req: dict[str, Any]) -> dict[str, Any]:
     etapa = str(req.get("etapa") or "")
     te, ts, modelo = _imagem_tokens(req)
 
-    def _reservado() -> sqlite3.Row:
-        return _imagem_agente_reservado(req, ("analisando",), anuncio=True)
-
     def _gasto(row: sqlite3.Row) -> None:
         _imagem_registrar_gasto(row["id"], modelo or row["modelo"] or _imagem_cfg("modelo", IMAGEM_MODELO_PADRAO), te, ts,
                                 _imagem_buscas(req), origem="anuncio")
+
+    def _reservado() -> sqlite3.Row:
+        try:
+            return _imagem_agente_reservado(req, ("analisando",), anuncio=True)
+        except ImagemConflito:
+            # revisar-antes-de-subir (06/11): cancelado com o agente trabalhando — o crédito foi gasto: entra na
+            # barra uma vez (a entrega repetida depois do cancelamento não conta de novo).
+            try:
+                velho = _imagem_row(req.get("id"))
+            except Exception:
+                raise ImagemConflito("Este trabalho não está mais na vez do agente.")
+            if velho["tipo"] == "anuncio" and velho["apagado_em"] and not DB.execute(
+                    "SELECT 1 FROM imagem_gasto_v2017 WHERE trabalho_id=? AND quando>=?",
+                    (velho["id"], velho["apagado_em"])).fetchone():
+                _gasto(velho)
+                DB.commit()
+            raise
 
     if str(req.get("situacao") or "") == "erro":
         msg = str(req.get("mensagem") or "")[:900]
@@ -41477,28 +41649,43 @@ def anuncio_agente_entregar(req: dict[str, Any]) -> dict[str, Any]:
     if etapa == "anuncio_textos":
         titulos = _anuncio_agente_titulos(req.get("titulos"))
         if not titulos:
-            raise ValueError("A proposta não trouxe nenhum título válido (até 60 caracteres).")
+            # revisar-antes-de-subir (06/11): vira erro com o motivo (e o gasto); o 400 fazia o agente repetir
+            # 3 vezes (~30 min, crédito gasto e não contado) e terminar num erro sem motivo.
+            with DB_LOCK:
+                row = _reservado()
+                DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='erro', mensagem=?, reservado_ate=NULL, "
+                           "versao=versao+1, atualizado_em=?, modelo=COALESCE(NULLIF(?,''),modelo), "
+                           "tokens_entrada=tokens_entrada+?, tokens_saida=tokens_saida+? WHERE id=?",
+                           ("O agente não propôs nenhum título com até 60 caracteres (o limite do Mercado Livre). "
+                            "Peça de novo.", now_iso(), modelo, te, ts, row["id"]))
+                _gasto(row)
+                DB.commit()
+            _anuncio_agente_limpar_pasta(row["id"])
+            return {"ok": True, "situacao": "erro"}
         textos = {"titulos": titulos, "descricao": str(req.get("descricao") or "")[:50000],
-                  "fontes": req.get("fontes") if isinstance(req.get("fontes"), dict) else {}}
+                  "fontes": _anuncio_agente_fontes(req.get("fontes"))}
         with DB_LOCK:
             row = _reservado()
             produto = _imagem_json(row["produto_json"], {})
-            DB.execute("UPDATE imagem_trabalho_v2017 SET textos_json=?, reservado_ate=?, versao=versao+1, atualizado_em=?, "
-                       "modelo=COALESCE(NULLIF(?,''),modelo), tokens_entrada=tokens_entrada+?, tokens_saida=tokens_saida+? "
-                       "WHERE id=?", (json.dumps(textos, ensure_ascii=False), time.time() + IMAGEM_RESERVA_S, now_iso(),
-                                      modelo, te, ts, row["id"]))
+            # revisar-antes-de-subir (06/11): situação própria enquanto o ML responde — a entrega repetida (504 do
+            # nginx, túnel caído) é recusada e o gasto não conta duas vezes.
+            DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='buscando_categoria', textos_json=?, reservado_ate=?, "
+                       "versao=versao+1, atualizado_em=?, modelo=COALESCE(NULLIF(?,''),modelo), "
+                       "tokens_entrada=tokens_entrada+?, tokens_saida=tokens_saida+? WHERE id=?",
+                       (json.dumps(textos, ensure_ascii=False), time.time() + IMAGEM_RESERVA_S, now_iso(),
+                        modelo, te, ts, row["id"]))
             _gasto(row)
             DB.commit()
         recomendado = next(t["texto"] for t in titulos if t["recomendado"])
-        cat = _anuncio_agente_categoria(recomendado, str(produto.get("conta") or ""))
+        # revisar-antes-de-subir (06/11): o ML em segundo plano; a entrega espera até ANUNCIO_AGENTE_ESPERA_ML
+        # (o nginx corta em 60 s) e, se o ML demorar mais, responde "buscando_categoria" e a busca termina sozinha.
+        busca = threading.Thread(target=_anuncio_agente_buscar_categoria,
+                                 args=(row["id"], recomendado, str(produto.get("conta") or "")),
+                                 name=f"agente-categoria-{row['id']}", daemon=True)
+        busca.start()
+        busca.join(ANUNCIO_AGENTE_ESPERA_ML)
         with DB_LOCK:
-            row = _reservado()  # apagado enquanto o ML respondia = 409, nada gravado
-            textos.update({k: v for k, v in cat.items() if k != "erro"})
-            situacao = "proposta" if cat.get("erro") else "aguardando_atributos"
-            DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, textos_json=?, mensagem=?, reservado_ate=NULL, "
-                       "tentativas=0, versao=versao+1, atualizado_em=? WHERE id=?",
-                       (situacao, json.dumps(textos, ensure_ascii=False), cat.get("erro") or "", now_iso(), row["id"]))
-            DB.commit()
+            situacao = _imagem_row(row["id"])["situacao"]
         return {"ok": True, "situacao": situacao}
     if etapa == "anuncio_atributos":
         with DB_LOCK:
@@ -41515,6 +41702,49 @@ def anuncio_agente_entregar(req: dict[str, Any]) -> dict[str, Any]:
             DB.commit()
         return {"ok": True, "situacao": "proposta"}
     raise ValueError("Etapa desconhecida.")
+
+
+def _anuncio_agente_fontes(brutas: Any) -> dict[str, str]:
+    """revisar-antes-de-subir (06/11): fontes do agente com limite (até 20 campos, só link http(s) até 300)."""
+    saida: dict[str, str] = {}
+    for k, v in (brutas.items() if isinstance(brutas, dict) else []):
+        if len(saida) >= ANUNCIO_AGENTE_MAX_FONTES:
+            break
+        link = str(v or "").strip()
+        if re.match(r"https?://", link, re.I) and not any(c.isspace() for c in link):
+            saida[str(k)[:40]] = link[:300]
+    return saida
+
+
+def _anuncio_agente_pedidos(textos: dict[str, Any]) -> list[dict[str, Any]]:
+    """Atributos que vão ao agente: só os obrigatórios/condicionais da categoria."""
+    return [d for d in textos.get("atributos_ml") or []
+            if isinstance(d, dict) and (d.get("obrigatorio") or d.get("condicional"))]
+
+
+def _anuncio_agente_buscar_categoria(trabalho_id: int, titulo: str, conta: str) -> None:
+    """revisar-antes-de-subir (06/11): fora da requisição do agente. Só grava se o pedido ainda está buscando."""
+    try:
+        cat = _anuncio_agente_categoria(titulo, conta)
+        with DB_LOCK:
+            row = _imagem_row(trabalho_id)
+            if row["apagado_em"] or row["situacao"] != "buscando_categoria":
+                return  # cancelado (ou a busca vencida já virou proposta) enquanto o ML respondia
+            textos = _imagem_json(row["textos_json"], {})
+            textos.update({k: v for k, v in cat.items() if k != "erro"})
+            if cat.get("erro"):
+                situacao, mensagem = "proposta", cat["erro"]
+            elif not _anuncio_agente_pedidos(textos):
+                # revisar-antes-de-subir (06/11): categoria sem atributo a pedir = nada a mandar ao agente
+                situacao, mensagem = "proposta", ""
+            else:
+                situacao, mensagem = "aguardando_atributos", ""
+            DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, textos_json=?, mensagem=?, reservado_ate=NULL, "
+                       "tentativas=0, versao=versao+1, atualizado_em=? WHERE id=?",
+                       (situacao, json.dumps(textos, ensure_ascii=False), mensagem, now_iso(), trabalho_id))
+            DB.commit()
+    except Exception as exc:  # nunca derruba nada: a reserva vencida vira proposta com o aviso
+        print(f"[agente-anuncio] busca da categoria #{trabalho_id}: {exc}", flush=True)
 
 
 def anuncio_agente_trocar_categoria(trabalho_id: Any, categoria: str, ator: str) -> dict[str, Any]:
@@ -41534,9 +41764,11 @@ def anuncio_agente_trocar_categoria(trabalho_id: Any, categoria: str, ator: str)
         textos = _imagem_json(atual["textos_json"], {})
         textos.update(cat)
         textos["atributos"] = []
-        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aguardando_atributos', textos_json=?, mensagem='', "
+        # revisar-antes-de-subir (06/11): categoria sem atributo a pedir fica pronta (sem chamar o agente à toa)
+        nova = "aguardando_atributos" if _anuncio_agente_pedidos(textos) else "proposta"
+        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, textos_json=?, mensagem='', "
                    "tentativas=0, versao=versao+1, atualizado_em=? WHERE id=?",
-                   (json.dumps(textos, ensure_ascii=False), now_iso(), atual["id"]))
+                   (nova, json.dumps(textos, ensure_ascii=False), now_iso(), atual["id"]))
         DB.commit()
     audit(str(ator or ""), "anuncios.agente.categoria", f"#{atual['id']}|{cat['categoria']}")
     return {"ok": True}
@@ -41565,6 +41797,36 @@ def anuncio_agente_aceitar(trabalho_id: Any, escolha: dict[str, Any], ator: str,
         versao = int(versao_rascunho)
     except (TypeError, ValueError):
         raise ValueError("Versão do rascunho inválida.")
+    # revisar-antes-de-subir (06/11): reserva a proposta (a mesma que foi lida); outra aba que troca a categoria ou
+    # aceita no meio recebe 409, e falha no meio devolve a proposta.
+    with DB_LOCK:
+        cur = DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aceitando', reservado_ate=?, versao=versao+1, "
+                         "atualizado_em=? WHERE id=? AND situacao='proposta' AND apagado_em IS NULL AND versao=?",
+                         (time.time() + ANUNCIO_AGENTE_ACEITAR_S, now_iso(), row["id"], row["versao"]))
+        DB.commit()
+    if cur.rowcount != 1:
+        raise ImagemConflito("Esta proposta mudou (outra aba ou o agente). Recarregue.")
+    try:
+        salvo, novos, propostos = _anuncio_agente_aplicar(row, textos, rasc, escolha, titulo, versao, ator)
+    except BaseException:
+        with DB_LOCK:
+            DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='proposta', reservado_ate=NULL, versao=versao+1 "
+                       "WHERE id=? AND situacao='aceitando'", (row["id"],))
+            DB.commit()
+        raise
+    with DB_LOCK:
+        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aceita', reservado_ate=NULL, versao=versao+1, "
+                   "atualizado_em=? WHERE id=? AND situacao='aceitando'", (now_iso(), row["id"]))
+        DB.commit()
+    _anuncio_agente_limpar_pasta(row["id"])  # revisão final: as fotos copiadas não servem mais
+    audit(str(ator or ""), "anuncios.agente.aceitar",
+          f"#{row['id']}|rascunho={rasc['id']}|{len(propostos)} atributo(s)|ficha: {','.join(sorted(novos)) or '-'}")
+    return {"ok": True, "rascunho": salvo, "ficha_preenchida": sorted(novos)}
+
+
+def _anuncio_agente_aplicar(row: sqlite3.Row, textos: dict[str, Any], rasc: dict[str, Any], escolha: dict[str, Any],
+                            titulo: str, versao: int, ator: str):
+    """Grava o aceito no rascunho e nos vazios da ficha (a proposta já está reservada em 'aceitando')."""
     escolhidos = {str(x) for x in (escolha.get("atributos") or [])}
     atuais = {k: v for k, v in (rasc.get("atributos") or {}).items() if k != "_guardados" and str(v or "").strip()}
     # Revisão final: o que veio da ficha para o rascunho (marca, modelo, GTIN, SKU, peso e medidas) vale mais que a
@@ -41593,18 +41855,14 @@ def anuncio_agente_aceitar(trabalho_id: Any, escolha: dict[str, Any], ator: str,
     novos = {c: v for c, v in candidatos.items()
              if v and not str(campos.get(c) or "").strip() and origem.get(c) != "admin"}
     if novos and ficha:
+        # revisar-antes-de-subir (06/11): origem "agente" (não "admin"): a ficha relida sob a trava (sem conflito
+        # de versão calado) e o Puxar do ML ainda corrige o que o agente propôs.
         try:
-            ficha_salvar(rasc["ficha_codigo"], novos, ator, ficha.get("versao"))
-        except FichaConflito:
-            novos = {}  # a ficha mudou no meio: o rascunho já foi gravado; a ficha fica como está
-    with DB_LOCK:
-        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aceita', versao=versao+1, atualizado_em=? WHERE id=?",
-                   (now_iso(), row["id"]))
-        DB.commit()
-    _anuncio_agente_limpar_pasta(row["id"])  # revisão final: as fotos copiadas não servem mais
-    audit(str(ator or ""), "anuncios.agente.aceitar",
-          f"#{row['id']}|rascunho={rasc['id']}|{len(propostos)} atributo(s)|ficha: {','.join(sorted(novos)) or '-'}")
-    return {"ok": True, "rascunho": salvo, "ficha_preenchida": sorted(novos)}
+            novos = {c: novos[c] for c in ficha_importar(rasc["ficha_codigo"], novos, "agente")}
+        except Exception as exc:  # o rascunho já foi gravado: a ficha fica como está (antes: FichaConflito)
+            print(f"[agente-anuncio] ficha {rasc['ficha_codigo']} não preenchida: {exc}", flush=True)
+            novos = {}
+    return salvo, novos, propostos
 
 
 # ---------- agente ----------
@@ -41643,10 +41901,19 @@ def imagens_agente_proximo(aceita_anuncio: bool = False) -> dict[str, Any]:
                     _anuncio_agente_limpar_pasta(v["id"])
             else:
                 volta = "aguardando_arte" if v["situacao"] == "gerando" else "aguardando"
-                if v["tipo"] == "anuncio" and _imagem_json(v["textos_json"], {}).get("titulos"):
+                textos_v = _imagem_json(v["textos_json"], {}) if v["tipo"] == "anuncio" else {}
+                if textos_v.get("titulos"):
                     volta = "aguardando_atributos"  # V20.31: a etapa de textos já foi entregue
+                    if not _anuncio_agente_pedidos(textos_v):
+                        # revisar-antes-de-subir (06/11): sem atributo da categoria a pedir, fica a proposta
+                        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='proposta', reservado_ate=NULL, "
+                                   "versao=versao+1, mensagem=?, atualizado_em=? WHERE id=?",
+                                   ("Categoria não lida no ML. Use Trocar categoria." if not textos_v.get("categoria")
+                                    else "", now_iso(), v["id"]))
+                        continue
                 DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, reservado_ate=NULL, atualizado_em=? WHERE id=?",
                            (volta, now_iso(), v["id"]))
+        _anuncio_agente_destravar(agora)
         row = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE apagado_em IS NULL AND situacao IN "
                          "('aguardando','aguardando_arte','aguardando_atributos')"
                          + ("" if aceita_anuncio else " AND tipo<>'anuncio'") + " ORDER BY id LIMIT 1").fetchone()
@@ -43599,7 +43866,7 @@ class AppHandler(BaseHTTPRequestHandler):
             if not self.imagem_agente_auth():
                 return
             try:
-                dados, tipo, nome = imagens_arquivo(q("id"), q("nome"), so_originais=True)
+                dados, tipo, nome = imagens_arquivo(q("id"), q("nome"), so_originais=True, anuncio_ok=True)
             except ImagemNaoEncontrada as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 404)
                 return
@@ -48737,6 +49004,17 @@ def _saude_tiktok_pedidos(agora: float | None = None) -> dict[str, Any]:
         return _saude_item("tiktok_pedidos", g, t, "info", "A extensão do Seller Center ainda não leu os pedidos")
     idade = agora - ultima
     if idade <= TIKTOK_SC_SEM_LEITURA_S:
+        # revisar-antes-de-subir (06/11): situação que o sistema não conhece = o pedido não entra na fila
+        try:
+            desc = json.loads(_tiktok_config_ler("pedidos_desconhecidos") or "{}")
+        except (TypeError, ValueError):
+            desc = {}
+        if isinstance(desc, dict) and desc.get("codigos"):
+            codigos = ", ".join(str(c) for c in desc.get("codigos") or [])
+            pedidos = ", ".join(str(c) for c in desc.get("pedidos") or [])
+            return _saude_item("tiktok_pedidos", g, t, "atencao",
+                               f"Pedido do TikTok com situação que o sistema não conhece ({codigos}): não entra na fila",
+                               f"Pedidos: {pedidos}. Confira no Seller Center e avise para incluir o código no Noromak.")
         return _saude_item("tiktok_pedidos", g, t, "ok", f"Última leitura do Seller Center há {_saude_idade_txt(idade)}")
     br = datetime.fromtimestamp(agora, timezone(timedelta(hours=-3)))
     expediente = br.weekday() < 5 and (8, 30) <= (br.hour, br.minute) < (18, 0)

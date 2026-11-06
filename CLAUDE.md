@@ -479,6 +479,13 @@ Observação do operador nunca é trocada) e some quando resolve; Quantidade/Cli
 variação fora pelo uid exato (sku_id + SKU; peça de kit pelo `SkuKitOrigem`); linha fora **já bipada** fica com o aviso em vez de sair;
 `saiu_epoch` lido e gravado dentro do `TIKTOK_SYNC_LOCK`; a extensão alterna "sumiram da aba" e "novos" nas 10 vagas.
 Teste: `TESTES/test_tiktok_pedidos_extensao_v2030.py`.
+**revisar-antes-de-subir da V20.30 + V20.31 (06/11, "corrija tudo"):** código de situação fora de `TIKTOK_SC_STATUS` ou
+quantidade que não veio = pedido fica como está (nunca zero) e o Painel de saúde fica em atenção com os códigos
+(`pedidos_desconhecidos` em `tiktok_config_v1964`; leitura completa sem eles limpa); pedido cancelado/enviado **inteiro** com peça
+bipada fica com o aviso; Cliente: nome guardado > nome da nota > o que a linha já tem > apelido; nome/CPF da nota com
+`salvar_cliente_fiscal(..., so_se_vazio=True)` (confere e grava na mesma vez); leitura, conta e gravação da fila num `DB_LOCK` só
+(`_tiktok_sc_montar_fila`); amostra mascara dado pessoal em qualquer nível (`_tiktok_sc_mascarar`); a API (`tiktok_rodada`) não importa
+pedidos enquanto a extensão leu nas últimas 6 h (`TIKTOK_SC_FONTE_UNICA_S`: uma fonte de cada vez). Teste: `TESTES/test_revisao_subida_v2031.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na
@@ -852,6 +859,19 @@ tinha) e preenche na ficha **só** `nome/descricao/marca/modelo/categoria_ml` va
 Gasto no mesmo crédito do Estúdio com `imagem_gasto_v2017.origem='anuncio'` (`imagens_saldo().por_origem`). Estado:
 `GET /api/anuncios/agente?rascunho=` (módulo admin). Testes: `TESTES/test_agente_anuncios_v2031.py` e `AnuncioDoAgente` em
 `FERRAMENTAS_WINDOWS/agente_imagens/test_agente.py`.
+**revisar-antes-de-subir (06/11, "corrija tudo"):** a tela do Estúdio (módulo Imagens) não refaz, apaga nem baixa pedido de anúncio
+(`imagens_arquivo(..., anuncio_ok=True)` só na rota do agente). Entrega dos textos → `buscando_categoria` e a busca no ML numa thread
+(`_anuncio_agente_buscar_categoria`; a entrega espera até `ANUNCIO_AGENTE_ESPERA_ML` = 40 s, o nginx corta em 60): entrega repetida é
+recusada e o gasto não conta duas vezes; busca que não terminou (reserva vencida) vira proposta com "Use Trocar categoria". Nenhum
+título até 60 = `erro` com o motivo e o gasto (antes 400 e 3 voltas). Categoria sem atributo obrigatório/condicional = proposta direto.
+Aceitar reserva a proposta (`aceitando`, pela versão; falha devolve `proposta`; Trocar categoria no meio = 409). Pedir de novo aposenta
+a proposta antiga só depois de copiar as fotos; cancelado durante a cópia = 409 e sem pasta. Cancelado com o agente trabalhando: o gasto
+entra uma vez. O que o agente preenche na ficha tem origem **`agente`** (`ANUNCIO_ORIGENS`: abaixo do anúncio do ML, via
+`ficha_importar`; tela "do agente (confira)"). Fontes até 20 links http(s) de 300; valor de atributo sem limite do ML corta em 255.
+Revisão das correções: `buscando_categoria` e `aceitando` (este com prazo `ANUNCIO_AGENTE_ACEITAR_S` = 120 s) que pararam no meio
+voltam a proposta também quando a tela consulta (`_anuncio_agente_destravar`); falha na ficha depois de gravar o rascunho não derruba o
+aceite; "Sincronizar agora" do TikTok também respeita a fonte única (`_tiktok_extensao_em_uso`); a amostra esconde os valores e mantém as chaves.
+Teste: `TESTES/test_revisao_subida_v2031.py`.
 
 **V20.26 — fase 3: controle de estoque dos anúncios do ML** (decisões do dono 05/11; plano
 `docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md`). **Exceção à regra "o Noromak nunca grava estoque": o Noromak grava
