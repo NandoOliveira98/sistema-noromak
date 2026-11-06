@@ -1476,6 +1476,7 @@ function normalizarMarketplace(valor) {
   if (texto.includes("mercado livre") || texto.includes("mercadolivre") || texto === "ml") return "mercado_livre";
   if (texto.includes("magalu") || texto.includes("magazine luiza")) return "magalu";
   if (texto.includes("shopee")) return "shopee";
+  if (texto.includes("tiktok")) return "tiktok"; // V20.29
   return "desconhecido";
 }
 
@@ -1498,6 +1499,7 @@ function nomeMarketplacePlanilha(marketplace) {
   if (marketplace === "mercado_livre") return "MERCADO LIVRE";
   if (marketplace === "magalu") return "MAGALU";
   if (marketplace === "shopee") return "SHOPEE";
+  if (marketplace === "tiktok") return "TIKTOK";
   return "";
 }
 
@@ -1505,6 +1507,7 @@ function nomeMarketplace(marketplace) {
   if (marketplace === "mercado_livre") return "Mercado Livre";
   if (marketplace === "magalu") return "Magalu";
   if (marketplace === "shopee") return "Shopee";
+  if (marketplace === "tiktok") return "TikTok Shop";
   return "Marketplace não reconhecido";
 }
 
@@ -2236,8 +2239,9 @@ document.addEventListener("DOMContentLoaded",()=>{mostrarFilialConferenciaV1895(
 
 // Etiqueta do ML em PDF (10x15): baixada na hora pelo servidor, com a conta do pedido, e
 // impressa pela janela de impressão do navegador na térmica comum.
-async function imprimirEtiquetaPdfV1895(pedido, data){
-  const r=await fetch(`/expedicao/api/etiqueta-ml-pdf?pedido=${encodeURIComponent(pedido)}`,{credentials:"same-origin",cache:"no-store"});
+// V20.29: a do TikTok vem pela rota própria (mesma janela de impressão).
+async function imprimirEtiquetaPdfV1895(pedido, data, rota = "/expedicao/api/etiqueta-ml-pdf"){
+  const r=await fetch(`${rota}?pedido=${encodeURIComponent(pedido)}`,{credentials:"same-origin",cache:"no-store"});
   if(!r.ok){
     let msg=`HTTP ${r.status}`;
     try{msg=(await r.json()).error||msg;}catch(_){}
@@ -3501,6 +3505,10 @@ function prepararDadosImpressaoMarketplace(resultadoEtiqueta) {
   } else if (marketplace === "magalu") {
     if (!registro.envio) throw new Error("A etiqueta de envio não está disponível.");
     data = [registro.envio];
+  } else if (marketplace === "tiktok") {
+    // V20.29: o registro guarda só o marcador; o PDF é baixado na hora.
+    if (!String(registro.envio || "").startsWith("TIKTOK_PDF:")) throw new Error("A etiqueta do TikTok não está disponível.");
+    data = [registro.envio];
   } else {
     throw new Error("Marketplace não reconhecido para impressão automática.");
   }
@@ -3583,6 +3591,10 @@ async function aguardarImpressaoRemota(jobId, limiteMs = 90000) {
 
 async function imprimirDadosComFallback(pedido, marketplace, data, reprint = false) {
   const badge = document.getElementById("qzStatusBadge");
+  // V20.29: TikTok imprime sempre em PDF (o TikTok entrega PDF), em qualquer filial.
+  if (normalizarMarketplace(marketplace) === "tiktok") {
+    return await imprimirEtiquetaPdfV1895(pedido, data, "/expedicao/api/etiqueta-tiktok-pdf");
+  }
   // V18.95: filial sem Zebra (Bauru) imprime a etiqueta do ML em PDF na térmica comum.
   if (filialEfetivaConferenciaV1895() === "bauru" && normalizarMarketplace(marketplace) === "mercado_livre") {
     return await imprimirEtiquetaPdfV1895(pedido, data);

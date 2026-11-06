@@ -156,3 +156,99 @@ class Etiqueta(Base):
         linha = self._linha("TT1")
         self.assertEqual(linha.get("Nome Conferência"), "NOME DO ADMIN")
         self.assertEqual(linha["Etiqueta API TikTok"], "VINCULADA")
+
+
+def _get(cliente, rota):
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(cliente.url_base + rota)
+    req.add_header("Cookie", cliente.cookie)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, r.headers.get("Content-Type"), r.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers.get("Content-Type"), exc.read()
+
+
+class Pdf(Base):
+
+    def setUp(self) -> None:
+        super().setUp()
+        S.tiktok_etiqueta_definir(True, "dono")
+        self._importar([_pedido("TT1")])
+        self.enviados.clear()
+
+    def _usuario(self, login, filial):
+        from base import SENHA_ADMIN, Cliente
+        with S.DB_LOCK:
+            S.upsert_app_user(login, login.title(), "operador", True, SENHA_ADMIN, "teste")
+            S.DB.execute("UPDATE app_users SET casa=? WHERE username=?", (filial, login))
+            S.DB.commit()
+        cliente = Cliente(self.url_base)
+        cliente.entrar(login, SENHA_ADMIN, area="conferencia")
+        return cliente
+
+    def test_baixa_o_link_novo_a_cada_impressao(self):
+        with self._api([_pedido("TT1")]), \
+                mock.patch.object(S, "_tiktok_baixar_pdf", return_value=b"%PDF-1.4 teste") as baixar:
+            self.assertTrue(S.tiktok_etiqueta_pdf("TT1", "bauru").startswith(b"%PDF"))
+            S.tiktok_etiqueta_pdf("TT1", "bauru")
+        self.assertEqual(len(self._chamadas("/shipping_documents")), 2, "o link do TikTok vence: pedir de novo a cada impressão")
+        self.assertEqual(baixar.call_args[0][0], DOC_URL)
+
+    def test_link_fora_do_tiktok_recusado_sem_baixar(self):
+        for url in ("https://evil.example.com/x.pdf", "http://p16-oec.tiktokcdn.com/x.pdf"):
+            self.doc_url = url
+            with self._api([_pedido("TT1")]), mock.patch.object(S, "_tiktok_baixar_pdf") as baixar:
+                with self.assertRaises(RuntimeError):
+                    S.tiktok_etiqueta_pdf("TT1", "bauru")
+            baixar.assert_not_called()
+
+    def test_nao_pdf_recusado(self):
+        with self._api([_pedido("TT1")]), mock.patch.object(S, "_tiktok_baixar_pdf", return_value=b"<html>"):
+            with self.assertRaises(RuntimeError):
+                S.tiktok_etiqueta_pdf("TT1", "bauru")
+
+    def test_outra_filial_403(self):
+        with self.assertRaises(PermissionError):
+            S.tiktok_etiqueta_pdf("TT1", "aracatuba")
+        aracatuba = self._usuario("ana", "aracatuba")
+        status, _, corpo = _get(aracatuba, "/api/etiqueta-tiktok-pdf?pedido=TT1")
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(corpo).get("code"), "OUTRA_FILIAL")
+
+    def test_bauru_baixa_pela_rota(self):
+        bauru = self._usuario("lucas", "bauru")
+        with self._api([_pedido("TT1")]), mock.patch.object(S, "_tiktok_baixar_pdf", return_value=b"%PDF-1.4 x"):
+            status, tipo, corpo = _get(bauru, "/api/etiqueta-tiktok-pdf?pedido=TT1")
+        self.assertEqual(status, 200)
+        self.assertEqual(tipo, "application/pdf")
+        self.assertTrue(corpo.startswith(b"%PDF"))
+
+    def test_fora_da_fila_404(self):
+        with self.assertRaises(ValueError):
+            S.tiktok_etiqueta_pdf("NAOEXISTE", "bauru")
+        status, _, _ = _get(self.cliente, "/api/etiqueta-tiktok-pdf?pedido=NAOEXISTE")
+        self.assertEqual(status, 404)
+
+
+class TelaConferencia(TesteNoromak):
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.html = (Path(S.__file__).resolve().parent / "APP" / "conferencia.html").read_text(encoding="utf-8")
+
+    def _funcao(self, nome):
+        inicio = self.html.index(f"function {nome}(")
+        return self.html[inicio:self.html.index("\n}\n", inicio)]
+
+    def test_conferencia_imprime_tiktok_pelo_pdf(self):
+        self.assertIn('includes("tiktok")) return "tiktok"', self._funcao("normalizarMarketplace"))
+        self.assertIn("/expedicao/api/etiqueta-tiktok-pdf", self.html)
+        fallback = self._funcao("imprimirDadosComFallback")
+        self.assertIn('=== "tiktok"', fallback)
+        self.assertLess(fallback.index('=== "tiktok"'), fallback.index('=== "bauru"'),
+                        "o TikTok imprime em PDF em qualquer filial, antes da regra do ML de Bauru")
+        self.assertIn('marketplace === "tiktok"', self._funcao("prepararDadosImpressaoMarketplace"))
+        self.assertIn('"TikTok Shop"', self._funcao("nomeMarketplace"))
+        self.assertNotIn("nkToast", self.html, "a Conferência fica com alert() (trava o leitor de propósito)")

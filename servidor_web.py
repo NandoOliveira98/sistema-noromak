@@ -12271,6 +12271,40 @@ def ml_etiqueta_pdf(pedido: str, filial: str) -> bytes:
     return bruto
 
 
+# V20.29: hosts aceitos para o PDF da etiqueta do TikTok (link fora deles = recusado sem baixar).
+TIKTOK_PDF_HOSTS = (".tiktokcdn.com", ".tiktokcdn-us.com", ".ibytedtos.com", ".tiktokglobalshop.com")
+
+
+def _tiktok_baixar_pdf(url: str) -> bytes:
+    """Só a rede. Isolada para teste."""
+    with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=30) as resp:
+        return resp.read()
+
+
+def tiktok_etiqueta_pdf(pedido: str, filial: str) -> bytes:
+    """V20.29: etiqueta do TikTok em PDF, mesmo contrato do ml_etiqueta_pdf. Pede o link ao
+    TikTok a cada impressão (o link vence; nunca é guardado)."""
+    with DB_LOCK:
+        linhas = _filial_linhas_do_pedido(pedido)
+    if not linhas:
+        raise ValueError(f"Pedido {pedido} não está na fila.")
+    if filial != FILIAL_TODAS and not any(filial_da_linha(r) == filial for r in linhas):
+        raise PermissionError(f"O pedido {pedido} é de outra filial.")
+    pacote = next((str(r.get("PacoteTikTok") or "").strip() for r in linhas
+                   if str(r.get("PacoteTikTok") or "").strip()), "")
+    if not pacote:
+        raise ValueError(f"Pedido {pedido} ainda sem pacote do TikTok.")
+    url = tiktok_documento_url(pacote)
+    alvo = urlparse(url)
+    host = (alvo.hostname or "").lower()
+    if alvo.scheme != "https" or not any(host.endswith(h) for h in TIKTOK_PDF_HOSTS):
+        raise RuntimeError("Link da etiqueta fora do TikTok.")
+    bruto = _tiktok_baixar_pdf(url)
+    if not bruto.startswith(b"%PDF"):
+        raise RuntimeError("O TikTok não devolveu a etiqueta em PDF.")
+    return bruto
+
+
 def pedido_mover_filial(pedido: str, filial: str, usuario: str) -> dict[str, Any]:
     """V18.95: o ADMIN muda a filial que confere o pedido (decisão do dono, 10/10). Grava
     pelo save_storage como ADMIN: vira override do campo Casa e a importação do ML não
@@ -40985,8 +41019,10 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = session_context(self)
             self.send_json({"authenticated": bool(ctx), "user": ctx} if ctx else {"authenticated": False})
             return
-        if path == "/api/etiqueta-ml-pdf":
+        if path in ("/api/etiqueta-ml-pdf", "/api/etiqueta-tiktok-pdf"):
             # V18.95: etiqueta do ML em PDF para a filial sem Zebra (Bauru).
+            # V20.29: a do TikTok (Bauru) também, pela mesma rota com outra função.
+            tiktok = path == "/api/etiqueta-tiktok-pdf"
             ctx = self.auth()
             if ctx is None:
                 return
@@ -40995,7 +41031,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             pedido = str((query.get("pedido") or [""])[0] or "").strip()
             try:
-                pdf = ml_etiqueta_pdf(pedido, self.filial_da_requisicao(ctx))
+                pdf = (tiktok_etiqueta_pdf if tiktok else ml_etiqueta_pdf)(pedido, self.filial_da_requisicao(ctx))
             except PermissionError as exc:
                 self.send_json({"ok": False, "error": str(exc), "code": "OUTRA_FILIAL"}, 403)
                 return
@@ -41005,7 +41041,7 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 502)
                 return
-            audit(ctx["username"], "etiqueta.ml.pdf", pedido)
+            audit(ctx["username"], "etiqueta.tiktok.pdf" if tiktok else "etiqueta.ml.pdf", pedido)
             self.send_response(200)
             self.send_security_headers()
             self.send_header("Content-Type", "application/pdf")
