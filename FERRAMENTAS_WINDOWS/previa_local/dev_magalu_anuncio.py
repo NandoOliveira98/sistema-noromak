@@ -23,9 +23,10 @@ def instalar(S):
         if path == "/seller/v1/portfolios/categories/hierarchy":
             return {"results": []}
         if path.endswith("/attributes"):
-            return {"results": [{"name": "Volume", "display_name": "Volume", "required": "required",
+            return {"results": [{"name": "Volume", "display_name": "Volume", "required": "required", "variation": True,
                                  "choices": ["300 ml", "500 ml", "1 L", "4 L"]},
-                                {"name": "Cor", "required": "optional", "choices": None}]}
+                                {"name": "Cor", "required": "optional", "choices": None, "variation": True},
+                                {"name": "Dimensões do Produto", "required": "optional", "variation": False}]}
         if path.endswith("/datasheet"):
             return {"results": [{"name": "Fabricante", "required": "required"}, {"name": "Modelo", "required": "recommended"},
                                 {"name": "Garantia", "required": "optional"}]}
@@ -45,7 +46,8 @@ def instalar(S):
             if sku in skus:
                 leituras[sku] += 1
                 if leituras[sku] >= 2:
-                    return {"sku": sku, "status": "PUBLISHED", "title": skus[sku]["title"]}
+                    return {"sku": sku, "status": "PUBLISHED", "title": skus[sku]["title"],
+                            "extra_data": skus[sku].get("extra_data") or []}
             raise S.MagaluRecusou("Magalu HTTP 404: not found", {"message": "not found"}, 404)
         if path.startswith("/v0/traces/"):
             return {"results": traces.get(path.rsplit("/", 1)[1], [])}

@@ -959,6 +959,13 @@ thread** (`magalu_acompanhar_pendentes_fundo`, a volta do estoque espera ≤ 15 
 ainda não mostrado = `ignorado` "aguardando a Magalu" (não conta erro nem para o Automático), releitura 2+4+6 s. SKU só com letras,
 números, `.`, `-`, `_`. Republicar limpa a remoção do Admin (reinclusão explícita). Trace com falha guardado na amostra. Token:
 `magalu_access_token(force=True, recusado=)` não renova de novo se outro já renovou. Teste: classe `Revisao` do mesmo arquivo.
+**2ª revisão (só das correções):** o SKU é reconhecido como nosso pela **marca do envio** gravada no próprio produto
+(`extra_data` `noromak_envio` = `rid:quando`, que o GET devolve; sem `extra_data` na resposta vale o título igual a um rascunho que
+enviou) — título mudado pela Magalu não perde o produto, título repetido por outra ferramenta não o toma; trace com erro zera o
+`enviado_em`; boot só acompanha envio posterior à reserva (`reservado_em`); o estoque inicial faz POST quando o GET do estoque dá 404;
+Apollo sem leitura não gasta tentativa (só o prazo); atributos paginados (`_limit` 100) e os que não são de variação vão para a ficha
+técnica; estoque aceito e não mostrado 3 vezes seguidas = erro (`_MAGALU_ESTOQUE_SEM_MOSTRAR`); a trava/intervalo só sai quando o
+rascunho sai de `aguardando`; o lote do worker vai pelos há mais tempo sem conferir; estoque com espera 12 s por chamada e releitura 2+3 s.
 
 **V20.26 — fase 3: controle de estoque dos anúncios do ML** (decisões do dono 05/11; plano
 `docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md`). **Exceção à regra "o Noromak nunca grava estoque": o Noromak grava

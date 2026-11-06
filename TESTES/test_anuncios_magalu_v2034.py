@@ -31,6 +31,8 @@ class MagaluFalsa:
         self.nao_muda = set()
         self.branches = {}
         self.filhas = {}         # categoria -> subcategorias (hierarchy?parent_id=)
+        self.attrs_extras = 0    # atributos a mais (paginacao)
+        self.estoque_404 = False  # SKU novo sem estoque: o GET do estoque da 404
 
     def __call__(self, method, path, params=None, payload=None, *, timeout=35):
         self.chamadas.append((method, path, params, payload))
@@ -42,10 +44,15 @@ class MagaluFalsa:
                                 for f in self.filhas.get(params["parent_id"], [])]}
         if path.endswith("/attributes"):
             assert path.startswith("/seller/v1/portfolios/categories/"), path
-            return {"results": [{"name": "Volume", "display_name": "Volume", "required": "required",
-                                 "choices": ["500 ml", "1 L"], "active": True},
-                                {"name": "Cor", "required": "optional", "choices": None},
-                                {"name": "Antigo", "required": "required", "active": False}]}
+            base = [{"name": "Volume", "display_name": "Volume", "required": "required", "variation": True,
+                     "choices": ["500 ml", "1 L"], "active": True},
+                    {"name": "Cor", "required": "optional", "choices": None, "variation": True},
+                    {"name": "Antigo", "required": "required", "active": False, "variation": True},
+                    {"name": "Dimensões do Produto", "required": "optional", "variation": False}]
+            extra = [{"name": f"Extra {i}", "required": "optional", "variation": False} for i in range(self.attrs_extras)]
+            todos = base + extra
+            off, lim = int((params or {}).get("_offset") or 0), int((params or {}).get("_limit") or 50)
+            return {"results": todos[off:off + lim]}
         if path.endswith("/datasheet"):
             return {"results": [{"name": "Fabricante", "required": "required"}, {"name": "Modelo", "required": "recommended"}]}
         if path == "/seller/v1/portfolios/skus" and method == "POST":
@@ -57,7 +64,10 @@ class MagaluFalsa:
         if path.startswith("/seller/v1/portfolios/skus/"):
             sku = path.rsplit("/", 1)[1]
             if sku in self.skus and self.aparece_depois <= 0:
-                return {"sku": sku, "status": "PUBLISHED", "title": self.skus[sku]["title"]}
+                saida = {"sku": sku, "status": "PUBLISHED", "title": self.skus[sku]["title"]}
+                if "extra_data" in self.skus[sku]:
+                    saida["extra_data"] = self.skus[sku]["extra_data"]
+                return saida
             if sku in self.skus:
                 self.aparece_depois -= 1
             raise S.MagaluRecusou("Magalu HTTP 404: not found", {"message": "not found"}, 404)
@@ -76,7 +86,7 @@ class MagaluFalsa:
         if path.startswith("/seller/v1/portfolios/stocks/"):
             sku = path.rsplit("/", 1)[1]
             if method == "GET":
-                if sku not in self.skus:
+                if sku not in self.skus or (self.estoque_404 and sku not in self.estoque):
                     raise S.MagaluRecusou("Magalu HTTP 404", {}, 404)
                 if sku not in self.estoque:
                     return {"results": []}
@@ -362,7 +372,7 @@ class Revisao(Base):
         self.mg.skus["TUNAP109"] = {"title": "Produto de outra ferramenta"}  # aparece um SKU alheio com o codigo
         a = S.magalu_acompanhar(r["id"], forcar=True)
         self.assertEqual(a["situacao"], "erro")
-        self.assertIn("outro título", a["erros"][0])
+        self.assertIn("não é o que o Noromak enviou", a["erros"][0])
         self.assertEqual((self.mg.escritas("/prices/"), self.mg.escritas("/stocks/")), ([], []))
         with S.DB_LOCK:
             self.assertIsNone(S.DB.execute("SELECT 1 FROM anuncio_canal_v2023 WHERE canal='magalu'").fetchone())
@@ -498,6 +508,77 @@ class Revisao(Base):
             st, d = self.cliente.pedir("POST", "/api/anuncios/magalu/acompanhar", {"id": r["id"]})
         self.assertEqual((st, d["rascunho"]["situacao"]), (200, "aguardando"))
 
+    def test_sku_e_nosso_pela_marca_do_envio_mesmo_com_o_titulo_mudado(self):
+        r = self.conferido()
+        self.mg.aparece_depois = 1
+        self.publicar(r)
+        corpo = self.mg.skus["TUNAP109"]
+        self.assertEqual(corpo["extra_data"][0]["name"], "noromak_envio")
+        self.assertTrue(corpo["extra_data"][0]["value"].startswith(f"{r['id']}:"))
+        corpo["title"] = "Título que a Magalu mudou"  # moderacao/catalogo
+        S.magalu_acompanhar(r["id"], forcar=True)
+        self.assertEqual(S.magalu_acompanhar(r["id"], forcar=True)["situacao"], "publicado")
+
+    def test_mesmo_titulo_sem_a_marca_nao_e_nosso(self):
+        r = self.conferido()
+        self.mg.criar_erro = None
+        self.mg.trace = [{"severity": "error", "message": "recusado"}]
+        self.mg.nao_cria = True
+        self.publicar(r)
+        self.assertEqual(S.magalu_acompanhar(r["id"], forcar=True)["situacao"], "erro")
+        self.assertIsNone(S.magalu_rascunho_ler(r["id"])["enviado_em"], "trace recusou: nada criado, o envio não vale")
+        r2 = self.conferido()
+        # outra ferramenta criou com o mesmo codigo e o mesmo titulo (com extra_data de outra pessoa)
+        self.mg.skus["TUNAP109"] = {"title": r2["titulo"], "extra_data": [{"name": "IdProduct", "value": "80527"}]}
+        res = self.publicar(r2)
+        self.assertEqual(res["situacao"], "validado")
+        self.assertIn("Já existe", res["erros"][0])
+
+    def test_estoque_inicial_cria_a_linha_quando_o_get_da_404(self):
+        r = self.conferido()
+        self.mg.estoque_404 = True
+        self.publicar(r)
+        a = S.magalu_acompanhar(r["id"], forcar=True)
+        self.assertEqual([c[0] for c in self.mg.escritas("/stocks/")], ["POST"])
+        self.assertEqual(a["situacao"], "publicado")
+
+    def test_apollo_sem_leitura_nao_gasta_tentativa(self):
+        r = self.conferido()
+        self.publicar(r)
+        with mock.patch.object(S, "anuncio_ficha_payload", side_effect=RuntimeError("Apollo fora")):
+            for _ in range(S.MAGALU_ETAPA_TENTATIVAS + 2):
+                a = S.magalu_acompanhar(r["id"], forcar=True)
+        self.assertEqual((a["situacao"], a["tentativas"]), ("aguardando", 0))
+
+    def test_atributos_paginados_e_os_que_nao_sao_de_variacao_vao_para_a_ficha(self):
+        self.mg.attrs_extras = 120
+        d = S.magalu_categoria_atributos(CAT)
+        self.assertEqual([a["nome"] for a in d["atributos"]], ["Volume", "Cor"])
+        nomes = [a["nome"] for a in d["ficha_tecnica"]]
+        self.assertIn("Dimensões do Produto", nomes)
+        self.assertIn("Extra 119", nomes, "a página 2 também vem")
+
+    def test_reservado_depois_do_envio_antigo_volta_a_validado_no_boot(self):
+        r = self.conferido()
+        with S.DB_LOCK:  # envio de uma tentativa ANTERIOR (ex.: "Não foi criado")
+            S.DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET enviado_em='2026-01-01T00:00:00+00:00' WHERE id=?",
+                         (r["id"],))
+            S.DB.commit()
+        S.magalu_publicar_reservar(r["id"], "admin")
+        S.ensure_anuncios_schema()
+        self.assertEqual(S.magalu_rascunho_ler(r["id"])["situacao"], "validado")
+
+    def test_intervalo_nao_apaga_a_trava_de_quem_ainda_aguarda(self):
+        r = self.conferido()
+        self.mg.aparece_depois = 5
+        self.publicar(r)
+        S.magalu_acompanhar(r["id"], forcar=True)
+        trava = S._magalu_acompanhar_trava(r["id"])
+        S.magalu_acompanhar(r["id"])  # cai no intervalo de 20 s
+        self.assertIs(S._magalu_acompanhar_trava(r["id"]), trava)
+        self.assertIn(r["id"], S._MAGALU_ACOMPANHAR_VISTO)
+
+
     def test_republicar_limpa_a_remocao_do_admin(self):
         r = self.conferido()
         with S.DB_LOCK:
@@ -558,13 +639,17 @@ class MagaluEstoque(EstoqueBase):
         self.assertFalse(r["ok"])
         self.assertEqual(self.mg.escritas("/stocks/"), [])
 
-    def test_aceitou_sem_mostrar_e_erro(self):
+    def test_aceitou_sem_mostrar_espera_e_na_3a_vez_e_erro(self):
         self.inserir_magalu()
         self.mg.estoque["P1"] = 5
         self.mg.nao_muda.add("P1")
+        S._MAGALU_ESTOQUE_SEM_MOSTRAR.clear()
         r = S.anuncio_estoque_manual("magalu", "P1", 8, "luis")
-        self.assertFalse(r["ok"])
-        self.assertIn("mostra", r["erro"])
+        self.assertEqual((r["ok"], r["resultado"]), (False, "ignorado"), "aceito e ainda não mostrado: espera")
+        S.anuncio_estoque_manual("magalu", "P1", 8, "luis")
+        r = S.anuncio_estoque_manual("magalu", "P1", 8, "luis")
+        self.assertEqual(r["resultado"], "erro", "sem laço calado")
+        self.assertIn("3 vezes", r["erro"])
 
     def test_automatico_mesmo_disponivel_dos_outros_canais(self):
         self.inserir_magalu(modo="automatico", estoque=3)
