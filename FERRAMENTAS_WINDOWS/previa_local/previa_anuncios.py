@@ -186,6 +186,8 @@ S._PREVIA_UP = {"MLB1129555578": {"up": "MLBU900000001", "locations": [
 S._PREVIA_ESTOQUE_NAO_MUDA = set()
 import dev_criar_ml  # noqa
 dev_criar_ml.instalar(S)
+import dev_shopee_anuncio  # noqa  (V20.32: Shopee simulada)
+dev_shopee_anuncio.instalar(S)
 
 # Anuncio de teste ja publicado (ML simulado), para a lista nao comecar vazia. Pelas rotas reais, logo depois do start.
 def _semear_anuncio_de_teste():

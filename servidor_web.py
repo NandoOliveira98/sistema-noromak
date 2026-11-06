@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.31-AGENTE-ANUNCIOS"
+APP_VERSION = "20.32-ANUNCIOS-SHOPEE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -20101,12 +20101,15 @@ def _exp_endereco_shopee(order_sn: str) -> dict[str, Any]:
     return {"endereco": endereco, "falta": "", "bairro_padrao": bairro_padrao}
 
 
-def exp_endereco_do_texto(texto: Any) -> dict[str, Any]:
+def exp_endereco_do_texto(texto: Any, bairro: Any = "") -> dict[str, Any]:
     """V19.36: endereço como a página da Shopee mostra (a API devolve mascarado):
     "R Jesuíno Antônio, 342, Casa, Osasco, São Paulo, 06045080" → rua, número,
     complemento, cidade, estado e CEP (o fim é sempre cidade, estado, CEP). Sem
-    bairro na página → CENTRO (decisão do dono). Sem acento, como no ML."""
+    bairro na página → CENTRO (decisão do dono). Sem acento, como no ML.
+    V20.33: o TikTok traz o bairro (detalhe do pedido) e a extensão Linx 0.49 manda à parte;
+    mascarado ou vazio = CENTRO, como antes."""
     texto = str(texto or "").strip()
+    bairro_lido = "" if "*" in str(bairro or "") else _exp_limpo(bairro)[:50]
     if not texto or "*" in texto:
         return {"endereco": None, "falta": "a página não mostrou o endereço"}
     partes = [p.strip() for p in texto.split(",") if p.strip()]
@@ -20120,14 +20123,14 @@ def exp_endereco_do_texto(texto: Any) -> dict[str, Any]:
         numero = "" if meio[0].upper().replace("/", "") == "SN" else meio[0]
         meio = meio[1:]
     endereco = {"rua": _exp_limpo(partes[0])[:120], "numero": numero[:10],
-                "complemento": _exp_limpo(", ".join(meio))[:60], "bairro": EXP_BAIRRO_PADRAO_SHOPEE,
+                "complemento": _exp_limpo(", ".join(meio))[:60], "bairro": bairro_lido or EXP_BAIRRO_PADRAO_SHOPEE,
                 "cep": cep, "cidade": cidade[:50],
                 "uf": estado if len(estado) == 2 else EXP_UF_POR_NOME.get(estado, "")}
     if not (endereco["rua"] and endereco["cidade"] and endereco["uf"]):
         return {"endereco": None, "falta": "não entendi o endereço da página"}
     if not endereco["complemento"]:
         del endereco["complemento"]
-    return {"endereco": endereco, "falta": "", "bairro_padrao": True}
+    return {"endereco": endereco, "falta": "", "bairro_padrao": not bairro_lido}
 
 
 def exp_endereco_entrega(pedido: str) -> dict[str, Any]:
@@ -20184,7 +20187,7 @@ EXP_NOME_ROTULO = re.compile(r"^(TIPO DE CONTRIBUINTE|NAO CONTRIBUINTE|CONTRIBUI
 
 
 def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any = "",
-                           endereco_texto: Any = "", criar: bool = True) -> dict[str, Any]:
+                           endereco_texto: Any = "", criar: bool = True, bairro: Any = "") -> dict[str, Any]:
     """Botão do cadastro pela porta (V19.32, contrato real do Guilherme de 15/10):
     buscar pelo CPF -> (não cadastrado) criar -> atualizar nome + contatos + endereço -> crédito.
     Ligado com EXP_CADASTRO_API=1."""
@@ -20221,12 +20224,12 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
         end = {"endereco": None, "falta": f"não consegui ler o envio no ML ({exc})"}
     if not end["endereco"] and endereco_texto:
         # V19.36: a API (Shopee) mascarou; vale o endereço que a página mostrou.
-        end = exp_endereco_do_texto(endereco_texto)
+        end = exp_endereco_do_texto(endereco_texto, bairro)
     endereco = end["endereco"]
     if not endereco:
         avisos.append("Endereço não enviado: " + end["falta"] + ".")
     elif end.get("bairro_padrao"):
-        avisos.append(f"Bairro gravado como {EXP_BAIRRO_PADRAO_SHOPEE}: a Shopee não informa o bairro.")
+        avisos.append(f"Bairro gravado como {EXP_BAIRRO_PADRAO_SHOPEE}: a página não informou o bairro.")
     criado = False
     nome_apollo = ""
     with EXP_PORTA_LOCK:
@@ -45177,7 +45180,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     if pedido and len(doc) in (11, 14) and nome_nf:
                         salvar_cliente_fiscal(pedido, doc, nome_nf, fonte="extensao", usuario=usuario)
                     resultado = exp_cadastro_atualizar(pedido, usuario, body.get("cliente"), body.get("ie"),
-                                                       str(body.get("endereco_texto") or "")[:300])
+                                                       str(body.get("endereco_texto") or "")[:300],
+                                                       bairro=str(body.get("bairro") or "")[:80])
                 self.send_json(resultado, 200 if resultado.get("ok") else 409)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)

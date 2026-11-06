@@ -562,6 +562,25 @@ class CadastroV1932(unittest.TestCase):
             "rua": "R JESUINO ANTONIO", "numero": "342", "complemento": "CASA", "bairro": "CENTRO",
             "cep": "06045080", "cidade": "OSASCO", "uf": "SP"})
 
+    def test_v2033_tiktok_endereco_com_bairro_da_extensao(self):
+        # 06/11: o detalhe do pedido do TikTok traz o bairro (a Shopee não); a extensão 0.49 manda junto.
+        gravar_como_admin([linha(PEDIDO, "2050171", Marketplace="TIKTOK")])
+        S.salvar_cliente_fiscal(PEDIDO, "27247410809", "DOUGLAS DOS SANTOS JESUS", linx_cliente="83070",
+                                fonte="teste", usuario="teste")
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True):
+            r = S.exp_cadastro_atualizar(PEDIDO, "luis", endereco_texto="Avenida Guarapiranga, 2500, AP 74A, São Paulo, SP, 04911005",
+                                         bairro="Guarapiranga")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(porta.corpo("cliente/atualizar")["endereco"], {
+            "rua": "AVENIDA GUARAPIRANGA", "numero": "2500", "complemento": "AP 74A", "bairro": "GUARAPIRANGA",
+            "cep": "04911005", "cidade": "SAO PAULO", "uf": "SP"})
+        self.assertFalse(any("Bairro gravado" in a for a in r["avisos"]))
+        # Sem bairro (ou mascarado) continua o padrão, com aviso.
+        e = S.exp_endereco_do_texto("Avenida Guarapiranga, 2500, São Paulo, SP, 04911005", bairro="Gu****")
+        self.assertEqual(e["endereco"]["bairro"], "CENTRO")
+        self.assertTrue(e["bairro_padrao"])
+
     def test_v1936_texto_da_pagina(self):
         e = S.exp_endereco_do_texto("Avenida Amazonas, 95, Apartamento 202, Timóteo, Minas Gerais, 35180628")["endereco"]
         self.assertEqual((e["rua"], e["numero"], e["complemento"], e["cidade"], e["uf"], e["bairro"]),

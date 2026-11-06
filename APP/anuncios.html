@@ -49,6 +49,7 @@ tr.clica{cursor:pointer}
 .pt{width:8px;height:8px;border-radius:50%;background:var(--nk-ok);flex:none}
 .pt.w{background:var(--nk-warn)}.pt.b{background:var(--nk-bad)}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.g3{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px}
 .g4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .inteiro{grid-column:1/-1}
 .g2>.nk-campo,.g4>.nk-campo{align-content:start}
@@ -148,7 +149,7 @@ const SELO_KIT = '<span class="nk-selo warn" title="O SKU parece dois códigos j
 const qtdOuSem = v => v == null ? SEM_LEITURA : esc(String(v));
 const CANAL = {ml: "Mercado Livre", shopee: "Shopee", magalu: "Magalu", tiktok: "TikTok Shop", amazon: "Amazon"};
 const CANAL_CURTO = {ml: "ML", shopee: "Shopee", magalu: "Magalu", tiktok: "TikTok", amazon: "Amazon"};
-const CONTA = {aracatuba: "Araçatuba", bauru: "Bauru"};
+const CONTA = {aracatuba: "Araçatuba", bauru: "Bauru", shopee: "Shopee · Araçatuba"};  // V20.32: conta de estoque da Shopee
 const FILIAIS = [["aracatuba", "Araçatuba"], ["bauru", "Bauru"]];
 // V20.24: seletor de casa no topo (Todas / Araçatuba / Bauru). Vale para a lista e para a ficha; guardado neste navegador.
 const CASA_CHAVE = "nk_anuncios_casa_v2024";
@@ -910,11 +911,14 @@ function desenharAnuncios() {
         </tbody></table></div></details>` : ""}
     </section>
     <section class="nk-painel" id="secEstoque" hidden></section>
-    <section class="nk-painel" id="secRasc"></section>`;
+    <section class="nk-painel" id="secRasc"></section>
+    <section class="nk-painel" id="secShopee" hidden></section>`;
   desenharEstoqueAnuncios();  // V20.26
   carregarEstoqueAnuncios();
   desenharRascunhos();  // V20.24
   carregarRascunhos();
+  desenharShopee();  // V20.32
+  carregarShopee();
 }
 async function passarNoromak({canal, conta, id}) {
   const ok = await nkConfirmar(`Você já desativou este anúncio na Alephee?\nO ${id} passa a ser controlado pelo Noromak. Se a Alephee continuar ligada nele, as duas vão mexer no mesmo estoque.`, {ok: "Já desativei", cancelar: "Ainda não", perigo: false});
@@ -951,11 +955,15 @@ async function reincluirAnuncio({canal, conta, id}) {
 // Automático = Apollo da filial − vendido e não baixado, enviado conforme o modo da conta (Simulação/Lote/Automático).
 // Sem leitura = não envia (nunca zero). Gravar = só perfil Admin; ligar o Automático da conta = senha + 2FA do OWNER.
 const ESTQ_MODO_CONTA = {simulacao: "Simulação", lote: "Lote", automatico: "Automático"};
-const ESTQ_MODO_TXT = {simulacao: "Calcula e registra; nada vai ao ML.", lote: "Envia só no clique em “Enviar agora”.",
-  automatico: "Envia sozinho ao ML quando o número muda."};
+const ESTQ_MODO_TXT = {simulacao: "Calcula e registra; nada é enviado ao marketplace.", lote: "Envia só no clique em “Enviar agora”.",
+  automatico: "Envia sozinho ao marketplace quando o número muda."};
 const ESTQ_RES = {ok: ["Enviado", "ok"], erro: ["Erro", "bad"], simulado: ["Simulado", "info"], ignorado: ["Ignorado", ""]};
-const podeEstoque = a => a.canal === "ml" && a.controle === "noromak" && a.logistica !== "fulfillment";
-const chaveEst = a => a.conta + "|" + a.anuncio_id;
+const podeEstoque = a => (a.canal === "ml" || a.canal === "shopee") && a.controle === "noromak" && a.logistica !== "fulfillment";
+// V20.32: a conta de estoque da Shopee é "shopee" (a linha é conta aracatuba); o ML usa a casa
+const contaEst = a => a.canal === "shopee" ? "shopee" : a.conta;
+const mktEst = a => a.canal === "shopee" ? "Shopee" : "ML";
+const noMkt = a => a.canal === "shopee" ? "na Shopee" : "no ML";
+const chaveEst = a => a.canal + "|" + a.conta + "|" + a.anuncio_id;
 const numEst = v => v == null ? "?" : Number(v).toLocaleString("pt-BR");
 let EST = {};        // por anúncio da ficha: GET /api/anuncios/estoque?anuncio_id= (ou {erro})
 let EST_DIG = {};    // quantidade digitada e ainda não enviada (sobrevive ao redesenho)
@@ -984,9 +992,9 @@ function cartaoEstoque(a) {
   const ultimo = EST_FALHA[k] || (d && d.log ? d.log.find(l => l.para != null) : null);
   let corpo;
   if (modo === "manual") {
-    corpo = PODE ? `<div class="barra" style="margin:0"><span class="muted">Quantidade no ML</span>
-        <input class="qtd" type="number" min="0" max="99999" step="1" inputmode="numeric" aria-label="Quantidade a enviar ao ML" value="${esc(EST_DIG[k] ?? (a.estoque ?? ""))}" data-chave="${esc(k)}" oninput="EST_DIG[this.dataset.chave]=this.value" onkeydown="if(event.key==='Enter')this.nextElementSibling.click()">
-        <button type="button" class="nk-btn mini pri" ${dadosAnuncio(a)} onclick="enviarEstoqueManual(this)">Enviar ao ML</button>
+    corpo = PODE ? `<div class="barra" style="margin:0"><span class="muted">Quantidade ${noMkt(a)}</span>
+        <input class="qtd" type="number" min="0" max="99999" step="1" inputmode="numeric" aria-label="Quantidade a enviar ao marketplace" value="${esc(EST_DIG[k] ?? (a.estoque ?? ""))}" data-chave="${esc(k)}" oninput="EST_DIG[this.dataset.chave]=this.value" onkeydown="if(event.key==='Enter')this.nextElementSibling.click()">
+        <button type="button" class="nk-btn mini pri" ${dadosAnuncio(a)} onclick="enviarEstoqueManual(this)">Enviar</button>
         <span class="muted">Vai na hora; o Noromak relê o anúncio para confirmar.</span></div>`
       : `<div class="muted">Manual: o estoque só muda quando o Admin digita e envia.</div>`;
   } else if (!d) corpo = `<div class="muted">Calculando…</div>`;
@@ -995,18 +1003,18 @@ function cartaoEstoque(a) {
     const it = (d.itens || []).find(i => i.anuncio_id === a.anuncio_id), cfg = (d.config || {}).modo || "simulacao";
     const de = it ? esc(numEst(it.referencia)) : "", para = it ? esc(numEst(it.calculado)) : "";
     if (!it) corpo = `<div class="muted">Sem cálculo para este anúncio.</div>`;
-    else if (it.calculado == null) corpo = `<div class="nk-aviso">Não envia: ${esc(it.motivo || "sem leitura")}. O estoque no ML fica como está (sem leitura nunca vira zero).</div>`;
+    else if (it.calculado == null) corpo = `<div class="nk-aviso">Não envia: ${esc(it.motivo || "sem leitura")}. O estoque ${noMkt(a)} fica como está (sem leitura nunca vira zero).</div>`;
     else {
       const muda = !it.muda ? "Igual ao ML: nada a enviar."
-        : cfg === "simulacao" ? `Mudaria de ${de} para ${para} — a conta ${esc(CONTA[a.conta] || a.conta)} está em Simulação: nada é enviado.`
+        : cfg === "simulacao" ? `Mudaria de ${de} para ${para} — a conta ${esc(CONTA[contaEst(a)] || a.conta)} está em Simulação: nada é enviado.`
         : cfg === "lote" ? `Muda de ${de} para ${para} — vai no próximo “Enviar agora” da lista (conta em Lote).`
         : `Muda de ${de} para ${para} — o Automático envia sozinho.`;
-      corpo = contaDoCalculo(it) + `<div class="muted">No ML agora: ${esc(numEst(it.atual_ml))} · ${muda}</div>`
+      corpo = contaDoCalculo(it) + `<div class="muted">${a.canal === "shopee" ? "Na Shopee" : "No ML"} agora: ${esc(numEst(it.atual_ml))} · ${muda}</div>`
         + (cfg === "simulacao" ? `<div class="muted">${esc(doisNumeros(it))}</div>` : "")
         + (it.segurado ? `<div class="nk-aviso">${esc(it.segurado)}</div>` : "");
     }
   }
-  return `<div class="estq-card"><div class="estq-topo">${linkAnuncio(a)}<span class="muted">${esc(CONTA[a.conta] || a.conta)} · ${esc(a.titulo)}</span><span class="esp"></span>
+  return `<div class="estq-card"><div class="estq-topo">${linkAnuncio(a)}<span class="muted">${esc(CONTA[contaEst(a)] || a.conta)} · ${esc(a.titulo)}</span><span class="esp"></span>
       <span class="muted">Controle de estoque</span>${sel}</div>
     ${corpo}<div class="muted">${enviado}</div>${ultimo ? linhaRegistroEst(ultimo) : ""}</div>`;
 }
@@ -1014,21 +1022,21 @@ function desenharEstoqueAnuncios() {
   const el = $("secEstoque"); if (!el || !F) return;
   const lista = (F.anuncios || []).filter(daCasa).filter(podeEstoque);
   el.hidden = !lista.length;
-  el.innerHTML = lista.length ? `<div class="nk-painel-tit"><div><h2>Controle de estoque</h2><p>Só nos anúncios do Mercado Livre controlados pelo Noromak (Full e Alephee ficam de fora). <b>Manual</b>: o número digitado vai na hora para o ML. <b>Automático</b>: Apollo da filial menos o vendido e ainda não baixado (kit = a peça que dá menos); o envio segue o modo da conta, no topo da lista de anúncios.</p></div></div>
+  el.innerHTML = lista.length ? `<div class="nk-painel-tit"><div><h2>Controle de estoque</h2><p>Só nos anúncios do Mercado Livre e da Shopee controlados pelo Noromak (Full e Alephee ficam de fora). <b>Manual</b>: o número digitado vai na hora para o marketplace. <b>Automático</b>: Apollo da filial menos o vendido e ainda não baixado (kit = a peça que dá menos); o envio segue o modo da conta, no topo da lista de anúncios.</p></div></div>
     <div class="estq">${lista.map(cartaoEstoque).join("")}</div>` : "";
 }
 async function carregarEstoqueAnuncios() {
   if (!F) return;
   const cod = F.codigo, lista = (F.anuncios || []).filter(daCasa).filter(podeEstoque);
   await Promise.all(lista.map(async a => {
-    try { EST[chaveEst(a)] = await api(`/api/anuncios/estoque?conta=${encodeURIComponent(a.conta)}&anuncio_id=${encodeURIComponent(a.anuncio_id)}`); }
+    try { EST[chaveEst(a)] = await api(`/api/anuncios/estoque?conta=${encodeURIComponent(contaEst(a))}&anuncio_id=${encodeURIComponent(a.anuncio_id)}`); }
     catch (e) { EST[chaveEst(a)] = {erro: e.message}; }
   }));
   if (F && F.codigo === cod && ABA === "anuncios") desenharEstoqueAnuncios();
 }
-const acharAnuncio = (conta, id) => ((F && F.anuncios) || []).find(x => x.conta === conta && x.anuncio_id === id);
+const acharAnuncio = (conta, id, canal) => ((F && F.anuncios) || []).find(x => x.conta === conta && x.anuncio_id === id && (!canal || x.canal === canal));
 async function trocarModoEstoque(b) {
-  const {conta, id, modo} = b.dataset, a = acharAnuncio(conta, id);
+  const {conta, id, modo, canal} = b.dataset, a = acharAnuncio(conta, id, canal);
   if (!PODE || !a || (a.estoque_modo || "manual") === modo) return;
   // V20.28: SKU com cara de dois códigos: o servidor recusa o Automático até o Admin escolher Peça ou Kit
   if (modo === "automatico" && a.kit_suspeito) { nkToast("O SKU deste anúncio parece dois códigos juntos (kit?). Escolha “Este produto é: Peça” ou “Kit” no topo da ficha antes de ligar o Automático.", "aviso", {duracao: 9000}); return; }
@@ -1038,24 +1046,24 @@ async function trocarModoEstoque(b) {
     : `Passar o ${id} para Manual?\nO Automático deixa de mexer neste anúncio: o estoque só muda quando o Admin digitar e enviar.`;
   if (!await nkConfirmar(txt, {ok: modo === "automatico" ? "Passar para Automático" : "Passar para Manual", perigo: false})) return;
   try {
-    await api("/api/anuncios/estoque/modo", {canal: "ml", conta, anuncio_id: id, modo});
+    await api("/api/anuncios/estoque/modo", {canal: a.canal, conta: contaEst(a), anuncio_id: id, modo});
     nkToast(`${id}: controle de estoque ${modo === "automatico" ? "Automático" : "Manual"}.`, "ok");
     delete EST[chaveEst(a)];
     recarregar();
   } catch (e) { nkToast(e.message, "erro"); }
 }
 async function enviarEstoqueManual(b) {
-  const {conta, id} = b.dataset, a = acharAnuncio(conta, id);
+  const {conta, id, canal} = b.dataset, a = acharAnuncio(conta, id, canal);
   if (!PODE || !a) return;
   const k = chaveEst(a), inp = b.closest(".estq-card").querySelector("input.qtd"), t = String(inp.value || "").trim();
   if (!/^\d{1,5}$/.test(t)) { nkToast("Digite um número inteiro de 0 a 99999.", "aviso"); inp.focus(); return; }
   const q = Number(t), de = a.estoque;
-  if (!await nkConfirmar(`Enviar o estoque ao Mercado Livre?\n${id} (${CONTA[conta] || conta}): de ${de == null ? "sem leitura" : numEst(de)} para ${numEst(q)}.${q === 0 ? "\nCom 0 o anúncio fica sem estoque no ML." : ""}`,
-    {ok: "Enviar ao ML", perigo: q === 0})) return;
+  if (!await nkConfirmar(`Enviar o estoque ao ${a.canal === "shopee" ? "Shopee" : "Mercado Livre"}?\n${id} (${CONTA[contaEst(a)] || conta}): de ${de == null ? "sem leitura" : numEst(de)} para ${numEst(q)}.${q === 0 ? "\nCom 0 o anúncio fica sem estoque no ML." : ""}`,
+    {ok: "Enviar", perigo: q === 0})) return;
   b.disabled = true; b.textContent = "Enviando…";
   delete EST_FALHA[k];
   try {
-    const r = await api("/api/anuncios/estoque/manual", {conta, anuncio_id: id, quantidade: q});
+    const r = await api("/api/anuncios/estoque/manual", {conta: contaEst(a), anuncio_id: id, quantidade: q});
     delete EST_DIG[k];
     nkToast(r.ok ? `Estoque enviado: ${id} de ${numEst(r.antes)} para ${numEst(r.depois)}.` : `${id}: ${r.erro || "o ML não confirmou o estoque."}`,
       r.ok ? "ok" : "erro", {duracao: 12000});
@@ -1072,6 +1080,7 @@ async function enviarEstoqueManual(b) {
 // --- painel "Estoque automático" da lista (um cartão por conta; segue o seletor de casa)
 async function carregarPainelEstoque() {
   const casa = CASA, contas = filiaisVisiveis().map(([f]) => f);
+  if (contas.includes("aracatuba")) contas.push("shopee");  // V20.32: a Shopee de Araçatuba tem o próprio modo
   const res = await Promise.all(contas.map(c => api(`/api/anuncios/estoque?conta=${c}`).catch(e => ({erro: e.message, status: e.status}))));
   if (casa !== CASA || codigoDaUrl()) return;
   PE = {casa, contas: Object.fromEntries(contas.map((c, i) => [c, res[i]]))};
@@ -1121,13 +1130,13 @@ function desenharPainelEstoque() {
     <div class="estq-contas">${contas.map(blocoConta).join("")}</div>
     ${itens.length ? `<details class="rem bloco"><summary>O que mudaria ou está sem número (${itens.length})</summary>
       <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_estoque_mudaria"><thead><tr><th>Conta</th><th>Anúncio</th><th>Produto</th><th class="n">No ML</th><th class="n">Calculado</th><th>Por quê</th></tr></thead>
-      <tbody>${itens.map(i => `<tr><td>${esc(CONTA[i.conta] || i.conta)}</td><td>${linkAnuncio({canal: "ml", anuncio_id: i.anuncio_id})}<div class="muted">${esc(i.titulo)}</div></td>
+      <tbody>${itens.map(i => `<tr><td>${esc(CONTA[i.conta] || i.conta)}</td><td>${linkAnuncio({canal: i.conta === "shopee" ? "shopee" : "ml", anuncio_id: i.anuncio_id})}<div class="muted">${esc(i.titulo)}</div></td>
         <td class="mono"><a href="?codigo=${encodeURIComponent(i.ficha)}&amp;aba=anuncios" data-cod="${esc(i.ficha)}" onclick="event.preventDefault();irPara({codigo:this.dataset.cod,aba:'anuncios'})">${esc(i.ficha)}</a></td>
         <td class="n">${esc(numEst(i.referencia))}</td><td class="n">${i.calculado == null ? SEM_LEITURA : esc(numEst(i.calculado))}</td>
         <td>${esc(i.calculado == null ? i.motivo : motivoCurtoEst(i))}${i.calculado != null && ((PE.contas[i.conta] || {}).config || {}).modo === "simulacao" ? `<div class="muted">${esc(doisNumeros(i))}</div>` : ""}${i.segurado ? `<div class="muted">${esc(i.segurado)}</div>` : ""}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
     <details class="rem bloco"><summary>Registro dos últimos envios (${log.length})</summary>
       <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_estoque_registro"><thead><tr><th>Quando</th><th>Conta</th><th>Anúncio</th><th>Modo</th><th class="n">De</th><th class="n">Para</th><th>Resultado</th><th>Motivo / detalhe</th><th>Por</th></tr></thead>
-      <tbody>${log.map(l => `<tr><td>${quando(l.criado_em)}</td><td>${esc(CONTA[l.conta] || l.conta)}</td><td>${l.anuncio_id ? linkAnuncio({canal: "ml", anuncio_id: l.anuncio_id}) : "conta inteira"}</td>
+      <tbody>${log.map(l => `<tr><td>${quando(l.criado_em)}</td><td>${esc(CONTA[l.conta] || l.conta)}</td><td>${l.anuncio_id ? linkAnuncio({canal: l.canal || "ml", anuncio_id: l.anuncio_id}) : "conta inteira"}</td>
         <td>${esc(MODO_ANU[l.modo] || l.modo)}</td><td class="n">${l.de == null ? "—" : esc(numEst(l.de))}</td><td class="n">${l.para == null ? "—" : esc(numEst(l.para))}</td>
         <td>${selo(l)}</td><td>${esc(l.motivo)}${l.detalhe ? `<div class="muted">${esc(l.detalhe)}</div>` : ""}</td><td>${esc(l.ator)}</td></tr>`).join("")
         || '<tr><td colspan="9" class="vazio">Nada registrado ainda.</td></tr>'}</tbody></table></div></details>`;
@@ -1357,6 +1366,256 @@ async function abrirEstudio() {
 // ---------------------------------------------------------------- V20.24: criar anúncio no ML (rascunho em passos)
 // Ordem do dono: cada passo só libera o seguinte. Cada "Salvar" grava o rascunho com a versão (409 = outra pessoa
 // alterou: o digitado fica na tela). Nada vai ao ML até o "Publicar" (o "Conferir" usa o /items/validate, que não cria).
+
+// --- V20.32: criar anúncio na Shopee (Araçatuba). Um formulário só: a Shopee não tem "conferir sem criar" — o
+// Conferir é do Noromak (limites, atributos, marca e canais que a Shopee publica); só o Publicar cria o anúncio.
+// Peso e medidas vêm da ficha na hora (nunca copiados para o rascunho).
+const SH_SIT = {rascunho: ["Rascunho", ""], validado: ["Conferido", "info"], publicando: ["Publicando…", "warn"],
+  publicado: ["Publicado", "ok"], erro: ["Recusado pela Shopee", "bad"], incerto: ["Confira no Seller Center", "bad"]};
+let SH = {codigo: null, lista: null, erro: "", r: null, f: null, cats: null, defs: null, marcas: null, marcaObrig: false,
+  marcaFicha: null, limites: null, conta: null, ocupado: ""};
+let shContaTimer = null;
+const shAberto = () => !!SH.f;
+const shEditavel = () => !SH.r || EDITAVEL.includes(SH.r.situacao);
+
+async function carregarShopee(forcar) {
+  if (!F || F.naoExiste) { SH.lista = []; desenharShopee(); return; }
+  const cod = F.codigo;
+  if (!forcar && SH.codigo === cod && SH.lista) { desenharShopee(); return; }
+  try {
+    const d = await api(`/api/anuncios/shopee/rascunhos?codigo=${enc(cod)}`);
+    if (!F || F.codigo !== cod) return;
+    if (SH.codigo !== cod) SH = {...SH, r: null, f: null, cats: null, defs: null, marcas: null, conta: null};
+    SH.codigo = cod; SH.lista = d.rascunhos || []; SH.erro = "";
+  } catch (e) { SH.lista = null; SH.erro = e.message; }
+  desenharShopee();
+}
+function shForm(r) {
+  const campos = (F.ficha && F.ficha.campos) || {};
+  return r ? {titulo: r.titulo || "", categoria: r.categoria || "", categoria_nome: r.categoria_nome || "",
+      descricao: r.descricao || "", preco: r.preco == null ? "" : String(r.preco).replace(".", ","),
+      quantidade: r.quantidade == null ? "" : String(r.quantidade), atributos: JSON.parse(JSON.stringify(r.atributos || {})),
+      marca: {...(r.marca || {})}, fotos: [...(r.fotos || [])]}
+    : {titulo: String(campos.nome || "").replace(/\s+/g, " ").trim(), categoria: "", categoria_nome: "",
+      descricao: String(campos.descricao || ""), preco: "", quantidade: "", atributos: {}, marca: {},
+      fotos: (F.fotos || []).map(x => x.id).slice(0, 9)};
+}
+function novoShopee() { SH.r = null; SH.f = shForm(null); SH.cats = null; SH.defs = null; SH.marcas = null; SH.conta = null; desenharShopee(); }
+async function abrirShopee(id) {
+  const r = (SH.lista || []).find(x => x.id === id); if (!r) return;
+  SH.r = r; SH.f = shForm(r); SH.cats = null; SH.conta = null;
+  desenharShopee();
+  if (r.categoria) await shCarregarCategoria(r.categoria);
+  shPedirConta();
+}
+function fecharShopee() { SH.r = null; SH.f = null; desenharShopee(); }
+
+async function shSugerir() {
+  if (!SH.f.titulo.trim()) { nkToast("Escreva o título antes.", "aviso"); return; }
+  SH.ocupado = "cats"; desenharShopee();
+  try {
+    const d = await api(`/api/anuncios/shopee/categorias?titulo=${enc(SH.f.titulo)}`);
+    SH.cats = d.categorias || []; SH.limites = d.limites || SH.limites;
+    if (!SH.cats.length) nkToast("A Shopee não sugeriu categoria para este título.", "aviso");
+  } catch (e) { nkToast(e.message, "erro"); }
+  SH.ocupado = ""; desenharShopee();
+}
+async function shEscolherCategoria(cid, nome) {
+  if (!cid) return;
+  if (SH.f.categoria && SH.f.categoria !== cid) SH.f.atributos = {};
+  SH.f.categoria = cid; SH.f.categoria_nome = nome || cid;
+  await shCarregarCategoria(cid);
+}
+async function shCarregarCategoria(cid) {
+  SH.ocupado = "attrs"; desenharShopee();
+  try {
+    const d = await api(`/api/anuncios/shopee/atributos?categoria=${enc(cid)}&codigo=${enc(F.codigo)}`);
+    SH.defs = d.atributos || []; SH.marcas = d.marcas || []; SH.marcaObrig = !!d.marca_obrigatoria;
+    SH.marcaFicha = d.marca_da_ficha || null; SH.limites = d.limites || SH.limites;
+    if (!(SH.f.marca && SH.f.marca.id) && SH.marcaFicha) SH.f.marca = {...SH.marcaFicha};
+  } catch (e) { SH.defs = null; nkToast(e.message, "erro"); }
+  SH.ocupado = ""; desenharShopee();
+}
+function shPedirConta() {
+  clearTimeout(shContaTimer);
+  shContaTimer = setTimeout(async () => {
+    if (!SH.f) return;
+    const p = numBr(SH.f.preco);
+    try { SH.conta = await api(`/api/anuncios/shopee/conta?codigo=${enc(F.codigo)}&preco=${p == null ? "" : enc(p)}`); }
+    catch (e) { SH.conta = {erro: e.message}; }
+    desenharShopee();
+  }, 400);
+}
+function shAttr(id, campo, valor) {
+  const a = SH.f.atributos[id] = SH.f.atributos[id] || {};
+  a[campo] = valor;
+  if (!a.valor && !a.valor_id) delete SH.f.atributos[id];
+}
+function shMarca(texto) {
+  const t = String(texto || "").trim().toLowerCase();
+  if (!t) { SH.f.marca = {}; return; }
+  if (t === "no brand" || t === "sem marca") { SH.f.marca = {id: "0", nome: "No Brand"}; return; }
+  const m = (SH.marcas || []).find(x => String(x.nome).toLowerCase() === t || String(x.original).toLowerCase() === t);
+  SH.f.marca = m ? {id: m.id, nome: m.original || m.nome} : {};
+}
+function shFoto(id, on) {
+  const s = SH.f.fotos;
+  if (on && !s.includes(id)) { if (s.length >= 9) { nkToast("A Shopee aceita até 9 fotos.", "aviso"); desenharShopee(); return; } s.push(id); }
+  if (!on) SH.f.fotos = s.filter(x => x !== id);
+  desenharShopee();
+}
+function shCorpo() {
+  const f = SH.f;
+  return {titulo: f.titulo, categoria: f.categoria, categoria_nome: f.categoria_nome, descricao: f.descricao,
+    preco: f.preco, quantidade: f.quantidade, atributos: f.atributos, marca: f.marca, fotos: f.fotos};
+}
+async function shSalvar(silencioso) {
+  if (!PODE || !SH.f) return null;
+  const corpo = SH.r ? {id: SH.r.id, versao: SH.r.versao, ...shCorpo()} : {codigo: F.codigo, ...shCorpo()};
+  SH.ocupado = "salvar"; desenharShopee();
+  try {
+    const d = await api("/api/anuncios/shopee/rascunho", corpo);
+    SH.r = d.rascunho; SH.f = shForm(d.rascunho);
+    const i = (SH.lista || []).findIndex(x => x.id === SH.r.id);
+    if (i >= 0) SH.lista[i] = SH.r; else (SH.lista = SH.lista || []).unshift(SH.r);
+    if (!silencioso) nkToast("Rascunho da Shopee salvo.", "ok");
+    return SH.r;
+  } catch (e) {
+    nkToast(e.status === 409 ? "Outra pessoa alterou este rascunho: recarregue a ficha." : e.message, "erro");
+    return null;
+  } finally { SH.ocupado = ""; desenharShopee(); }
+}
+async function shConferir() {
+  const r = await shSalvar(true); if (!r) return;
+  SH.ocupado = "conferir"; desenharShopee();
+  try {
+    const d = await api("/api/anuncios/shopee/conferir", {id: r.id});
+    SH.r = d.rascunho; SH.f = shForm(d.rascunho);
+    nkToast(d.ok ? "Conferido: pode publicar na Shopee." : "Há o que acertar antes de publicar.", d.ok ? "ok" : "aviso");
+  } catch (e) { nkToast(e.message, "erro"); }
+  SH.ocupado = ""; carregarShopee(true);
+}
+async function shPublicar() {
+  const r = SH.r; if (!PODE || !r || r.situacao !== "validado") return;
+  if (!await nkConfirmar(`Publicar na Shopee?\n${r.titulo}\nR$ ${String(r.preco).replace(".", ",")} · ${r.quantidade} un. · ${(r.fotos || []).length} foto(s).\nIsto cria o anúncio de verdade na loja de Araçatuba. O Apollo é lido de novo na hora.`, {ok: "Publicar na Shopee", perigo: false})) return;
+  SH.ocupado = "publicar"; desenharShopee();
+  try {
+    const d = await api("/api/anuncios/shopee/publicar", {id: r.id});
+    SH.r = d.rascunho; SH.f = shForm(d.rascunho);
+    if (d.ok) { nkToast(`Anúncio criado na Shopee: item ${d.item_id}. Ele já aparece na lista com estoque em Manual.`, "ok", {duracao: 12000}); recarregar(); }
+    else nkToast((d.erros || [])[0] || "Não publicado.", "erro", {duracao: 12000});
+  } catch (e) { nkToast(e.status === 409 ? "Outra publicação em andamento: aguarde." : e.message, "erro"); }
+  SH.ocupado = ""; carregarShopee(true);
+}
+async function shLiberar() {
+  const r = SH.r; if (!PODE || !r) return;
+  const item = String(($("shItemIncerto") || {}).value || "").trim();
+  if (!await nkConfirmar(item ? `Marcar o rascunho como publicado com o item ${item}?` : "Liberar sem número? Use só se conferiu no Seller Center que o anúncio NÃO foi criado.", {ok: "Liberar", perigo: !item})) return;
+  try {
+    const d = await api("/api/anuncios/shopee/liberar", {id: r.id, item_id: item});
+    SH.r = d.rascunho; SH.f = shForm(d.rascunho);
+    nkToast(item ? "Rascunho marcado como publicado." : "Liberado: pode conferir e publicar de novo.", "ok");
+    if (item) recarregar();
+  } catch (e) { nkToast(e.message, "erro"); }
+  carregarShopee(true);
+}
+
+function shCartoesPreco() {
+  const c = SH.conta;
+  if (!c) return '<p class="muted">Calculando…</p>';
+  if (c.erro) return `<div class="nk-aviso bad">${esc(c.erro)}</div>`;
+  const cart = (t, v, s) => `<div class="nk-kpi"><span>${t}</span><b>${v}</b><small>${s}</small></div>`;
+  return `<div class="g3">${[
+    cart("Tarifa da Shopee", brl(c.comissao), c.comissao_pct == null ? "—" : `${pct(c.comissao_pct)} + ${brl(c.taxa_fixa)} por venda`),
+    cart("Imposto", brl(c.imposto_valor), pct(c.imposto) + " da venda"),
+    cart("Custo", brl(c.custo), esc(c.custo_origem || "")),
+    cart("Lucro", brl(c.lucro), c.margem == null ? "sem custo, sem lucro" : "margem " + pct(c.margem)),
+    cart("Preço ideal", brl(c.preco_ideal), c.margem_alvo == null ? "precisa da margem-alvo" : "margem-alvo " + pct(c.margem_alvo)
+      + (c.preco_ideal && PODE && shEditavel() ? ` <button type="button" class="nk-btn mini" onclick="SH.f.preco='${String(c.preco_ideal).replace(".", ",")}';shPedirConta();desenharShopee()">Usar o ideal</button>` : ""))].join("")}</div>
+    <p class="muted">O frete da Shopee não entra na conta (vem do programa de frete da loja).</p>`;
+}
+function shAtributosHtml() {
+  if (!SH.f.categoria) return '<p class="muted">Escolha a categoria primeiro.</p>';
+  if (SH.ocupado === "attrs") return '<p class="muted">Lendo os atributos da categoria na Shopee…</p>';
+  if (!SH.defs) return `<p class="muted">Atributos não lidos. <button type="button" class="nk-btn mini" onclick="shCarregarCategoria(SH.f.categoria)">Ler de novo</button></p>`;
+  const dis = PODE && shEditavel() ? "" : "disabled";
+  const campo = a => {
+    const v = SH.f.atributos[a.id] || {};
+    const falta = a.obrigatorio && !(v.valor || v.valor_id);
+    let ctl;
+    if (a.tipo === "lista" || a.tipo === "multi") {
+      ctl = `<select ${dis} data-id="${esc(a.id)}" onchange="shAttr(this.dataset.id,'valor_id',this.value);desenharShopee()"><option value="">—</option>${a.valores.map(x => `<option value="${esc(x.id)}" ${String(v.valor_id) === String(x.id) ? "selected" : ""}>${esc(x.nome)}</option>`).join("")}</select>`;
+    } else {
+      const lista = a.valores.length ? `list="shl${esc(a.id)}"` : "";
+      ctl = `<input ${dis} ${lista} data-id="${esc(a.id)}" value="${esc(v.valor_id ? ((a.valores.find(x => String(x.id) === String(v.valor_id)) || {}).nome || "") : (v.valor || ""))}" oninput="const m=(SH.defs.find(d=>d.id===this.dataset.id)||{valores:[]}).valores.find(x=>x.nome===this.value);shAttr(this.dataset.id,'valor_id',m?m.id:'');shAttr(this.dataset.id,'valor',m?'':this.value)">`
+        + (a.valores.length ? `<datalist id="shl${esc(a.id)}">${a.valores.map(x => `<option value="${esc(x.nome)}">`).join("")}</datalist>` : "")
+        + (a.unidades.length ? `<select ${dis} data-id="${esc(a.id)}" onchange="shAttr(this.dataset.id,'unidade',this.value)"><option value="">unidade</option>${a.unidades.map(u => `<option ${v.unidade === u ? "selected" : ""}>${esc(u)}</option>`).join("")}</select>` : "");
+    }
+    return `<label class="nk-campo ${falta ? "falta" : ""}"><span>${esc(a.nome)} ${a.obrigatorio ? '<span class="orig bad">obrigatório</span>' : ""}</span>${ctl}</label>`;
+  };
+  const obrig = SH.defs.filter(a => a.obrigatorio), outros = SH.defs.filter(a => !a.obrigatorio);
+  const marca = SH.f.marca && SH.f.marca.id ? SH.f.marca.nome : "";
+  return `<div class="g2">${obrig.map(campo).join("") || '<p class="muted">Esta categoria não tem atributo obrigatório.</p>'}</div>
+    <label class="nk-campo ${SH.marcaObrig && !marca ? "falta" : ""}"><span>Marca na Shopee ${SH.marcaObrig ? '<span class="orig bad">obrigatório</span>' : '<span class="muted">(sem marca na lista = "No Brand")</span>'}${SH.marcaFicha && marca === SH.marcaFicha.nome ? ' <span class="orig">da ficha</span>' : ""}</span>
+      <input ${dis} list="shMarcas" value="${esc(marca)}" placeholder="Digite e escolha da lista" onchange="shMarca(this.value);desenharShopee()">
+      <datalist id="shMarcas">${(SH.marcas || []).slice(0, 3000).map(m => `<option value="${esc(m.original || m.nome)}">`).join("")}${SH.marcaObrig ? "" : '<option value="No Brand">'}</datalist></label>
+    ${outros.length ? `<details class="rem"><summary>Outros atributos (opcionais, ${outros.length})</summary><div class="g2">${outros.map(campo).join("")}</div></details>` : ""}`;
+}
+function desenharShopee() {
+  const el = $("secShopee"); if (!el) return;
+  const temAra = CASA === "todas" || CASA === "aracatuba";
+  if (!F || !temAra) { el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  const lista = SH.lista;
+  const linha = r => { const s = SH_SIT[r.situacao] || [r.situacao, ""];
+    return `<tr${SH.r && SH.r.id === r.id ? ' class="atual"' : ""}><td>${r.titulo ? esc(r.titulo) : '<span class="muted">sem título</span>'}</td><td class="n">${brl(r.preco)}</td><td class="n">${esc(r.quantidade ?? "—")}</td>
+      <td><span class="nk-selo ${s[1]}">${esc(s[0])}</span> ${r.item_id ? `<span class="mono">item ${esc(r.item_id)}</span>` : ""}</td><td>${quando(r.atualizado_em)}${r.atualizado_por ? " · " + esc(r.atualizado_por) : ""}</td>
+      <td>${PODE ? `<button type="button" class="nk-btn mini" onclick="abrirShopee(${Number(r.id)})">${EDITAVEL.includes(r.situacao) ? "Continuar" : "Ver"}</button>` : ""}</td></tr>`; };
+  let form = "";
+  if (SH.f) {
+    const f = SH.f, r = SH.r, dis = PODE && shEditavel() ? "" : "disabled", oc = SH.ocupado ? "disabled" : "";
+    const lim = SH.limites || {}, tmax = lim.titulo_max || 120;
+    const campos = (F.ficha && F.ficha.campos) || {};
+    const medida = (n, u) => campos[n] ? `${esc(campos[n])} ${u}` : '<span class="bad">falta</span>';
+    const s = r ? SH_SIT[r.situacao] || [r.situacao, ""] : null;
+    const erros = r && (r.erros || []).length ? `<div class="nk-aviso ${r.situacao === "publicado" ? "info" : "bad"}"><b>${r.situacao === "erro" ? "A Shopee recusou:" : "O que precisa ser acertado:"}</b><ul>${r.erros.map(e => `<li>${esc(e)}</li>`).join("")}</ul></div>` : "";
+    form = `<div class="nk-painel-tit" style="margin-top:14px"><div><h3>${r ? `Rascunho Shopee nº ${esc(r.id)} <span class="nk-selo ${s[1]}">${esc(s[0])}</span>` : "Novo anúncio na Shopee"}</h3>
+        <p class="muted">${r ? `versão ${esc(r.versao)} · ${quando(r.atualizado_em)}${r.atualizado_por ? " por " + esc(r.atualizado_por) : ""}` : "Loja de Araçatuba."}</p></div>
+        <button type="button" class="nk-btn mini" onclick="fecharShopee()">Fechar</button></div>
+      ${erros}
+      <section class="passo"><h3><span class="num">1</span>Título</h3>
+        <label class="nk-campo"><span>Título na Shopee <span class="muted">${f.titulo.length} de ${tmax} caracteres</span></span>
+          <input ${dis} maxlength="255" value="${esc(f.titulo)}" oninput="SH.f.titulo=this.value;this.previousElementSibling.querySelector('.muted').textContent=this.value.length+' de ${tmax} caracteres'"></label></section>
+      <section class="passo"><h3><span class="num">2</span>Categoria</h3>
+        ${f.categoria ? `<p>Escolhida: <b>${esc(f.categoria_nome || f.categoria)}</b> <span class="muted mono">${esc(f.categoria)}</span></p>` : ""}
+        ${PODE && shEditavel() ? `<div class="barra"><button type="button" class="nk-btn mini" ${oc} onclick="shSugerir()">${SH.ocupado === "cats" ? "Consultando…" : "Sugerir pela Shopee (pelo título)"}</button>
+          <input id="shCatManual" placeholder="ou o número da categoria" style="max-width:220px"><button type="button" class="nk-btn mini" onclick="shEscolherCategoria(String($('shCatManual').value).trim(),'')">Usar</button></div>` : ""}
+        ${SH.cats ? `<div class="g1">${SH.cats.map(c => `<label style="display:flex;gap:8px;align-items:center;margin:6px 0;cursor:pointer"><input type="radio" name="shcat" ${dis} ${c.folha ? "" : "disabled"} ${f.categoria === c.categoria ? "checked" : ""} data-id="${esc(c.categoria)}" data-nome="${esc(c.caminho || c.nome)}" onchange="shEscolherCategoria(this.dataset.id,this.dataset.nome)"> ${esc(c.caminho || c.nome)} ${c.folha ? "" : '<span class="muted">(tem subcategorias)</span>'}</label>`).join("") || '<p class="muted">Nenhuma sugestão.</p>'}</div>` : ""}</section>
+      <section class="passo"><h3><span class="num">3</span>Atributos e marca</h3>${shAtributosHtml()}</section>
+      <section class="passo"><h3><span class="num">4</span>Fotos <span class="muted">(${f.fotos.length} de até ${lim.fotos_max || 9})</span></h3>
+        ${(F.fotos || []).length ? `<div class="fotos-sel">${(F.fotos || []).map(x => `<label style="display:inline-flex;gap:6px;align-items:center;margin:4px 10px 4px 0;cursor:pointer"><input type="checkbox" ${dis} ${f.fotos.includes(x.id) ? "checked" : ""} data-id="${x.id}" onchange="shFoto(Number(this.dataset.id),this.checked)"><img src="${urlFoto(x.id)}" alt="" style="width:56px;height:56px;object-fit:contain;border:1px solid var(--nk-line);border-radius:6px;background:#fff"></label>`).join("")}</div><p class="muted">A Shopee aceita JPG e PNG.</p>` : '<p class="muted">A ficha não tem fotos: suba na aba Fotos.</p>'}</section>
+      <section class="passo"><h3><span class="num">5</span>Descrição, preço, quantidade e envio</h3>
+        <label class="nk-campo"><span>Descrição</span><textarea ${dis} rows="8" oninput="SH.f.descricao=this.value">${esc(f.descricao)}</textarea></label>
+        <div class="g2"><label class="nk-campo"><span>Preço (R$)</span><input ${dis} value="${esc(f.preco)}" inputmode="decimal" oninput="SH.f.preco=this.value;shPedirConta()"></label>
+          <label class="nk-campo"><span>Quantidade <span class="muted">(no Publicar não pode passar do que dá para montar no Apollo de Araçatuba)</span></span><input ${dis} value="${esc(f.quantidade)}" inputmode="numeric" oninput="SH.f.quantidade=this.value"></label></div>
+        ${shCartoesPreco()}
+        <p class="muted">Peso e medidas do pacote (da ficha, lidos na hora): ${medida("peso_g", "g")} · ${medida("altura_cm", "cm")} × ${medida("largura_cm", "cm")} × ${medida("comprimento_cm", "cm")}. Os canais de envio são os ligados na loja que aceitam esse pacote.</p></section>
+      <section class="passo"><h3><span class="num">6</span>Conferir e publicar</h3>
+        ${r && r.situacao === "incerto" && PODE ? `<div class="nk-aviso bad">A Shopee não respondeu ao criar: confira em Meus produtos no Seller Center.</div>
+          <div class="barra"><input id="shItemIncerto" placeholder="número do item, se foi criado" style="max-width:240px"><button type="button" class="nk-btn mini pri" onclick="shLiberar()">Liberar</button></div>` : ""}
+        ${r && r.situacao === "publicado" ? `<div class="nk-aviso info">Publicado na Shopee: item <b class="mono">${esc(r.item_id)}</b>. Está na lista “Anúncios em todos os canais” com estoque em Manual.</div>` : ""}
+        ${PODE && shEditavel() ? `<div class="barra"><span class="esp"></span><button type="button" class="nk-btn" ${oc} onclick="shSalvar()">${SH.ocupado === "salvar" ? "Salvando…" : "Salvar"}</button>
+          <button type="button" class="nk-btn" ${oc} onclick="shConferir()">${SH.ocupado === "conferir" ? "Conferindo…" : "Conferir"}</button>
+          <button type="button" class="nk-btn pri" ${oc} ${r && r.situacao === "validado" ? "" : "disabled"} onclick="shPublicar()">${SH.ocupado === "publicar" ? "Publicando…" : "Publicar na Shopee"}</button></div>
+          <p class="muted">A Shopee não confere sem criar: o Conferir é do Noromak (título, descrição, fotos, atributos, marca, peso/medidas e canais). O 1º Publicar é o teste de verdade; se a Shopee recusar, o motivo aparece aqui e nada é criado.</p>` : ""}</section>`;
+  }
+  el.innerHTML = `<div class="nk-painel-tit"><div><h2>Criar anúncio na Shopee</h2><p>Loja de Araçatuba. Cada tentativa fica guardada como rascunho. Só o “Publicar” cria o anúncio na Shopee.</p></div>
+      ${PODE && !F.naoExiste ? '<button type="button" class="nk-btn mini pri" onclick="novoShopee()">+ Criar anúncio na Shopee</button>' : ""}</div>
+    ${SH.erro ? `<div class="nk-aviso bad">${esc(SH.erro)}</div>` : ""}
+    ${lista == null ? (SH.erro ? "" : '<div class="vazio">Carregando…</div>') : lista.length ? `<div class="tw"><table class="nk-tab"><thead><tr><th>Título</th><th class="n">Preço</th><th class="n">Qtd.</th><th>Situação</th><th>Atualizado</th><th></th></tr></thead><tbody>${lista.map(linha).join("")}</tbody></table></div>` : '<p class="muted">Nenhum rascunho da Shopee ainda.</p>'}
+    ${form}`;
+}
+
 const PASSOS = ["Conta e título", "Categoria", "Obrigatórios da categoria", "Fotos do anúncio",
   "Preço, tipo, envio, garantia e quantidade", "Conferir no ML", "Publicar"];
 const SIT = {rascunho: ["Rascunho", ""], validado: ["Conferido no ML", "info"], publicando: ["Publicando…", "warn"],
