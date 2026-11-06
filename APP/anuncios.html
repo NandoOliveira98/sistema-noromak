@@ -1492,6 +1492,7 @@ async function shConferir() {
     const d = await api("/api/anuncios/shopee/conferir", {id: r.id});
     SH.r = d.rascunho; SH.f = shForm(d.rascunho);
     nkToast(d.ok ? "Conferido: pode publicar na Shopee." : "Há o que acertar antes de publicar.", d.ok ? "ok" : "aviso");
+    (d.avisos || []).forEach(a => nkToast(a, "aviso", {duracao: 12000}));  // revisão: ex. marca vai como "No Brand"
   } catch (e) { nkToast(e.message, "erro"); }
   SH.ocupado = ""; carregarShopee(true);
 }
@@ -1500,10 +1501,21 @@ async function shPublicar() {
   if (!await nkConfirmar(`Publicar na Shopee?\n${r.titulo}\nR$ ${String(r.preco).replace(".", ",")} · ${r.quantidade} un. · ${(r.fotos || []).length} foto(s).\nIsto cria o anúncio de verdade na loja de Araçatuba. O Apollo é lido de novo na hora.`, {ok: "Publicar na Shopee", perigo: false})) return;
   SH.ocupado = "publicar"; desenharShopee();
   try {
-    const d = await api("/api/anuncios/shopee/publicar", {id: r.id});
-    SH.r = d.rascunho; SH.f = shForm(d.rascunho);
-    if (d.ok) { nkToast(`Anúncio criado na Shopee: item ${d.item_id}. Ele já aparece na lista com estoque em Manual.`, "ok", {duracao: 12000}); recarregar(); }
-    else nkToast((d.erros || [])[0] || "Não publicado.", "erro", {duracao: 12000});
+    // revisão: o servidor publica em segundo plano (fotos + criação passavam dos 60 s); a tela acompanha o rascunho
+    await api("/api/anuncios/shopee/publicar", {id: r.id});
+    const cod = F.codigo, limite = Date.now() + 5 * 60 * 1000;
+    let atual = null;
+    while (Date.now() < limite) {
+      await new Promise(ok => setTimeout(ok, 2000));
+      if (!F || F.codigo !== cod) return;
+      try { atual = ((await api(`/api/anuncios/shopee/rascunhos?codigo=${enc(cod)}`)).rascunhos || []).find(x => x.id === r.id); }
+      catch (_) { atual = null; }
+      if (atual && atual.situacao !== "publicando") break;
+    }
+    if (atual) { SH.r = atual; SH.f = shForm(atual); }
+    if (atual && atual.situacao === "publicado") { nkToast(`Anúncio criado na Shopee: item ${atual.item_id}. Ele já aparece na lista com estoque em Manual.`, "ok", {duracao: 12000}); recarregar(); }
+    else if (atual && atual.situacao !== "publicando") nkToast((atual.erros || [])[0] || "Não publicado.", "erro", {duracao: 12000});
+    else nkToast("A publicação ainda está em andamento. Atualize a ficha em instantes para ver o resultado.", "aviso", {duracao: 12000});
   } catch (e) { nkToast(e.status === 409 ? "Outra publicação em andamento: aguarde." : e.message, "erro"); }
   SH.ocupado = ""; carregarShopee(true);
 }

@@ -20,7 +20,11 @@ class ShopeeEstoqueFalsa:
         self.chamadas.append((method, path, params, payload))
         if path.endswith("get_item_base_info"):
             iid = str(params["item_id_list"])
+            with S.DB_LOCK:  # o SKU do item na Shopee = o codigo da ficha ligada (revisao: o envio confere)
+                f = S.DB.execute("SELECT ficha_codigo FROM anuncio_canal_v2023 WHERE canal='shopee' AND anuncio_id=?",
+                                 (iid,)).fetchone()
             return {"response": {"item_list": [{"item_id": int(iid), "item_status": "NORMAL",
+                                                "item_sku": f[0] if f else "",
                                                 "has_model": iid in self.variacoes,
                                                 "stock_info_v2": {"seller_stock": [{"stock": self.estoque.get(iid, 0)}]}}]}}
         if path.endswith("update_stock"):

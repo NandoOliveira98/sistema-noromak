@@ -894,6 +894,17 @@ decisão do dono: um estoque só para todos os canais), rodízio do Apollo únic
 1ª resposta de cada chamada em `anuncio_amostra_v2024` (`shopee_*`, construído pelo SDK gerado da doc oficial — **conferir no 1º uso**).
 Prévia: `FERRAMENTAS_WINDOWS/previa_local/dev_shopee_anuncio.py` (título com "recusar"/"sumir" simula recusa/incerto).
 Testes: `TESTES/test_anuncios_shopee_v2032.py`, `TESTES/test_anuncios_shopee_estoque_v2032.py`.
+**revisar-antes-de-subir (06/11, "corrija tudo"):** erro do lado da Shopee no `add_item` (interno/ocupado/tempo, HTTP 408/429,
+`_shopee_talvez_fez`) = **incerto**, nunca "recusado"; produto que já tem anúncio Shopee do Noromak (ou rascunho publicando/incerto) não
+publica outro (`_shopee_ja_anunciado`, sob o `DB_LOCK`); **Publicar em segundo plano** (`shopee_publicar_iniciar`: reserva na hora, a
+thread solta o `ANUNCIOS_PUBLICAR_LOCK`; a tela acompanha os rascunhos); número do item nunca se perde (vai no `incerto`); foto que não
+é JPG/PNG barra no Conferir; foto tenta a assinatura da loja e, com erro de assinatura, a pública (`publico=True`); **Liberar** só com
+número e só se o `item_sku` lido na Shopee for o código da ficha; o envio de estoque confere o SKU, recusa item excluído/bloqueado e
+item com mais de um depósito (com um, manda o `location_id` lido), e depósito sem número = sem leitura (nunca 0); só renova o token em
+erro **de token** (403 de permissão não gasta o refresh_token); a rodada da Shopee roda numa thread e a volta do worker espera no
+máximo `ANUNCIO_ESTOQUE_SHOPEE_ESPERA_S` (20 s): Shopee fora do ar não segura o ML; Conferir confere a versão (409); preço finito;
+fotos sem repetir; marca zera com a categoria (e marca fora da lista da categoria = erro; a da ficha fora da lista = aviso "No Brand");
+"misto" só no mesmo canal; ver os rascunhos = módulo admin. Teste: `TESTES/test_revisao_shopee_v2032.py`.
 
 **V20.26 — fase 3: controle de estoque dos anúncios do ML** (decisões do dono 05/11; plano
 `docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md`). **Exceção à regra "o Noromak nunca grava estoque": o Noromak grava

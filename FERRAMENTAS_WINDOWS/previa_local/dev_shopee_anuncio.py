@@ -9,8 +9,9 @@ _ITEM = itertools.count(880000001)
 
 def instalar(S):
     estoque: dict[str, int] = {}
+    skus: dict[str, str] = {}
 
-    def chamar(method, path, params=None, payload=None, *, multipart=None, timeout=35, _renovou=False):
+    def chamar(method, path, params=None, payload=None, *, multipart=None, timeout=35, _renovou=False, publico=False):
         if path.endswith("get_item_limit"):
             return {"response": {"item_name_length_limit": {"min_limit": 10, "max_limit": 120},
                                  "item_description_length_limit": {"min_limit": 20, "max_limit": 3000},
@@ -56,10 +57,14 @@ def instalar(S):
                 raise S.ShopeeSemResposta("timeout (simulado)")
             iid = str(next(_ITEM))
             estoque[iid] = int(((payload or {}).get("seller_stock") or [{}])[0].get("stock") or 0)
+            skus[iid] = str((payload or {}).get("item_sku") or "")
             return {"response": {"item_id": int(iid), "item_status": "NORMAL"}}
         if path.endswith("get_item_base_info"):
             iid = str(params["item_id_list"])
+            if iid not in estoque:
+                return {"response": {"item_list": []}}
             return {"response": {"item_list": [{"item_id": int(iid), "item_status": "NORMAL", "has_model": False,
+                                                "item_sku": skus.get(iid, ""),
                                                 "stock_info_v2": {"seller_stock": [{"stock": estoque.get(iid, 0)}]}}]}}
         if path.endswith("update_stock"):
             iid = str(payload["item_id"])

@@ -55,6 +55,9 @@ class ShopeeFalsa:
             if self.upload_erro:
                 raise self.upload_erro
             return {"response": {"image_info": {"image_id": f"img{len(self.chamadas)}"}}}
+        if path.endswith("get_item_base_info"):  # revisao: o Liberar confere o SKU do item
+            return {"response": {"item_list": [{"item_id": int(params["item_id_list"]), "item_sku": "TUNAP109",
+                                                "item_status": "NORMAL", "stock_info_v2": {"seller_stock": [{"stock": 2}]}}]}}
         if path.endswith("add_item"):
             if self.add_item_erro:
                 raise self.add_item_erro

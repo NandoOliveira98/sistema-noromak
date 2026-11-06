@@ -8927,7 +8927,12 @@ def _anuncio_misto_por_codigo(linhas: list[Any]) -> dict[str, bool]:
     for r in linhas:
         if str(r["removido_em"] or ""):
             continue
-        por_conta.setdefault((str(r["ficha_codigo"]), str(r["conta"])), set()).add(str(r["controle"]))
+        try:
+            canal = str(r["canal"] or "ml")
+        except (IndexError, KeyError):
+            canal = "ml"
+        # revisao (V20.32): misto = os dois controles no MESMO canal e conta (ML x Shopee nao disputam estoque)
+        por_conta.setdefault((str(r["ficha_codigo"]), canal + "|" + str(r["conta"])), set()).add(str(r["controle"]))
     saida: dict[str, bool] = {}
     for (cod, _conta), cs in por_conta.items():
         if cod and "alephee" in cs and "noromak" in cs:
@@ -33999,9 +34004,26 @@ class ShopeeSemResposta(Exception):
 class ShopeeRecusou(Exception):
     """V20.32: a Shopee respondeu com recusa (ou a chamada nem saiu): nada foi feito na Shopee."""
 
-    def __init__(self, mensagem: str, corpo: Any = None) -> None:
+    def __init__(self, mensagem: str, corpo: Any = None, status: int | None = None) -> None:
         super().__init__(mensagem)
         self.corpo = corpo
+        self.status = status
+
+
+# revisar-antes-de-subir (06/11): erro do lado da Shopee (interno, ocupado, tempo) numa ESCRITA pode ter feito a
+# escrita: no add_item vira `incerto` (nunca "recusado", que deixaria publicar de novo e criar dois anuncios).
+_SHOPEE_ERRO_TALVEZ_FEZ = re.compile(r"server|inner|internal|busy|timeout|time out|network|system|unknown", re.I)
+
+
+def _shopee_talvez_fez(exc: Exception) -> bool:
+    if isinstance(exc, ShopeeSemResposta):
+        return True
+    if isinstance(exc, ShopeeRecusou):
+        if exc.status in (408, 429) or (exc.status or 0) >= 500:
+            return True
+        erro = str((exc.corpo or {}).get("error") or "") if isinstance(exc.corpo, dict) else ""
+        return bool(_SHOPEE_ERRO_TALVEZ_FEZ.search(erro or str(exc).split(":", 1)[0]))
+    return False
 
 
 def _shopee_multipart(campos: dict[str, str], arquivo: tuple[str, str, bytes, str]) -> tuple[bytes, str]:
@@ -34019,9 +34041,12 @@ def _shopee_multipart(campos: dict[str, str], arquivo: tuple[str, str, bytes, st
 
 def _shopee_chamar(method: str, path: str, params: dict[str, Any] | None = None, payload: Any = None, *,
                    multipart: tuple[dict[str, str], tuple[str, str, bytes, str]] | None = None,
-                   timeout: float = 35, _renovou: bool = False) -> dict[str, Any]:
+                   timeout: float = 35, _renovou: bool = False, publico: bool = False) -> dict[str, Any]:
     """V20.32: chamada da Shopee que separa RECUSA (nada feito) de SEM RESPOSTA (pode ter feito). Token que nao
-    renova = recusa (a chamada nem saiu)."""
+    renova = recusa (a chamada nem saiu). `publico` = assinatura sem a loja (partner_id+path+timestamp: rotas que
+    nao pedem a loja, como a do upload de imagem em algumas versoes da doc).
+    Revisao: so renova o token em erro DE TOKEN (401 ou codigo de autenticacao) — 403 de permissao nao gasta o
+    refresh_token de uso unico; o status HTTP vai na recusa (408/429 = talvez feito)."""
     try:
         row = shopee_refresh_access_token(_renovou)
         shop_id = str(row["shop_id"] or "").strip()
@@ -34029,8 +34054,11 @@ def _shopee_chamar(method: str, path: str, params: dict[str, Any] | None = None,
     except Exception as exc:
         raise ShopeeRecusou(f"Shopee sem conexão: {exc}")
     ts = int(time.time())
-    query: dict[str, Any] = {"partner_id": int(SHOPEE_PARTNER_ID), "timestamp": ts, "access_token": token,
-                             "shop_id": int(shop_id), "sign": shopee_sign(path, ts, token, shop_id)}
+    if publico:
+        query: dict[str, Any] = {"partner_id": int(SHOPEE_PARTNER_ID), "timestamp": ts, "sign": shopee_sign(path, ts)}
+    else:
+        query = {"partner_id": int(SHOPEE_PARTNER_ID), "timestamp": ts, "access_token": token,
+                 "shop_id": int(shop_id), "sign": shopee_sign(path, ts, token, shop_id)}
     for k, v in (params or {}).items():
         if v is not None and v != "":
             query[k] = v
@@ -34052,10 +34080,11 @@ def _shopee_chamar(method: str, path: str, params: dict[str, Any] | None = None,
             raise ShopeeSemResposta(f"Shopee HTTP {exc.code}: {bruto[:300]}")
         dados = _anuncio_json_ou_none(bruto)
         erro = str((dados or {}).get("error") or "") if isinstance(dados, dict) else ""
-        if not _renovou and (exc.code in (401, 403) or erro.lower() in _SHOPEE_AUTH_ERROS):
+        if not _renovou and not publico and (exc.code == 401 or erro.lower() in _SHOPEE_AUTH_ERROS):
             return _shopee_chamar(method, path, params, payload, multipart=multipart, timeout=timeout, _renovou=True)
         msg = (f"{erro} {(dados or {}).get('message') or ''}".strip() if isinstance(dados, dict) else "") or bruto[:300]
-        raise ShopeeRecusou(f"Shopee HTTP {exc.code}: {msg}", dados if isinstance(dados, dict) else bruto[:2000])
+        raise ShopeeRecusou(f"Shopee HTTP {exc.code}: {msg}", dados if isinstance(dados, dict) else bruto[:2000],
+                            status=exc.code)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise ShopeeSemResposta(f"sem resposta da Shopee ({exc})")
     dados = _anuncio_json_ou_none(texto)
@@ -34063,9 +34092,9 @@ def _shopee_chamar(method: str, path: str, params: dict[str, Any] | None = None,
         raise ShopeeSemResposta("resposta ilegível da Shopee")
     erro = str(dados.get("error") or "").strip()
     if erro:
-        if not _renovou and erro.lower() in _SHOPEE_AUTH_ERROS:
+        if not _renovou and not publico and erro.lower() in _SHOPEE_AUTH_ERROS:
             return _shopee_chamar(method, path, params, payload, multipart=multipart, timeout=timeout, _renovou=True)
-        raise ShopeeRecusou(f"{erro}: {dados.get('message') or ''}".strip(" :"), dados)
+        raise ShopeeRecusou(f"{erro}: {dados.get('message') or ''}".strip(" :"), dados, status=200)
     return dados
 
 
@@ -34362,8 +34391,8 @@ def _shopee_rascunho_limpar(dados: dict[str, Any]) -> dict[str, Any]:
                 out["preco"] = round(float(str(p).replace(",", ".")), 2)
             except (TypeError, ValueError):
                 raise ValueError("Preço inválido.")
-            if out["preco"] <= 0:
-                raise ValueError("O preço precisa ser maior que zero.")
+            if isinstance(p, bool) or not math.isfinite(out["preco"]) or out["preco"] <= 0:  # revisao: inf/nan/bool
+                raise ValueError("O preço precisa ser um número maior que zero.")
     if "quantidade" in dados:
         q = dados.get("quantidade")
         if q in (None, ""):
@@ -34393,10 +34422,16 @@ def _shopee_rascunho_limpar(dados: dict[str, Any]) -> dict[str, Any]:
         mid = str(m.get("id") or "").strip()
         out["marca"] = {"id": mid, "nome": str(m.get("nome") or "")[:120]} if mid.isdigit() else {}
     if "fotos" in dados:
+        brutas = dados.get("fotos") or []
+        if not isinstance(brutas, list) or any(isinstance(x, bool) for x in brutas):
+            raise ValueError("Fotos inválidas.")
         try:
-            out["fotos"] = [int(x) for x in (dados.get("fotos") or [])][:SHOPEE_FOTOS_MAX_PADRAO]
+            fotos = list(dict.fromkeys(int(x) for x in brutas))  # revisao: sem repetir a mesma foto
         except (TypeError, ValueError):
             raise ValueError("Fotos inválidas.")
+        if len(fotos) > SHOPEE_FOTOS_MAX_PADRAO:
+            raise ValueError(f"A Shopee aceita até {SHOPEE_FOTOS_MAX_PADRAO} fotos.")
+        out["fotos"] = fotos
     return out
 
 
@@ -34439,6 +34474,8 @@ def shopee_rascunho_salvar(dados: dict[str, Any], ator: str, versao: Any) -> dic
             if "categoria" in limpos and limpos["categoria"] != str(atual.get("categoria") or "") and "atributos" not in limpos:
                 attrs = {}  # categoria nova = atributos de novo (cada categoria tem os seus)
             marca = limpos.get("marca", atual.get("marca") or {})
+            if "categoria" in limpos and limpos["categoria"] != str(atual.get("categoria") or "") and "marca" not in limpos:
+                marca = {}  # revisao: a marca e da lista da categoria; categoria nova = escolher de novo
             fotos = limpos.get("fotos", atual.get("fotos") or [])
             mudou = (any(novo[k] != atual.get(k) for k in SHOPEE_RASCUNHO_CAMPOS) or attrs != (atual.get("atributos") or {})
                      or marca != (atual.get("marca") or {}) or fotos != (atual.get("fotos") or []))
@@ -34470,12 +34507,14 @@ def shopee_rascunho_salvar(dados: dict[str, Any], ator: str, versao: Any) -> dic
 
 
 def _shopee_trocar(rid: int, de: tuple[str, ...], para: str, erros: list[str], ator: str,
-                   item_id: str | None = None) -> dict[str, Any] | None:
+                   item_id: str | None = None, versao: int | None = None) -> dict[str, Any] | None:
     with DB_LOCK:
+        extra, args_v = ("", ()) if versao is None else (" AND versao=?", (int(versao),))
         cur = DB.execute(
             f"UPDATE anuncio_rascunho_shopee_v2032 SET situacao=?, erros_json=?, item_id=COALESCE(?,item_id), "
-            f"versao=versao+1, atualizado_em=?, atualizado_por=? WHERE id=? AND situacao IN ({','.join('?' * len(de))})",
-            (para, json.dumps(list(erros), ensure_ascii=False), item_id, now_iso(), str(ator or ""), rid, *de))
+            f"versao=versao+1, atualizado_em=?, atualizado_por=? WHERE id=? AND situacao IN ({','.join('?' * len(de))})"
+            + extra,
+            (para, json.dumps(list(erros), ensure_ascii=False), item_id, now_iso(), str(ator or ""), rid, *de, *args_v))
         DB.commit()
         if cur.rowcount != 1:
             return None
@@ -34512,6 +34551,13 @@ def _shopee_conferir_local(r: dict[str, Any]) -> tuple[list[str], dict[str, Any]
         erros.append("A descrição ainda tem [CONFIRMAR]: troque pelo texto certo.")
     fotos = list(r.get("fotos") or [])
     f_max = lim.get("fotos_max") or SHOPEE_FOTOS_MAX_PADRAO
+    if fotos:  # revisao: a Shopee so aceita JPG/PNG (a WEBP passava no Conferir e travava o Publicar)
+        with DB_LOCK:
+            tipos = {int(x["id"]): str(x["tipo"]) for x in DB.execute(
+                f"SELECT id, tipo FROM anuncio_foto_v2024 WHERE id IN ({','.join('?' * len(fotos))})", fotos)}
+        for pos, fid in enumerate(fotos, 1):
+            if tipos.get(int(fid)) not in ("jpg", "png"):
+                erros.append(f"Foto {pos}: a Shopee aceita só JPG ou PNG (troque a foto).")
     if not fotos:
         erros.append("Escolha pelo menos uma foto.")
     elif len(fotos) > f_max:
@@ -34550,6 +34596,7 @@ def _shopee_conferir_local(r: dict[str, Any]) -> tuple[list[str], dict[str, Any]
         if d["tipo"] in ("lista", "multi") and v.get("valor") and not v.get("valor_id"):
             erros.append(f"{d['nome']}: escolha um valor da lista da Shopee.")
     marca = r.get("marca") or {}
+    ctx["avisos"] = []
     if not marca.get("id"):
         achada = shopee_marca_da_ficha(campos.get("marca"), marcas)
         if achada:
@@ -34558,6 +34605,11 @@ def _shopee_conferir_local(r: dict[str, Any]) -> tuple[list[str], dict[str, Any]
             erros.append("A Shopee pede a marca nesta categoria e a da ficha não está na lista: escolha a marca.")
         else:
             marca = {"id": "0", "nome": "No Brand"}
+            if str(campos.get("marca") or "").strip():  # revisao: nunca "No Brand" calado
+                ctx["avisos"].append(f"A marca da ficha ({campos.get('marca')}) não está na lista da Shopee para esta "
+                                     "categoria: o anúncio vai como \"No Brand\". Escolha a marca se ela existir na lista.")
+    elif marca.get("id") != "0" and marca.get("id") not in {str(b.get("id")) for b in marcas.get("marcas") or []}:
+        erros.append("A marca escolhida não é da lista desta categoria: escolha de novo.")
     ctx["marca"] = marca
     try:
         canais = shopee_canais_que_aceitam(shopee_canais_envio(), peso, medidas)
@@ -34616,10 +34668,13 @@ def shopee_rascunho_conferir(rascunho_id: Any, ator: str) -> dict[str, Any]:
         raise ValueError("Rascunho não encontrado.")
     if r["situacao"] not in SHOPEE_RASCUNHO_EDITAVEL:
         raise ValueError("Este rascunho já foi publicado, está em publicação ou aguarda conferência no Seller Center.")
-    erros, _ctx = _shopee_conferir_local(r)
+    erros, ctx = _shopee_conferir_local(r)
     para = "rascunho" if erros else "validado"
-    novo = _shopee_trocar(int(r["id"]), SHOPEE_RASCUNHO_EDITAVEL, para, erros, ator)
-    return {"ok": not erros, "situacao": para, "erros": erros, "rascunho": novo or shopee_rascunho_ler(r["id"])}
+    # revisao: so troca a situacao se ninguem salvou no meio (o resultado e da versao conferida)
+    novo = _shopee_trocar(int(r["id"]), SHOPEE_RASCUNHO_EDITAVEL, para, erros, ator, versao=int(r["versao"]))
+    if novo is None:
+        raise FichaConflito(shopee_rascunho_ler(r["id"]) or {})
+    return {"ok": not erros, "situacao": para, "erros": erros, "avisos": ctx.get("avisos") or [], "rascunho": novo}
 
 
 def shopee_conta_preco(codigo: str, preco: Any) -> dict[str, Any]:
@@ -34629,6 +34684,8 @@ def shopee_conta_preco(codigo: str, preco: Any) -> dict[str, Any]:
     try:
         p = round(float(str(preco).replace(",", ".")), 2) if preco not in (None, "") else None
     except (TypeError, ValueError):
+        p = None
+    if p is not None and not math.isfinite(p):  # revisao: inf/nan quebravam o JSON da tela
         p = None
     out: dict[str, Any] = {**base, "preco": p, "comissao": None, "comissao_pct": None, "taxa_fixa": None,
                            "imposto_valor": None, "lucro": None, "margem": None, "preco_ideal": None}
@@ -34667,9 +34724,24 @@ def _shopee_canal_noromak(item_id: str, r: dict[str, Any], ator: str) -> None:
          r.get("quantidade"), str(r.get("categoria") or ""), agora, agora, str(ator or "")))
 
 
-def shopee_publicar(rascunho_id: Any, ator: str) -> dict[str, Any]:
-    """V20.32: cria o anuncio na Shopee (fotos + add_item). A rota segura ANUNCIOS_PUBLICAR_LOCK; a maquina de
-    situacao garante um anuncio por rascunho. Falha antes do add_item = `validado` (nada criado)."""
+def _shopee_ja_anunciado(cod: str) -> str:
+    """Revisao (06/11): o produto ja tem anuncio na Shopee criado pelo Noromak (ou um rascunho publicando/incerto)?
+    Devolve o motivo ('' = pode). SOB o DB_LOCK. Duas abas criavam dois rascunhos e publicavam dois itens."""
+    ja = DB.execute("SELECT anuncio_id FROM anuncio_canal_v2023 WHERE canal='shopee' AND ficha_codigo=? "
+                    "AND controle='noromak' AND COALESCE(removido_em,'')='' LIMIT 1", (cod,)).fetchone()
+    if ja:
+        return (f"Este produto já tem anúncio na Shopee criado pelo Noromak (item {ja['anuncio_id']}). Para outro "
+                "anúncio, remova o atual da lista antes.")
+    outro = DB.execute("SELECT id FROM anuncio_rascunho_shopee_v2032 WHERE ficha_codigo=? AND situacao IN "
+                       "('publicando','incerto') LIMIT 1", (cod,)).fetchone()
+    if outro:
+        return f"O rascunho nº {outro['id']} deste produto está publicando ou aguarda conferência no Seller Center."
+    return ""
+
+
+def shopee_publicar_reservar(rascunho_id: Any, ator: str) -> dict[str, Any]:
+    """V20.32: confere e troca `validado -> publicando` sob o DB_LOCK (um anuncio por rascunho e por produto).
+    Erro aqui = ValueError, nada mudou."""
     try:
         rid = int(rascunho_id)
     except (TypeError, ValueError):
@@ -34688,13 +34760,43 @@ def shopee_publicar(rascunho_id: Any, ator: str) -> dict[str, Any]:
             raise ValueError("A última tentativa ficou sem resposta da Shopee: confira no Seller Center e libere antes.")
         if sit != "validado":
             raise ValueError("Confira (passo 6) antes de publicar.")
+        motivo = _shopee_ja_anunciado(str(r["ficha_codigo"]))
+        if motivo:
+            raise ValueError(motivo)
         cur = DB.execute("UPDATE anuncio_rascunho_shopee_v2032 SET situacao='publicando', erros_json='[]', versao=versao+1, "
                          "atualizado_em=?, atualizado_por=? WHERE id=? AND situacao='validado'", (now_iso(), str(ator or ""), rid))
         DB.commit()
         if cur.rowcount != 1:
             raise ValueError("Este rascunho já está sendo publicado.")
-    cod = str(r["ficha_codigo"])
-    estado: dict[str, Any] = {"etapa": "antes", "fim": None}
+    return r
+
+
+def _shopee_subir_foto(dados: bytes, mime: str, pos: int) -> str:
+    """Revisao: tenta a assinatura da loja e, com erro de assinatura/autenticacao, a publica (a doc varia)."""
+    ext = {"image/jpeg": "jpg", "image/png": "png"}.get(mime)
+    if not ext:
+        raise ValueError("a Shopee só aceita JPG ou PNG")
+    multipart = ({"scene": "normal"}, ("image", f"foto{pos}.{ext}", dados, mime))
+    try:
+        resp = _shopee_chamar("POST", "/api/v2/media_space/upload_image", multipart=multipart,
+                              timeout=SHOPEE_UPLOAD_TIMEOUT)
+    except ShopeeRecusou as exc:
+        _anuncio_amostra("shopee_upload_image [erro]", {"erro": str(exc), "corpo": exc.corpo})
+        if not re.search(r"sign|auth|token|shop", str(exc), re.I):
+            raise
+        resp = _shopee_chamar("POST", "/api/v2/media_space/upload_image", multipart=multipart,
+                              timeout=SHOPEE_UPLOAD_TIMEOUT, publico=True)
+    _anuncio_amostra("shopee_upload_image", resp)
+    iid = str((_shopee_resposta(resp).get("image_info") or {}).get("image_id") or "")
+    if not iid:
+        raise ValueError("a Shopee não devolveu o id da foto")
+    return iid
+
+
+def shopee_publicar_executar(r: dict[str, Any], ator: str) -> dict[str, Any]:
+    """V20.32: o trabalho do Publicar (rascunho ja em `publicando`). Falha antes do add_item = `validado`."""
+    rid, cod = int(r["id"]), str(r["ficha_codigo"])
+    estado: dict[str, Any] = {"etapa": "antes", "fim": None, "item_id": None}
 
     def fim(para: str, erros: list[str], item_id: str | None = None) -> dict[str, Any]:
         novo = _shopee_trocar(rid, ("publicando",), para, erros, ator, item_id=item_id)
@@ -34729,33 +34831,25 @@ def shopee_publicar(rascunho_id: Any, ator: str) -> dict[str, Any]:
         for pos, fid in enumerate(r.get("fotos") or [], 1):
             try:
                 dados, mime = anuncio_foto_bytes(fid)
-                ext = {"image/jpeg": "jpg", "image/png": "png"}.get(mime)
-                if not ext:
-                    raise ValueError("a Shopee só aceita JPG ou PNG")
-                resp = _shopee_chamar("POST", "/api/v2/media_space/upload_image", multipart=(
-                    {"scene": "normal"}, ("image", f"foto{pos}.{ext}", dados, mime)), timeout=SHOPEE_UPLOAD_TIMEOUT)
-                _anuncio_amostra("shopee_upload_image", resp)
-                info = _shopee_resposta(resp).get("image_info") or {}
-                iid = str(info.get("image_id") or "")
-                if not iid:
-                    raise ValueError("a Shopee não devolveu o id da foto")
-                ids.append(iid)
+                ids.append(_shopee_subir_foto(dados, mime, pos))
             except Exception as exc:
                 return fim("validado", [f"A foto {pos} não subiu para a Shopee ({exc}). Nada foi criado."])
         corpo = shopee_item_corpo(r, ficha_ler(cod) or {"codigo": cod}, ids, ctx)
         estado["etapa"] = "enviado"
         try:
             resp = _shopee_chamar("POST", "/api/v2/product/add_item", payload=corpo, timeout=SHOPEE_ITEM_TIMEOUT)
-        except ShopeeRecusou as exc:
-            _anuncio_amostra("shopee_add_item [erro]", {"erro": str(exc), "corpo": exc.corpo, "enviado": corpo})
+        except (ShopeeRecusou, ShopeeSemResposta) as exc:
+            _anuncio_amostra("shopee_add_item [erro]", {"erro": str(exc), "corpo": getattr(exc, "corpo", None),
+                                                        "enviado": corpo})
+            if _shopee_talvez_fez(exc):  # revisao: erro interno/ocupado/tempo = a Shopee pode ter criado
+                return fim("incerto", [SHOPEE_INCERTO_TEXTO, f"Detalhe: {exc}"])
             estado["etapa"] = "antes"
             return fim("erro", [f"A Shopee recusou: {exc}"])
-        except ShopeeSemResposta as exc:
-            return fim("incerto", [SHOPEE_INCERTO_TEXTO, f"Detalhe: {exc}"])
         _anuncio_amostra("shopee_add_item", resp)
         item_id = str(_shopee_resposta(resp).get("item_id") or "")
         if not item_id.isdigit():
             return fim("incerto", [SHOPEE_INCERTO_TEXTO, "A Shopee respondeu sem o número do item."])
+        estado["item_id"] = item_id
         with DB_LOCK:
             try:
                 cur = DB.execute("UPDATE anuncio_rascunho_shopee_v2032 SET situacao='publicado', item_id=?, erros_json='[]', "
@@ -34777,9 +34871,32 @@ def shopee_publicar(rascunho_id: Any, ator: str) -> dict[str, Any]:
                 if estado["etapa"] == "antes":
                     fim("validado", ["Falha inesperada antes de criar o anúncio; nada foi criado na Shopee."])
                 else:
-                    fim("incerto", [SHOPEE_INCERTO_TEXTO])
+                    # revisao: o numero do item, quando ja veio, nunca se perde
+                    fim("incerto", [SHOPEE_INCERTO_TEXTO], item_id=estado["item_id"])
             except Exception as exc:
                 print(f"Aviso: rascunho Shopee {rid} nao saiu de publicando: {exc}", file=sys.stderr)
+
+
+def shopee_publicar(rascunho_id: Any, ator: str) -> dict[str, Any]:
+    """V20.32: reserva e publica (sincrono; a rota usa shopee_publicar_iniciar, em segundo plano)."""
+    return shopee_publicar_executar(shopee_publicar_reservar(rascunho_id, ator), ator)
+
+
+def shopee_publicar_iniciar(rascunho_id: Any, ator: str) -> dict[str, Any]:
+    """Revisao (06/11): fotos + add_item passavam dos 60 s do nginx (504 com o anuncio criado). A rota reserva aqui
+    (erro = 400 na hora) e o resto roda numa thread que solta o ANUNCIOS_PUBLICAR_LOCK no fim. A tela acompanha
+    pelos rascunhos ate sair de `publicando`. Chamar COM o ANUNCIOS_PUBLICAR_LOCK pego."""
+    r = shopee_publicar_reservar(rascunho_id, ator)
+
+    def rodar() -> None:
+        try:
+            shopee_publicar_executar(r, ator)
+        except Exception as exc:
+            print(f"Aviso: publicar na Shopee {r['id']} falhou: {exc}", file=sys.stderr)
+        finally:
+            ANUNCIOS_PUBLICAR_LOCK.release()
+    threading.Thread(target=rodar, name=f"shopee-publicar-{r['id']}", daemon=True).start()
+    return {"ok": True, "iniciado": True, "rascunho": shopee_rascunho_ler(r["id"])}
 
 
 def shopee_incerto_liberar(rascunho_id: Any, item_id: Any, ator: str) -> dict[str, Any]:
@@ -34789,9 +34906,22 @@ def shopee_incerto_liberar(rascunho_id: Any, item_id: Any, ator: str) -> dict[st
         rid = int(rascunho_id)
     except (TypeError, ValueError):
         raise ValueError("Rascunho não encontrado.")
-    texto = re.sub(r"\D", "", str(item_id or ""))
-    if str(item_id or "").strip() and not texto:
+    texto = str(item_id or "").strip()
+    if texto and not texto.isdigit():  # revisao: so numero (antes "55 5x" virava 555 calado)
         raise ValueError("Número do item inválido (só números, como aparece no Seller Center).")
+    if texto:  # revisao: confere na Shopee que o item e deste produto (fora do DB_LOCK)
+        pre = shopee_rascunho_ler(rid)
+        if pre is None:
+            raise ValueError("Rascunho não encontrado.")
+        try:
+            lido = _shopee_estoque_ler(texto)
+        except (ShopeeRecusou, ShopeeSemResposta) as exc:
+            raise ValueError(f"Não consegui conferir o item {texto} na Shopee ({exc}). Nada foi alterado.")
+        if not lido.get("existe"):
+            raise ValueError(f"A Shopee não achou o item {texto} nesta loja. Confira o número; nada foi alterado.")
+        if normalize(lido.get("sku")) != normalize(pre["ficha_codigo"]):
+            raise ValueError(f"O item {texto} na Shopee tem o SKU {lido.get('sku') or '(vazio)'}, não "
+                             f"{pre['ficha_codigo']}: não é deste produto. Nada foi alterado.")
     with DB_LOCK:
         row = DB.execute("SELECT * FROM anuncio_rascunho_shopee_v2032 WHERE id=?", (rid,)).fetchone()
         if row is None:
@@ -35244,26 +35374,32 @@ def ml_estoque_gravar(conta: str, mlb: str, quantidade: Any, *, ator: str, modo:
 
 
 def _shopee_estoque_ler(item_id: str) -> dict[str, Any]:
-    """V20.32: o estoque do item na Shopee (get_item_base_info). {estoque, variacoes, status}; sem numero = None."""
+    """V20.32: o item na Shopee (get_item_base_info): {existe, sku, estoque, locais, variacoes, status}.
+    Revisao: deposito sem numero = estoque None (nunca 0); sem `seller_stock` = None (o "disponivel" ja tira a
+    reserva e nao e o numero gravado)."""
     dados = _shopee_chamar("GET", "/api/v2/product/get_item_base_info", {"item_id_list": str(item_id)})
     _anuncio_amostra("shopee_estoque_ler", dados)
     lista = _shopee_resposta(dados).get("item_list") or []
     item = lista[0] if lista and isinstance(lista[0], dict) else {}
     info = item.get("stock_info_v2") if isinstance(item.get("stock_info_v2"), dict) else {}
-    vendedor = [x for x in info.get("seller_stock") or [] if isinstance(x, dict)]
+    locais = [x for x in info.get("seller_stock") or [] if isinstance(x, dict)]
     estoque: int | None = None
     try:
-        if vendedor:
-            estoque = sum(int(x.get("stock") or 0) for x in vendedor)
-        elif isinstance(info.get("summary_info"), dict) and info["summary_info"].get("total_available_stock") is not None:
-            estoque = int(info["summary_info"]["total_available_stock"])
+        if locais and all(x.get("stock") is not None for x in locais):
+            estoque = sum(int(x["stock"]) for x in locais)
     except (TypeError, ValueError):
         estoque = None
-    return {"estoque": estoque, "variacoes": bool(item.get("has_model")), "status": str(item.get("item_status") or "")}
+    return {"existe": bool(item), "sku": str(item.get("item_sku") or ""), "estoque": estoque,
+            "locais": [str(x.get("location_id") or "") for x in locais],
+            "variacoes": bool(item.get("has_model")), "status": str(item.get("item_status") or "")}
 
 
-def _shopee_estoque_gravar_api(item_id: str, qtd: int) -> dict[str, Any]:
-    """V20.32: le, grava (update_stock, absoluto) e rele; so e ok quando a Shopee mostra o numero."""
+SHOPEE_STATUS_SEM_ESTOQUE = ("BANNED", "SELLER_DELETE", "SHOPEE_DELETE", "DELETED")
+
+
+def _shopee_estoque_gravar_api(item_id: str, qtd: int, ficha_codigo: str = "") -> dict[str, Any]:
+    """V20.32: le, grava (update_stock, absoluto) e rele; so e ok quando a Shopee mostra o numero.
+    Revisao: so grava no item cujo SKU e o da ficha, com UM deposito (mandado pelo local lido) e ativo."""
     res: dict[str, Any] = {"ok": False, "antes": None, "depois": None, "metodo": "update_stock", "erro": "", "lido": {}}
     try:
         antes = _shopee_estoque_ler(item_id)
@@ -35272,12 +35408,32 @@ def _shopee_estoque_gravar_api(item_id: str, qtd: int) -> dict[str, Any]:
         return res
     res["antes"] = antes["estoque"]
     res["lido"] = antes
+    if not antes["existe"]:
+        res["erro"] = "a Shopee não achou o item nesta loja"
+        return res
+    if ficha_codigo and normalize(antes["sku"]) != normalize(ficha_codigo):
+        res["erro"] = f"o item na Shopee tem o SKU {antes['sku'] or '(vazio)'}, não {ficha_codigo}: nada enviado"
+        return res
+    if antes["status"] in SHOPEE_STATUS_SEM_ESTOQUE:
+        res.update(erro=f"item {antes['status']} na Shopee: nada enviado", ignorado="status")
+        return res
     if antes["variacoes"]:
         res.update(erro="anúncio com variações: o estoque é por variação; ajuste na Shopee", ignorado="variacoes")
         return res
+    if len(antes["locais"]) > 1:
+        res["erro"] = ("o item tem mais de um depósito na Shopee (" + ", ".join(x or "sem id" for x in antes["locais"])
+                       + "): ajuste na Shopee, o Noromak não escolhe o depósito")
+        return res
+    if antes["estoque"] is None:
+        res["erro"] = "a Shopee não mostrou o estoque do item: nada enviado"
+        return res
+    local = antes["locais"][0] if antes["locais"] else ""
+    estoque_item: dict[str, Any] = {"stock": qtd}
+    if local:
+        estoque_item = {"location_id": local, "stock": qtd}
     try:
         r = _shopee_chamar("POST", "/api/v2/product/update_stock",
-                           payload={"item_id": int(item_id), "stock_list": [{"model_id": 0, "seller_stock": [{"stock": qtd}]}]})
+                           payload={"item_id": int(item_id), "stock_list": [{"model_id": 0, "seller_stock": [estoque_item]}]})
         _anuncio_amostra("shopee_update_stock", r)
         falhas = _shopee_resposta(r).get("failure_list") or []
         if falhas:
@@ -35286,7 +35442,8 @@ def _shopee_estoque_gravar_api(item_id: str, qtd: int) -> dict[str, Any]:
     except ShopeeRecusou as exc:
         _anuncio_amostra("shopee_update_stock [erro]", {"erro": str(exc), "corpo": exc.corpo})
         res["erro"] = f"a Shopee recusou: {exc}"
-        return res
+        if not _shopee_talvez_fez(exc):
+            return res
     except ShopeeSemResposta as exc:
         res["erro"] = f"sem resposta da Shopee ({exc}); relido abaixo"
     for espera in ANUNCIO_ESTOQUE_RELEITURA_ESPERAS:
@@ -35294,6 +35451,8 @@ def _shopee_estoque_gravar_api(item_id: str, qtd: int) -> dict[str, Any]:
         try:
             depois = _shopee_estoque_ler(item_id)["estoque"]
         except (ShopeeRecusou, ShopeeSemResposta):
+            continue
+        if depois is None:
             continue
         res["depois"] = depois
         if depois == qtd:
@@ -35331,7 +35490,9 @@ def shopee_estoque_gravar(conta: str, item_id: str, quantidade: Any, *, ator: st
         if recusa:
             _anuncio_estoque_registrar(canal, conta_linha, item_id, modo, None, qtd, motivo, "ignorado", recusa, ator)
             return {"ok": False, "resultado": "ignorado", "antes": None, "depois": None, "metodo": "", "erro": recusa}
-        res = _shopee_estoque_gravar_api(item_id, qtd)
+        with DB_LOCK:
+            ficha_linha = str((_anuncio_estoque_linha(canal, conta_linha, item_id) or {}).get("ficha_codigo") or "")
+        res = _shopee_estoque_gravar_api(item_id, qtd, ficha_linha)
         ok = bool(res["ok"])
         resultado = "ok" if ok else ("ignorado" if res.get("ignorado") else "erro")
         detalhe = res["metodo"] + (": " + res["erro"] if res.get("erro") else "")
@@ -36020,11 +36181,28 @@ def anuncios_estoque_volta(estado: dict[str, Any]) -> list[str]:
         estado["recalculo"] = agora
         afetadas |= set(contas)
     for c in sorted(afetadas):
-        try:
-            anuncios_estoque_rodada(c, ator="sistema")
-        except Exception as exc:
-            print(f"[anuncios_estoque] rodada de {c} falhou: {exc}", file=sys.stderr, flush=True)
+        if c == ESTOQUE_CONTA_SHOPEE:
+            # revisao (06/11): Shopee fora do ar (35 s por chamada) nao pode segurar o ML na mesma volta: roda numa
+            # thread e a volta espera no maximo ANUNCIO_ESTOQUE_SHOPEE_ESPERA_S (a trava da rodada impede duas juntas)
+            if _ANUNCIO_ESTOQUE_RODADA_LOCKS[c].locked():
+                continue
+            t = threading.Thread(target=_anuncios_estoque_rodada_segura, args=(c,), daemon=True,
+                                 name="anuncios-estoque-shopee")
+            t.start()
+            t.join(ANUNCIO_ESTOQUE_SHOPEE_ESPERA_S)
+            continue
+        _anuncios_estoque_rodada_segura(c)
     return sorted(afetadas)
+
+
+ANUNCIO_ESTOQUE_SHOPEE_ESPERA_S = 20
+
+
+def _anuncios_estoque_rodada_segura(conta: str) -> None:
+    try:
+        anuncios_estoque_rodada(conta, ator="sistema")
+    except Exception as exc:
+        print(f"[anuncios_estoque] rodada de {conta} falhou: {exc}", file=sys.stderr, flush=True)
 
 
 def anuncios_estoque_loop(stop_event: threading.Event) -> None:
@@ -43699,7 +43877,8 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 def _qs(nome: str) -> str:
                     return str((query.get(nome) or [""])[0]).strip()
-                if str(ctx.get("app_role") or "") != "admin":
+                # revisao: ver os rascunhos = modulo admin (so le o banco); as leituras da Shopee = perfil Admin
+                if str(ctx.get("app_role") or "") != "admin" and not path.endswith("/rascunhos"):
                     self.send_json({"ok": False, "error": "Somente o perfil Admin."}, 403)
                     return
                 try:
@@ -46361,10 +46540,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     if not ANUNCIOS_PUBLICAR_LOCK.acquire(blocking=False):
                         self.send_json({"ok": False, "error": "Outra publicação em andamento."}, 409)
                         return
-                    try:
-                        res = shopee_publicar(body.get("id"), ctx["username"])
-                    finally:
+                    try:  # revisao: em segundo plano (a thread solta a trava no fim)
+                        res = shopee_publicar_iniciar(body.get("id"), ctx["username"])
+                    except BaseException:
                         ANUNCIOS_PUBLICAR_LOCK.release()
+                        raise
                 elif path == "/api/anuncios/shopee/liberar":
                     res = shopee_incerto_liberar(body.get("id"), body.get("item_id"), ctx["username"])
                 elif path == "/api/anuncios/rascunho/liberar":  # V20.24: o Admin conferiu o `incerto` no ML
