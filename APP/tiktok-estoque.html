@@ -181,7 +181,8 @@ async function enviar(){
   carregar();
 }
 async function atualizarAnuncios(){
-  try{const r=await api("/api/tiktok-estoque/atualizar",{});nkToast(`${r.variacoes} variação(ões) lidas do TikTok.`);carregar();}
+  // revisar-antes-de-subir (V20.40): a leitura roda em segundo plano (passava dos 60 s do nginx)
+  try{await api("/api/tiktok-estoque/atualizar",{});nkToast("Lendo os anúncios do TikTok… a lista atualiza sozinha em instantes.");setTimeout(carregar,15000);}
   catch(e){nkToast(e.message);}
 }
 function abrirOwner(){$("ownerErro").textContent="";$("owner").classList.add("on");setTimeout(()=>$("ownerSenha").focus(),30);}

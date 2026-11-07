@@ -51,6 +51,7 @@ class Base(TesteNoromak):
         self.enviados = []
         self.erro_ship = None
         self.doc_url = DOC_URL
+        self.relidos = {}
 
     def _api(self, pedidos=None):
         teste = self
@@ -66,6 +67,8 @@ class Base(TesteNoromak):
                 return {"code": 0, "data": {}}
             if path.endswith("/shipping_documents"):
                 return {"code": 0, "data": {"doc_url": teste.doc_url}}
+            if path == "/order/202309/orders":  # V20.40: releitura do que sumiu (só sai com o TikTok confirmando)
+                return {"code": 0, "data": {"orders": [{"id": n, "status": st} for n, st in teste.relidos.items()]}}
             return {"code": 0, "data": {}}
         return mock.patch.object(S, "tiktok_api", side_effect=falso)
 
@@ -264,9 +267,16 @@ class Cancelamento(Base):
 
     def test_cancelado_sai_da_fila(self):
         self._importar([_pedido("TT1"), _pedido("TT2")])
+        self.relidos = {"TT1": "CANCELLED"}  # V20.40: o TikTok confirma na releitura
         self._importar([_pedido("TT2")])
         self.assertNotIn("TT1", self._pedidos())
         self.assertIn("TT2", self._pedidos())
+
+    def test_sumiu_sem_confirmar_fica(self):
+        # revisar-antes-de-subir (V20.40): lista vazia/sem confirmação nunca tira pedido da fila
+        self._importar([_pedido("TT1")])
+        self._importar([])
+        self.assertIn("TT1", self._pedidos())
 
     def test_linha_protegida_pelo_admin_fica(self):
         self._importar([_pedido("TT1")])
@@ -294,6 +304,7 @@ class Cancelamento(Base):
     def test_cancelado_depois_de_vinculado_nao_imprime(self):
         S.tiktok_etiqueta_definir(True, "dono")
         self._importar([_pedido("TT1")])
+        self.relidos = {"TT1": "CANCELLED"}  # V20.40: confirmado na releitura
         self._importar([])
         with self.assertRaises(ValueError):
             S.tiktok_etiqueta_pdf("TT1", "bauru")

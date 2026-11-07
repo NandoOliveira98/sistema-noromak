@@ -552,6 +552,18 @@ cada variação de `tiktok_sku_v1964` (API ou extensão) vira linha `canal='tikt
 ficha pelo SKU do vendedor (vínculo à mão vence), `controle='tiktok'` (o estoque é da tela Estoque TikTok; "Passar para o Noromak" recusa),
 `user_product_id` = product_id (`_tiktok_anuncios_espelhar`, também no boot); removido pelo ADMIN não volta. Teste:
 `TESTES/test_tiktok_fonte_api_v2040.py`.
+**revisar-antes-de-subir da V20.40 (07/11, "corrigir todos"):** a importação pela API monta a fila pela **mesma regra da
+extensão** (`_tiktok_api_para_sc` → `_tiktok_sc_montar_fila`): pedido que sumiu da lista (ou lista vazia) só sai com o TikTok
+confirmando na releitura (`_tiktok_api_reler`, até 50 por volta, o relido há mais tempo primeiro); bipado fica com aviso;
+quantidade nunca abaixo do bipado; `TikTokAtualizadoEm` só com mudança real; `PARTIALLY_SHIPPING` entra na busca (só as unidades
+a enviar). Amostra da API passa por `_tiktok_sc_mascarar`. Virar para a API volta o estoque a **Simulação** e é recusado com
+rodada da extensão aberta (`TIKTOK_RODADA`, 409); `tiktok_estoque_enviar` também espera a rodada fechar e o clique espera no máximo
+20 s (`TikTokEstoqueOcupado`, 409). Catálogo pela API com as travas da extensão (vazio/cortado/< 70% não apaga). Endereço só com
+`address_line2` numérico (senão o atendimento espera); níveis pelo `address_level_name` (state/city/district), senão L1/L2/L3.
+Erro de preço não apaga o preço bom já lido; CPF ausente vai para o log. Com a API, `pedidos-estado` diz `importacao: false` e
+`pendentes` volta vazio (a extensão nem lê); "Atualizar anúncios" em 2º plano (`tiktok_catalogo_iniciar`, `TIKTOK_CATALOGO_LOCK`,
+também no worker); espelho só grava o que mudou e o estoque enviado aparece na hora (`_tiktok_anuncio_estoque`); o aviso de
+situação desconhecida do Painel de saúde é só da extensão.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

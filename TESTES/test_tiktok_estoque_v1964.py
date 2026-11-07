@@ -50,6 +50,7 @@ class Base(TesteNoromak):
         _conectar()
         S._tiktok_config_gravar("fonte", "api", "teste")  # V20.40: estes testes são da API
         self.enviados = []
+        self.relidos = {}
         S._TIKTOK_APOLLO_CHAMADAS.clear()
 
     def _api(self, respostas_produtos=None, pedidos=None):
@@ -64,6 +65,8 @@ class Base(TesteNoromak):
                 return {"code": 0, "data": {"orders": [o for o in (pedidos or []) if o.get("status") == st]}}
             if path.endswith("/inventory/update"):
                 return {"code": 0, "data": {"errors": []}}
+            if path == "/order/202309/orders":  # V20.40: releitura do que sumiu da lista
+                return {"code": 0, "data": {"orders": [{"id": n, "status": st} for n, st in self.relidos.items()]}}
             return {"code": 0, "data": {}}
         return mock.patch.object(S, "tiktok_api", side_effect=falso)
 
@@ -266,6 +269,7 @@ class Pedidos(Base):
             S.tiktok_importar_pedidos()
             S.tiktok_importar_pedidos()
         self.assertEqual(len([l for l in self._fila_atual() if l.get("Pedido") == "TT1"]), 1)
+        self.relidos = {"TT1": "IN_TRANSIT"}  # V20.40: só sai com o TikTok confirmando
         with self._api(pedidos=[_pedido("TT2")]):
             S.tiktok_importar_pedidos()
         pedidos = {l.get("Pedido") for l in self._fila_atual()}

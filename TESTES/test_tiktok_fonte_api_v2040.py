@@ -245,6 +245,161 @@ class Anuncios(Base):
         self.assertIsNotNone(self._hub("V1"))
 
 
+class RevisaoAntesDeSubir(Base):
+    """Achados do revisar-antes-de-subir da V20.40 (07/11, "corrigir todos")."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _conectar()
+        S.tiktok_fonte_definir("api", "dono")
+
+    def _fila(self):
+        bruto, _, _ = S.get_storage("conf_pedidos")
+        return S._rows_from_storage_value(bruto)
+
+    def _pedidos(self):
+        return {l.get("Pedido") for l in self._fila()}
+
+    def _bipar(self, pedido, n=1):
+        linhas = self._fila()
+        for l in linhas:
+            if l.get("Pedido") == pedido:
+                l["Lido"] = str(n)
+        S.save_storage("conf_pedidos", None, json.dumps(linhas), True, actor="teste", actor_role="admin")
+
+    # --- ALTO: saída só com o TikTok confirmando
+    def test_lista_vazia_nao_tira_ninguem(self):
+        with self._api([_pedido("TT1"), _pedido("TT2")]):
+            S.tiktok_importar_pedidos()
+        with self._api([], relidos=[]):
+            S.tiktok_importar_pedidos()
+        self.assertEqual({"TT1", "TT2"} & self._pedidos(), {"TT1", "TT2"})
+
+    def test_cancelado_confirmado_com_bip_fica_com_aviso(self):
+        with self._api([_pedido("TT1")]):
+            S.tiktok_importar_pedidos()
+        self._bipar("TT1")
+        with self._api([], relidos=[{"id": "TT1", "status": "CANCELLED"}]):
+            S.tiktok_importar_pedidos()
+        linha = next(l for l in self._fila() if l.get("Pedido") == "TT1")
+        self.assertIn("TikTok:", linha.get("Observação", ""), "peça já bipada não some calada")
+
+    def test_parcialmente_enviado_fica_so_com_o_que_falta(self):
+        linhas = [_line("TT1", 0), _line("TT1", 1, status="IN_TRANSIT")]
+        with self._api([_pedido("TT1", linhas, status="PARTIALLY_SHIPPING")]):
+            S.tiktok_importar_pedidos()
+        linha = next(l for l in self._fila() if l.get("Pedido") == "TT1")
+        self.assertEqual(linha["Quantidade"], "1", "a unidade já enviada não volta a ser separada")
+        self.assertIn("PARTIALLY_SHIPPING", S.TIKTOK_PEDIDOS_STATUS)
+
+    def test_fila_sem_mudanca_nao_e_regravada(self):
+        with self._api([_pedido("TT1")]):
+            S.tiktok_importar_pedidos()
+            _, v1, _ = S.get_storage("conf_pedidos")
+            S.tiktok_importar_pedidos()
+            _, v2, _ = S.get_storage("conf_pedidos")
+        self.assertEqual(v1, v2, "a versão da fila só sobe com mudança real")
+
+    # --- ALTO: amostra sem dado pessoal
+    def test_amostra_da_api_mascara_o_comprador(self):
+        resp = {"code": 0, "data": {"orders": [_pedido("TT9")]}}
+        with mock.patch.object(S, "_tiktok_http", return_value=resp), \
+                mock.patch.object(S, "tiktok_access_token", return_value="AT"):
+            S.tiktok_api("GET", "/order/202309/orders", params={"ids": "TT9"})
+        with S.DB_LOCK:
+            txt = S.DB.execute("SELECT resposta FROM tiktok_amostra_v1963 WHERE tipo='GET /order/202309/orders'").fetchone()[0]
+        for dado in ("123.456.789-09", "Maria Souza", "Rua das Flores", "17012-000"):
+            self.assertNotIn(dado, txt)
+        self.assertIn('"cpf"', txt, "as chaves continuam para conferir o formato")
+
+    # --- MÉDIOS
+    def test_virar_para_api_volta_o_estoque_a_simulacao(self):
+        S.tiktok_fonte_definir("extensao", "dono")
+        S.tiktok_estoque_config_definir("modo_estoque", "automatico", "dono")
+        S.tiktok_fonte_definir("api", "dono")
+        self.assertEqual(S.tiktok_estoque_config()["modo_estoque"], "simulacao")
+
+    def test_rodada_da_extensao_aberta_segura_a_api(self):
+        S.tiktok_fonte_definir("extensao", "dono")
+        S.TIKTOK_RODADA.update(id="R1", desde=time.time(), por="dono")
+        self.addCleanup(S.TIKTOK_RODADA.clear)
+        with self.assertRaises(S.TikTokRodadaOcupada):
+            S.tiktok_fonte_definir("api", "dono")
+        S.tiktok_estoque_config_definir("modo_estoque", "lote", "dono")
+        with self._api():
+            r = S.tiktok_estoque_enviar("dono")
+        self.assertEqual(r["enviados"], 0)
+        self.assertIn("aguardando", r)
+
+    def test_catalogo_vazio_ou_cortado_nao_apaga(self):
+        S._tiktok_sku_gravar({f"V{i}": {"product_id": "P", "titulo": "T", "status": "ACTIVATE", "seller_sku": f"S{i}",
+                                        "warehouse_id": "W", "armazens": 1, "qtd": 1} for i in range(20)},
+                             apagar_ausentes=False)
+        respostas = [{"code": 0, "data": {"products": []}},
+                     {"code": 0, "data": {"products": [{"id": "P", "status": "ACTIVATE", "skus": [
+                         {"id": "V0", "seller_sku": "S0", "inventory": [{"warehouse_id": "W", "quantity": 1}]}]}]}}]
+        for resp in respostas:
+            with mock.patch.object(S, "tiktok_api", return_value=resp):
+                S.tiktok_produtos_sincronizar()
+            self.assertEqual(len(S._tiktok_linhas_sku()), 20)
+
+    def test_endereco_sem_numero_claro_nao_vale(self):
+        p = _pedido("TT1")
+        p["recipient_address"]["address_line2"] = "Apto 12"
+        self.assertIsNone(S._tiktok_api_endereco(p))
+        p["recipient_address"]["address_line2"] = ""
+        self.assertIsNone(S._tiktok_api_endereco(p))
+
+    def test_endereco_pelo_nome_do_nivel(self):
+        p = _pedido("TT1")
+        p["recipient_address"]["district_info"] = [
+            {"address_level": "L1", "address_level_name": "City", "address_name": "Bauru"},
+            {"address_level": "L2", "address_level_name": "State", "address_name": "SP"},
+            {"address_level": "L3", "address_level_name": "District", "address_name": "Centro"}]
+        e = S._tiktok_api_endereco(p)
+        self.assertIn("Bauru, SP, 17012000", e["texto"])
+
+    def test_erro_de_preco_nao_apaga_o_preco_bom(self):
+        with self._api([_pedido("TT1")]):
+            S.tiktok_importar_pedidos()
+        with self._api([_pedido("TT1", [_line("TT1", 0, cheio="")])]):
+            S.tiktok_importar_pedidos()
+        self.assertNotIn("erro", S._tiktok_sc_guardado("TT1")["venda"])
+
+    # --- BAIXOS
+    def test_com_a_api_a_extensao_nem_le(self):
+        self.assertFalse(S.tiktok_sc_estado()["importacao"])
+        p = S.tiktok_extensao_pendentes()
+        self.assertFalse(p["pode_enviar"])
+        self.assertEqual(p["itens"], [])
+
+    def test_saude_ignora_aviso_antigo_da_extensao(self):
+        S._tiktok_config_gravar("pedidos_desconhecidos", json.dumps({"codigos": ["999"], "pedidos": ["X"]}), "x")
+        S._tiktok_config_gravar("pedidos_api_epoch", str(int(time.time())), "x")
+        self.assertEqual(S._saude_tiktok_pedidos()["nivel"], "ok")
+
+    def test_estoque_enviado_aparece_na_plataforma(self):
+        S._tiktok_sku_gravar({"V1": {"product_id": "P1", "titulo": "T", "status": "ACTIVATE", "seller_sku": "0893600022",
+                                     "warehouse_id": "W", "armazens": 1, "qtd": 2}}, apagar_ausentes=False)
+        with S.DB_LOCK:
+            S._tiktok_anuncio_estoque("V1", 9)
+            S.DB.commit()
+        self.assertEqual(self._hub("V1")["estoque"], 9)
+
+    def test_atualizar_roda_em_segundo_plano_e_enviar_nao_espera_o_worker(self):
+        with mock.patch.object(S, "tiktok_produtos_sincronizar"):
+            st, corpo = self.cliente.pedir("POST", "/api/tiktok-estoque/atualizar", {})
+        self.assertEqual(st, 200, corpo)
+        self.assertTrue(corpo.get("iniciado"))
+        S.tiktok_estoque_config_definir("modo_estoque", "lote", "dono")
+        S.TIKTOK_ESTOQUE_LOCK.acquire()
+        try:
+            with self.assertRaises(S.TikTokEstoqueOcupado):
+                S.tiktok_estoque_enviar("dono", espera=0.1)
+        finally:
+            S.TIKTOK_ESTOQUE_LOCK.release()
+
+
 class Rotas(Base):
 
     def test_fonte_pela_rota(self):
