@@ -946,6 +946,57 @@ pública pelo **código** de erro do corpo; renova também em 403 com código de
 que não começa (thread) volta a `validado`; mudança que chega com a rodada da Shopee ocupada fica para a volta seguinte
 (`estado["shopee_pendente"]`); trocar de ficha durante a publicação não trava o painel.
 
+**V20.34 — anúncios na Magalu (Araçatuba)** (dono, 06/11: "vamos para o magalu agr"; desenho
+`docs/superpowers/specs/2026-11-06-anuncios-magalu-design.md`). Escopos de gravação pedidos pelo `idm client add-scope` (AVAILABLE
+em 06/11); o token só recebe extra se o link pedir: `MAGALU_OAUTH_SCOPE` pede os quatro — **reconectar a Magalu uma vez depois de
+publicar**. Painel **"Criar anúncio na Magalu"** na aba Anúncios em todos os canais: rascunho `anuncio_rascunho_magalu_v2034`
+(título ≤ 150, categoria por busca de nome, ficha técnica/atributos da categoria, marca, fotos, descrição ≤ 7000, preço, preço "de",
+quantidade; `versao` → 409). **Tudo na Magalu é assíncrono (202)**: o SKU enviado = código da ficha, e `aguardando` só vira
+`publicado` quando o `GET` do SKU mostra o produto — aí manda o preço (centavos, `currency: BRL` sempre) e o estoque e a linha entra
+(`canal='magalu'`, `anuncio_id` = SKU, estoque Manual). Acompanhamento: worker do estoque a cada volta + a tela (no máximo 1 leitura
+por rascunho a cada 20 s). Sem resposta no envio = `aguardando` (não incerto); trace com erro = `erro`; 30 min sem o SKU = `incerto`
+("Conferir de novo" / "Não foi criado"); `publicando` no boot = `aguardando`. **SKU que já existe na Magalu nunca é sobrescrito**
+(o Publicar recusa). **Fotos = endereços do anúncio do ML** (`mlstatic.com`, JPEG; a Magalu baixa pelo endereço e as fotos do Noromak
+estão atrás do login); a página não mostra imagem de fora (CSP): link "ver". Estoque: conta `magalu` (`ESTOQUE_CONTAS_FORA`, com a
+`shopee`), interruptor próprio, o mesmo disponível de Araçatuba; `magalu_estoque_gravar` lê o AVAILABLE do canal (RESERVED fora),
+`PATCH`/`POST` absoluto com o `branch` único, dois CDs = recusa, relê até ~30 s. `shopee_estoque_gravar` e o da Magalu passam pelo
+mesmo `_estoque_gravar_fora`. Rotas `GET /api/anuncios/magalu/{categorias,atributos,conta,fotos,rascunhos}` e
+`POST /api/anuncios/magalu/{rascunho,conferir,publicar,acompanhar,liberar}`. 1ª resposta de cada chamada em `anuncio_amostra_v2024`
+(`magalu_*`) — **conferir no 1º uso**. Prévia: `dev_magalu_anuncio.py` ("recusar"/"sumir" no título). Teste:
+`TESTES/test_anuncios_magalu_v2034.py`.
+**revisar-antes-de-subir (06/11, "corrija tudo"):** categorias no endereço da spec (**plural** `/portfolios/categories`, busca com 3+
+letras, opções em `choices`, atributo inativo fora, subcategoria por `/categories/hierarchy?parent_id=` barra no Conferir). **Nunca toma
+SKU alheio:** a marca "enviado" (`enviado_em`) é gravada antes do POST — no boot `publicando` sem ela volta a `validado`; o SKU só é
+aceito como nosso com o **mesmo título** do envio (senão `erro`, nada enviado); "Conferir de novo" só de `incerto` ou de `erro` depois
+de o SKU ser reconhecido (etapa preço/estoque); SKU nosso que apareceu tarde é reconhecido no Publicar seguinte (não cria de novo).
+Etapas `sku → preco → estoque → confirmar` (`etapa`, `etapa_em`, `tentativas`): preço POST/PATCH conforme já existe, **estoque inicial =
+o Apollo de AGORA** (menor entre o pedido e o que dá para montar; sem leitura não envia) por ler-e-escolher PATCH/POST
+(`_magalu_estoque_enviar`), 5 recusas ou 30 min = `erro` (sem laço); `publicado` só quando a Magalu mostra preço e estoque (ou com aviso
+depois de 10 min) e a linha nasce com o estoque **lido**. Prazo de 30 min conta também com a leitura falhando. Acompanhamento **numa
+thread** (`magalu_acompanhar_pendentes_fundo`, a volta do estoque espera ≤ 15 s; 3 por vez) e a rota `acompanhar`/`liberar` só dispara
+(nginx 60 s). Conferir: fotos em paralelo com prazo de 25 s (o resto confere no Publicar; foto JPEG guardada 24 h). Estoque aceito e
+ainda não mostrado = `ignorado` "aguardando a Magalu" (não conta erro nem para o Automático), releitura 2+4+6 s. SKU só com letras,
+números, `.`, `-`, `_`. Republicar limpa a remoção do Admin (reinclusão explícita). Trace com falha guardado na amostra. Token:
+`magalu_access_token(force=True, recusado=)` não renova de novo se outro já renovou. Teste: classe `Revisao` do mesmo arquivo.
+**2ª revisão (só das correções):** o SKU é reconhecido como nosso pela **marca do envio** gravada no próprio produto
+(`extra_data` `noromak_envio` = `rid:quando`, que o GET devolve; sem `extra_data` na resposta vale o título igual a um rascunho que
+enviou) — título mudado pela Magalu não perde o produto, título repetido por outra ferramenta não o toma; trace com erro zera o
+`enviado_em`; boot só acompanha envio posterior à reserva (`reservado_em`); o estoque inicial faz POST quando o GET do estoque dá 404;
+Apollo sem leitura não gasta tentativa (só o prazo); atributos paginados (`_limit` 100) e os que não são de variação vão para a ficha
+técnica; estoque aceito e não mostrado 3 vezes seguidas = erro (`_MAGALU_ESTOQUE_SEM_MOSTRAR`); a trava/intervalo só sai quando o
+rascunho sai de `aguardando`; o lote do worker vai pelos há mais tempo sem conferir; estoque com espera 12 s por chamada e releitura 2+3 s.
+**V20.35 — 1º uso real (06/11, TUNAP109):** a Magalu **troca o `extra_data`** pelo dela (`IdProduct`, `update_only_front`) e a marca
+do envio some; o SKU criado pelo Noromak foi recusado como "não é o que o Noromak enviou". A prova de que é nosso passa a ser o
+`created_at` (UTC, sem fuso) do SKU logo depois de um envio nosso desta ficha (de 2 min antes a 3 dias depois,
+`MAGALU_CRIADO_ANTES_S`/`_DEPOIS_S`); SKU criado antes do envio = de outra ferramenta. "Conferir de novo" vale também no `erro`
+cujo envio saiu (`enviado_em`): o acompanhamento confere de novo. O SKU criado fica `DRAFT` na Magalu até receber preço e estoque.
+**V20.36 — histórico de envios** (06/11 20:33–20:35): o 2º Publicar reconheceu o SKU como nosso mas **trocou o `enviado_em`** pela
+hora do clique, e o 3º recusou o próprio SKU como "criado fora do Noromak". Agora cada POST real entra em `envios_json` (nunca
+sobrescrito; até 50) e a prova compara o `created_at` com **todos** os envios da ficha; reconhecer sem enviar e o "Conferir de novo"
+não mexem no `enviado_em` (o prazo recomeça pelo `etapa_em`, `_magalu_passou_envio`); envio recusado (4xx, 429, 423, trace com erro)
+sai do histórico. Migração no boot: a coluna nova é preenchida pelo `audit_log` (`anuncios.magalu_publicar` "aguardando" sem mensagem
+ou com "Sem resposta"/"Falha depois do envio").
+
 **V20.26 — fase 3: controle de estoque dos anúncios do ML** (decisões do dono 05/11; plano
 `docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md`). **Exceção à regra "o Noromak nunca grava estoque": o Noromak grava
 estoque no ML só em anúncio `controle='noromak'`** (nunca Full, Alephee ou removido pelo ADMIN; como já é no TikTok). Cada anúncio tem

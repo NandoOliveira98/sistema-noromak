@@ -149,7 +149,7 @@ const SELO_KIT = '<span class="nk-selo warn" title="O SKU parece dois códigos j
 const qtdOuSem = v => v == null ? SEM_LEITURA : esc(String(v));
 const CANAL = {ml: "Mercado Livre", shopee: "Shopee", magalu: "Magalu", tiktok: "TikTok Shop", amazon: "Amazon"};
 const CANAL_CURTO = {ml: "ML", shopee: "Shopee", magalu: "Magalu", tiktok: "TikTok", amazon: "Amazon"};
-const CONTA = {aracatuba: "Araçatuba", bauru: "Bauru", shopee: "Shopee · Araçatuba"};  // V20.32: conta de estoque da Shopee
+const CONTA = {aracatuba: "Araçatuba", bauru: "Bauru", shopee: "Shopee · Araçatuba", magalu: "Magalu · Araçatuba"};  // V20.34  // V20.32: conta de estoque da Shopee
 const FILIAIS = [["aracatuba", "Araçatuba"], ["bauru", "Bauru"]];
 // V20.24: seletor de casa no topo (Todas / Araçatuba / Bauru). Vale para a lista e para a ficha; guardado neste navegador.
 const CASA_CHAVE = "nk_anuncios_casa_v2024";
@@ -912,13 +912,16 @@ function desenharAnuncios() {
     </section>
     <section class="nk-painel" id="secEstoque" hidden></section>
     <section class="nk-painel" id="secRasc"></section>
-    <section class="nk-painel" id="secShopee" hidden></section>`;
+    <section class="nk-painel" id="secShopee" hidden></section>
+    <section class="nk-painel" id="secMagalu" hidden></section>`;
   desenharEstoqueAnuncios();  // V20.26
   carregarEstoqueAnuncios();
   desenharRascunhos();  // V20.24
   carregarRascunhos();
   desenharShopee();  // V20.32
   carregarShopee();
+  desenharMagalu();  // V20.34
+  carregarMagalu();
 }
 async function passarNoromak({canal, conta, id}) {
   const ok = await nkConfirmar(`Você já desativou este anúncio na Alephee?\nO ${id} passa a ser controlado pelo Noromak. Se a Alephee continuar ligada nele, as duas vão mexer no mesmo estoque.`, {ok: "Já desativei", cancelar: "Ainda não", perigo: false});
@@ -958,11 +961,12 @@ const ESTQ_MODO_CONTA = {simulacao: "Simulação", lote: "Lote", automatico: "Au
 const ESTQ_MODO_TXT = {simulacao: "Calcula e registra; nada é enviado ao marketplace.", lote: "Envia só no clique em “Enviar agora”.",
   automatico: "Envia sozinho ao marketplace quando o número muda."};
 const ESTQ_RES = {ok: ["Enviado", "ok"], erro: ["Erro", "bad"], simulado: ["Simulado", "info"], ignorado: ["Ignorado", ""]};
-const podeEstoque = a => (a.canal === "ml" || a.canal === "shopee") && a.controle === "noromak" && a.logistica !== "fulfillment";
-// V20.32: a conta de estoque da Shopee é "shopee" (a linha é conta aracatuba); o ML usa a casa
-const contaEst = a => a.canal === "shopee" ? "shopee" : a.conta;
-const mktEst = a => a.canal === "shopee" ? "Shopee" : "ML";
-const noMkt = a => a.canal === "shopee" ? "na Shopee" : "no ML";
+// V20.32/V20.34: Shopee e Magalu de Araçatuba têm a própria conta de estoque ("shopee", "magalu"; a linha é conta aracatuba)
+const ESTQ_FORA = {shopee: ["Shopee", "na Shopee", "Na Shopee", "à Shopee"], magalu: ["Magalu", "na Magalu", "Na Magalu", "à Magalu"]};
+const podeEstoque = a => (a.canal === "ml" || !!ESTQ_FORA[a.canal]) && a.controle === "noromak" && a.logistica !== "fulfillment";
+const contaEst = a => ESTQ_FORA[a.canal] ? a.canal : a.conta;
+const mktEst = a => ESTQ_FORA[a.canal] ? ESTQ_FORA[a.canal][0] : "ML";
+const noMkt = a => ESTQ_FORA[a.canal] ? ESTQ_FORA[a.canal][1] : "no ML";
 const chaveEst = a => a.canal + "|" + a.conta + "|" + a.anuncio_id;
 const numEst = v => v == null ? "?" : Number(v).toLocaleString("pt-BR");
 let EST = {};        // por anúncio da ficha: GET /api/anuncios/estoque?anuncio_id= (ou {erro})
@@ -994,7 +998,7 @@ function cartaoEstoque(a) {
   if (modo === "manual") {
     corpo = PODE ? `<div class="barra" style="margin:0"><span class="muted">Quantidade ${noMkt(a)}</span>
         <input class="qtd" type="number" min="0" max="99999" step="1" inputmode="numeric" aria-label="Quantidade a enviar ao marketplace" value="${esc(EST_DIG[k] ?? (a.estoque ?? ""))}" data-chave="${esc(k)}" oninput="EST_DIG[this.dataset.chave]=this.value" onkeydown="if(event.key==='Enter')this.nextElementSibling.click()">
-        <button type="button" class="nk-btn mini pri" ${dadosAnuncio(a)} onclick="enviarEstoqueManual(this)">${a.canal === "shopee" ? "Enviar à Shopee" : "Enviar ao ML"}</button>
+        <button type="button" class="nk-btn mini pri" ${dadosAnuncio(a)} onclick="enviarEstoqueManual(this)">${a.canal === "shopee" ? "Enviar à Shopee" : a.canal === "magalu" ? "Enviar à Magalu" : "Enviar ao ML"}</button>
         <span class="muted">Vai na hora; o Noromak relê o anúncio para confirmar.</span></div>`
       : `<div class="muted">Manual: o estoque só muda quando o Admin digita e envia.</div>`;
   } else if (!d) corpo = `<div class="muted">Calculando…</div>`;
@@ -1009,7 +1013,7 @@ function cartaoEstoque(a) {
         : cfg === "simulacao" ? `Mudaria de ${de} para ${para} — a conta ${esc(CONTA[contaEst(a)] || a.conta)} está em Simulação: nada é enviado.`
         : cfg === "lote" ? `Muda de ${de} para ${para} — vai no próximo “Enviar agora” da lista (conta em Lote).`
         : `Muda de ${de} para ${para} — o Automático envia sozinho.`;
-      corpo = contaDoCalculo(it) + `<div class="muted">${a.canal === "shopee" ? "Na Shopee" : "No ML"} agora: ${esc(numEst(it.atual_ml))} · ${muda}</div>`
+      corpo = contaDoCalculo(it) + `<div class="muted">${ESTQ_FORA[a.canal] ? ESTQ_FORA[a.canal][2] : "No ML"} agora: ${esc(numEst(it.atual_ml))} · ${muda}</div>`
         + (cfg === "simulacao" ? `<div class="muted">${esc(doisNumeros(it))}</div>` : "")
         + (it.segurado ? `<div class="nk-aviso">${esc(it.segurado)}</div>` : "");
     }
@@ -1058,7 +1062,7 @@ async function enviarEstoqueManual(b) {
   const k = chaveEst(a), inp = b.closest(".estq-card").querySelector("input.qtd"), t = String(inp.value || "").trim();
   if (!/^\d{1,5}$/.test(t)) { nkToast("Digite um número inteiro de 0 a 99999.", "aviso"); inp.focus(); return; }
   const q = Number(t), de = a.estoque;
-  if (!await nkConfirmar(`Enviar o estoque ao ${a.canal === "shopee" ? "Shopee" : "Mercado Livre"}?\n${id} (${CONTA[contaEst(a)] || conta}): de ${de == null ? "sem leitura" : numEst(de)} para ${numEst(q)}.${q === 0 ? "\nCom 0 o anúncio fica sem estoque no ML." : ""}`,
+  if (!await nkConfirmar(`Enviar o estoque ${ESTQ_FORA[a.canal] ? ESTQ_FORA[a.canal][3] : "ao Mercado Livre"}?\n${id} (${CONTA[contaEst(a)] || conta}): de ${de == null ? "sem leitura" : numEst(de)} para ${numEst(q)}.${q === 0 ? "\nCom 0 o anúncio fica sem estoque no ML." : ""}`,
     {ok: "Enviar", perigo: q === 0})) return;
   b.disabled = true; b.textContent = "Enviando…";
   delete EST_FALHA[k];
@@ -1080,7 +1084,7 @@ async function enviarEstoqueManual(b) {
 // --- painel "Estoque automático" da lista (um cartão por conta; segue o seletor de casa)
 async function carregarPainelEstoque() {
   const casa = CASA, contas = filiaisVisiveis().map(([f]) => f);
-  if (contas.includes("aracatuba")) contas.push("shopee");  // V20.32: a Shopee de Araçatuba tem o próprio modo
+  if (contas.includes("aracatuba")) contas.push("shopee", "magalu");  // V20.32/V20.34: Shopee e Magalu de Araçatuba têm o próprio modo
   const res = await Promise.all(contas.map(c => api(`/api/anuncios/estoque?conta=${c}`).catch(e => ({erro: e.message, status: e.status}))));
   if (casa !== CASA || codigoDaUrl()) return;
   PE = {casa, contas: Object.fromEntries(contas.map((c, i) => [c, res[i]]))};
@@ -1130,7 +1134,7 @@ function desenharPainelEstoque() {
     <div class="estq-contas">${contas.map(blocoConta).join("")}</div>
     ${itens.length ? `<details class="rem bloco"><summary>O que mudaria ou está sem número (${itens.length})</summary>
       <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_estoque_mudaria"><thead><tr><th>Conta</th><th>Anúncio</th><th>Produto</th><th class="n">No ML</th><th class="n">Calculado</th><th>Por quê</th></tr></thead>
-      <tbody>${itens.map(i => `<tr><td>${esc(CONTA[i.conta] || i.conta)}</td><td>${linkAnuncio({canal: i.conta === "shopee" ? "shopee" : "ml", anuncio_id: i.anuncio_id})}<div class="muted">${esc(i.titulo)}</div></td>
+      <tbody>${itens.map(i => `<tr><td>${esc(CONTA[i.conta] || i.conta)}</td><td>${linkAnuncio({canal: ESTQ_FORA[i.conta] ? i.conta : "ml", anuncio_id: i.anuncio_id})}<div class="muted">${esc(i.titulo)}</div></td>
         <td class="mono"><a href="?codigo=${encodeURIComponent(i.ficha)}&amp;aba=anuncios" data-cod="${esc(i.ficha)}" onclick="event.preventDefault();irPara({codigo:this.dataset.cod,aba:'anuncios'})">${esc(i.ficha)}</a></td>
         <td class="n">${esc(numEst(i.referencia))}</td><td class="n">${i.calculado == null ? SEM_LEITURA : esc(numEst(i.calculado))}</td>
         <td>${esc(i.calculado == null ? i.motivo : motivoCurtoEst(i))}${i.calculado != null && ((PE.contas[i.conta] || {}).config || {}).modo === "simulacao" ? `<div class="muted">${esc(doisNumeros(i))}</div>` : ""}${i.segurado ? `<div class="muted">${esc(i.segurado)}</div>` : ""}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
@@ -1625,6 +1629,298 @@ function desenharShopee() {
       ${PODE && !F.naoExiste ? '<button type="button" class="nk-btn mini pri" onclick="novoShopee()">+ Criar anúncio na Shopee</button>' : ""}</div>
     ${SH.erro ? `<div class="nk-aviso bad">${esc(SH.erro)}</div>` : ""}
     ${lista == null ? (SH.erro ? "" : '<div class="vazio">Carregando…</div>') : lista.length ? `<div class="tw"><table class="nk-tab"><thead><tr><th>Título</th><th class="n">Preço</th><th class="n">Qtd.</th><th>Situação</th><th>Atualizado</th><th></th></tr></thead><tbody>${lista.map(linha).join("")}</tbody></table></div>` : '<p class="muted">Nenhum rascunho da Shopee ainda.</p>'}
+    ${form}`;
+}
+
+// --- V20.34: criar anúncio na Magalu (Araçatuba). A Magalu responde "recebido" (202) e cria depois: o Noromak lê o SKU
+// (o código da ficha) até ele aparecer e então manda o preço e o estoque. As fotos vêm do anúncio do ML deste produto
+// (endereços públicos do mlstatic, JPEG): a Magalu baixa a foto pelo endereço e as do Noromak ficam atrás do login.
+const MG_SIT = {rascunho: ["Rascunho", ""], validado: ["Conferido", "info"], publicando: ["Enviando…", "warn"],
+  aguardando: ["Aguardando a Magalu", "warn"], publicado: ["Publicado", "ok"], erro: ["Recusado pela Magalu", "bad"],
+  incerto: ["Confira no painel da Magalu", "bad"]};
+let MG = {codigo: null, lista: null, erro: "", r: null, f: null, cats: null, defs: null, fotosMl: null, conta: null, ocupado: ""};
+let mgContaTimer = null;
+const mgEditavel = () => !MG.r || EDITAVEL.includes(MG.r.situacao);
+
+async function carregarMagalu(forcar) {
+  if (!F || F.naoExiste) { MG.lista = []; desenharMagalu(); return; }
+  const cod = F.codigo;
+  if (!forcar && MG.codigo === cod && MG.lista) { desenharMagalu(); return; }
+  try {
+    const d = await api(`/api/anuncios/magalu/rascunhos?codigo=${enc(cod)}`);
+    if (!F || F.codigo !== cod) return;
+    if (MG.codigo !== cod) MG = {...MG, r: null, f: null, cats: null, defs: null, fotosMl: null, conta: null};
+    MG.codigo = cod; MG.lista = d.rascunhos || []; MG.erro = "";
+  } catch (e) { MG.lista = null; MG.erro = e.message; }
+  desenharMagalu();
+}
+function mgForm(r) {
+  const campos = (F.ficha && F.ficha.campos) || {};
+  const brl2 = v => v == null ? "" : String(v).replace(".", ",");
+  return r ? {titulo: r.titulo || "", categoria: r.categoria || "", categoria_nome: r.categoria_nome || "", marca: r.marca || "",
+      descricao: r.descricao || "", preco: brl2(r.preco), preco_de: brl2(r.preco_de), quantidade: r.quantidade == null ? "" : String(r.quantidade),
+      atributos: {...(r.atributos || {})}, ficha_tecnica: {...(r.ficha_tecnica || {})}, fotos: [...(r.fotos || [])],
+      comissao: MG.f ? MG.f.comissao : "", taxa_fixa: MG.f ? MG.f.taxa_fixa : "", frete: MG.f ? MG.f.frete : ""}
+    : {titulo: String(campos.nome || "").replace(/\s+/g, " ").trim().slice(0, 150), categoria: "", categoria_nome: "",
+      marca: String(campos.marca || ""), descricao: String(campos.descricao || ""), preco: "", preco_de: "", quantidade: "",
+      atributos: {}, ficha_tecnica: {}, fotos: [], comissao: "", taxa_fixa: "", frete: ""};
+}
+function novoMagalu() { MG.r = null; MG.f = mgForm(null); MG.cats = null; MG.defs = null; MG.conta = null; desenharMagalu(); mgTrazerFotos(true); mgPedirConta(); }
+async function abrirMagalu(id) {
+  const r = (MG.lista || []).find(x => x.id === id); if (!r) return;
+  MG.r = r; MG.f = mgForm(r); MG.cats = null; MG.conta = null;
+  desenharMagalu();
+  if (r.categoria) await mgCarregarCategoria(r.categoria);
+  mgPedirConta();
+  if (r.situacao === "aguardando") mgAcompanhar();
+}
+function fecharMagalu() { MG.r = null; MG.f = null; desenharMagalu(); }
+
+async function mgTrazerFotos(silencioso) {
+  MG.ocupado = "fotos"; desenharMagalu();
+  try {
+    const d = await api(`/api/anuncios/magalu/fotos?codigo=${enc(F.codigo)}`);
+    MG.fotosMl = d.fotos || [];
+    if (MG.f && !MG.f.fotos.length) MG.f.fotos = MG.fotosMl.map(x => x.url);
+    if (!MG.fotosMl.length && !silencioso) nkToast("Este produto não tem anúncio no ML com fotos: publique no ML primeiro (a Magalu precisa de foto com endereço público).", "aviso", {duracao: 12000});
+  } catch (e) { MG.fotosMl = []; if (!silencioso) nkToast(e.message, "erro"); }
+  MG.ocupado = ""; desenharMagalu();
+}
+async function mgBuscarCategoria() {
+  const nome = String(($("mgCatBusca") || {}).value || "").trim();
+  if (nome.length < 3) { nkToast("Digite pelo menos 3 letras do nome da categoria (ex.: limpeza, ferramentas).", "aviso"); return; }
+  MG.ocupado = "cats"; desenharMagalu();
+  try {
+    MG.cats = (await api(`/api/anuncios/magalu/categorias?nome=${enc(nome)}`)).categorias || [];
+    if (!MG.cats.length) nkToast("A Magalu não achou categoria com esse nome.", "aviso");
+  } catch (e) { nkToast(e.message, "erro"); }
+  MG.ocupado = ""; desenharMagalu();
+}
+async function mgEscolherCategoria(cid, nome) {
+  if (!cid) return;
+  if (MG.f.categoria && MG.f.categoria !== cid) { MG.f.atributos = {}; MG.f.ficha_tecnica = {}; }
+  MG.f.categoria = cid; MG.f.categoria_nome = nome || cid;
+  await mgCarregarCategoria(cid);
+}
+async function mgCarregarCategoria(cid) {
+  MG.ocupado = "attrs"; desenharMagalu();
+  try {
+    MG.defs = await api(`/api/anuncios/magalu/atributos?categoria=${enc(cid)}`);
+    const campos = (F.ficha && F.ficha.campos) || {};
+    (MG.defs.ficha_tecnica || []).forEach(d => {  // o que a ficha já tem entra preenchido (o Admin confere)
+      const n = String(d.nome).toLowerCase();
+      if (MG.f.ficha_tecnica[d.nome]) return;
+      if (n === "marca" || n === "fabricante") { if (campos.marca) MG.f.ficha_tecnica[d.nome] = String(campos.marca); }
+      else if (n === "modelo" && campos.modelo) MG.f.ficha_tecnica[d.nome] = String(campos.modelo);
+    });
+  } catch (e) { MG.defs = null; nkToast(e.message, "erro"); }
+  MG.ocupado = ""; desenharMagalu();
+}
+function mgPedirConta() {
+  clearTimeout(mgContaTimer);
+  mgContaTimer = setTimeout(async () => {
+    if (!MG.f) return;
+    const n = v => { const x = numBr(v); return x == null ? "" : enc(x); };
+    try { MG.conta = await api(`/api/anuncios/magalu/conta?codigo=${enc(F.codigo)}&preco=${n(MG.f.preco)}&comissao=${n(MG.f.comissao)}&taxa_fixa=${n(MG.f.taxa_fixa)}&frete=${n(MG.f.frete)}`); }
+    catch (e) { MG.conta = {erro: e.message}; }
+    if (MG.conta && !MG.conta.erro && MG.f.comissao === "" && MG.conta.comissao_pct != null)
+      MG.f.comissao = String(+(MG.conta.comissao_pct * 100).toFixed(2)).replace(".", ",");
+    desenharMagalu();
+  }, 400);
+}
+function mgPar(grupo, nome, valor) {
+  const g = MG.f[grupo];
+  if (String(valor || "").trim()) g[nome] = valor; else delete g[nome];
+}
+function mgFoto(url, on) {
+  const s = MG.f.fotos;
+  if (on && !s.includes(url)) s.push(url);
+  if (!on) MG.f.fotos = s.filter(x => x !== url);
+  desenharMagalu();
+}
+function mgCorpo() {
+  const f = MG.f;
+  return {titulo: f.titulo, categoria: f.categoria, categoria_nome: f.categoria_nome, marca: f.marca, descricao: f.descricao,
+    preco: f.preco, preco_de: f.preco_de, quantidade: f.quantidade, atributos: f.atributos, ficha_tecnica: f.ficha_tecnica, fotos: f.fotos};
+}
+function mgGuardarRascunho(r) {
+  MG.r = r; MG.f = mgForm(r);
+  const i = (MG.lista || []).findIndex(x => x.id === r.id);
+  if (i >= 0) MG.lista[i] = r; else (MG.lista = MG.lista || []).unshift(r);
+}
+async function mgSalvar(silencioso) {
+  if (!PODE || !MG.f) return null;
+  const corpo = MG.r ? {id: MG.r.id, versao: MG.r.versao, ...mgCorpo()} : {codigo: F.codigo, ...mgCorpo()};
+  MG.ocupado = "salvar"; desenharMagalu();
+  try {
+    const d = await api("/api/anuncios/magalu/rascunho", corpo);
+    mgGuardarRascunho(d.rascunho);
+    if (!silencioso) nkToast("Rascunho da Magalu salvo.", "ok");
+    return MG.r;
+  } catch (e) {
+    nkToast(e.status === 409 ? "Outra pessoa alterou este rascunho: recarregue a ficha." : e.message, "erro");
+    return null;
+  } finally { MG.ocupado = ""; desenharMagalu(); }
+}
+async function mgConferir() {
+  const r = await mgSalvar(true); if (!r) return;
+  MG.ocupado = "conferir"; desenharMagalu();
+  try {
+    const d = await api("/api/anuncios/magalu/conferir", {id: r.id});
+    mgGuardarRascunho(d.rascunho);
+    nkToast(d.ok ? "Conferido: pode publicar na Magalu." : "Há o que acertar antes de publicar.", d.ok ? "ok" : "aviso");
+    (d.avisos || []).forEach(a => nkToast(a, "aviso", {duracao: 12000}));
+  } catch (e) { nkToast(e.message, "erro"); }
+  MG.ocupado = ""; carregarMagalu(true);
+}
+async function mgPublicar() {
+  const r = MG.r; if (!PODE || !r || r.situacao !== "validado") return;
+  if (!await nkConfirmar(`Publicar na Magalu?\n${r.titulo}\nR$ ${String(r.preco).replace(".", ",")} · ${r.quantidade} un. · ${(r.fotos || []).length} foto(s).\nIsto cria o produto de verdade na loja de Araçatuba (SKU ${F.codigo}). O Apollo é lido de novo na hora.`, {ok: "Publicar na Magalu", perigo: false})) return;
+  MG.ocupado = "publicar"; desenharMagalu();
+  try {
+    await api("/api/anuncios/magalu/publicar", {id: r.id});
+    const cod = F.codigo, limite = Date.now() + 3 * 60 * 1000;
+    let atual = null;
+    while (Date.now() < limite) {
+      await new Promise(ok => setTimeout(ok, 2000));
+      if (!F || F.codigo !== cod) { MG.ocupado = ""; return; }
+      try { atual = ((await api(`/api/anuncios/magalu/rascunhos?codigo=${enc(cod)}`)).rascunhos || []).find(x => x.id === r.id); }
+      catch (_) { atual = null; }
+      if (atual && atual.situacao !== "publicando") break;
+    }
+    if (atual) mgGuardarRascunho(atual);
+    MG.ocupado = "";
+    if (atual && atual.situacao === "aguardando") { nkToast("Enviado. A Magalu cria o produto em instantes; o Noromak confere e manda o preço e o estoque.", "ok", {duracao: 10000}); mgAcompanhar(); return; }
+    if (atual && atual.situacao !== "publicando") nkToast((atual.erros || [])[0] || "Não publicado.", "erro", {duracao: 12000});
+    else nkToast("O envio ainda está em andamento. Atualize a ficha em instantes.", "aviso", {duracao: 12000});
+  } catch (e) { nkToast(e.status === 409 ? "Outra publicação em andamento: aguarde." : e.message, "erro"); }
+  MG.ocupado = ""; carregarMagalu(true);
+}
+let mgAcompanhando = 0;
+async function mgAcompanhar() {
+  const r = MG.r; if (!r || mgAcompanhando === r.id) return;
+  const cod = F.codigo, limite = Date.now() + 5 * 60 * 1000;
+  mgAcompanhando = r.id;
+  try {
+    while (Date.now() < limite) {
+      await new Promise(ok => setTimeout(ok, 5000));
+      if (!F || F.codigo !== cod || !MG.r || MG.r.id !== r.id) return;
+      let atual;
+      try { atual = (await api("/api/anuncios/magalu/acompanhar", {id: r.id})).rascunho; } catch (_) { continue; }
+      if (!atual) continue;
+      mgGuardarRascunho(atual); desenharMagalu();
+      if (atual.situacao === "publicado") { nkToast(`Produto criado na Magalu (SKU ${atual.sku}), com preço e estoque. Ele já aparece na lista com estoque em Manual.`, "ok", {duracao: 12000}); recarregar(); return; }
+      if (atual.situacao !== "aguardando") { nkToast((atual.erros || [])[0] || "A Magalu não criou o produto.", "erro", {duracao: 12000}); return; }
+    }
+  } finally { if (mgAcompanhando === r.id) mgAcompanhando = 0; }
+}
+async function mgLiberar(acao) {
+  const r = MG.r; if (!PODE || !r) return;
+  const txt = acao === "conferir" ? "Conferir de novo na Magalu se o SKU foi criado?"
+    : "Marcar como NÃO criado? Use só se conferiu no painel da Magalu que o produto não existe.";
+  if (!await nkConfirmar(txt, {ok: acao === "conferir" ? "Conferir" : "Não foi criado", perigo: acao !== "conferir"})) return;
+  try {
+    const d = await api("/api/anuncios/magalu/liberar", {id: r.id, acao});
+    mgGuardarRascunho(d.rascunho); desenharMagalu();
+    if (d.rascunho.situacao === "aguardando") mgAcompanhar();
+    if (d.rascunho.situacao === "publicado") recarregar();
+  } catch (e) { nkToast(e.message, "erro"); }
+  carregarMagalu(true);
+}
+
+function mgCartoesPreco() {
+  const c = MG.conta;
+  if (!c) return '<p class="muted">Calculando…</p>';
+  if (c.erro) return `<div class="nk-aviso bad">${esc(c.erro)}</div>`;
+  const cart = (t, v, s) => `<div class="nk-kpi"><span>${t}</span><b>${v}</b><small>${s}</small></div>`;
+  return `${c.sem_taxa ? `<div class="nk-aviso">${esc(c.sem_taxa)}</div>` : ""}<div class="g3">${[
+    cart("Comissão da Magalu", brl(c.comissao), c.comissao_pct == null ? "—" : `${pct(c.comissao_pct)} + ${brl(c.taxa_fixa)} fixa + ${brl(c.frete)} frete` + (c.taxas_origem ? ` (${esc(c.taxas_origem)})` : "")),
+    cart("Imposto", brl(c.imposto_valor), pct(c.imposto) + " da venda"),
+    cart("Custo", brl(c.custo), esc(c.custo_origem || "")),
+    cart("Lucro", brl(c.lucro), c.margem == null ? "sem custo ou sem comissão, sem lucro" : "margem " + pct(c.margem)),
+    cart("Preço ideal", brl(c.preco_ideal), c.margem_alvo == null ? "precisa da margem-alvo" : "margem-alvo " + pct(c.margem_alvo)
+      + (c.preco_ideal && PODE && mgEditavel() ? ` <button type="button" class="nk-btn mini" onclick="MG.f.preco='${String(c.preco_ideal).replace(".", ",")}';mgPedirConta();desenharMagalu()">Usar o ideal</button>` : ""))].join("")}</div>`;
+}
+function mgParesHtml(grupo, defs, rotulo) {
+  const dis = PODE && mgEditavel() ? "" : "disabled";
+  const vals = MG.f[grupo];
+  const campo = d => {
+    const v = vals[d.nome] || "", falta = d.obrigatorio && !v, lid = `mgl${grupo}${esc(d.nome).replace(/\W/g, "")}`;
+    return `<label class="nk-campo ${falta ? "falta" : ""}"><span>${esc(d.rotulo || d.nome)} ${d.obrigatorio ? '<span class="orig bad">obrigatório</span>' : d.recomendado ? '<span class="orig">recomendado</span>' : ""}</span>
+      <input ${dis} ${d.valores.length ? `list="${lid}"` : ""} data-g="${grupo}" data-n="${esc(d.nome)}" value="${esc(v)}" oninput="mgPar(this.dataset.g,this.dataset.n,this.value)">
+      ${d.valores.length ? `<datalist id="${lid}">${d.valores.map(x => `<option value="${esc(x)}">`).join("")}</datalist>` : ""}</label>`;
+  };
+  const princ = defs.filter(d => d.obrigatorio || d.recomendado), outros = defs.filter(d => !d.obrigatorio && !d.recomendado);
+  return `<h4 style="margin:10px 0 4px">${rotulo}</h4><div class="g2">${princ.map(campo).join("") || '<p class="muted">Nada obrigatório nesta categoria.</p>'}</div>
+    ${outros.length ? `<details class="rem"><summary>Outros (opcionais, ${outros.length})</summary><div class="g2">${outros.map(campo).join("")}</div></details>` : ""}`;
+}
+function mgAtributosHtml() {
+  if (!MG.f.categoria) return '<p class="muted">Escolha a categoria primeiro.</p>';
+  if (MG.ocupado === "attrs") return '<p class="muted">Lendo a categoria na Magalu…</p>';
+  if (!MG.defs) return `<p class="muted">Categoria não lida. <button type="button" class="nk-btn mini" onclick="mgCarregarCategoria(MG.f.categoria)">Ler de novo</button></p>`;
+  return mgParesHtml("ficha_tecnica", MG.defs.ficha_tecnica || [], "Ficha técnica") + mgParesHtml("atributos", MG.defs.atributos || [], "Atributos de variação (até 3)");
+}
+function desenharMagalu() {
+  const el = $("secMagalu"); if (!el) return;
+  const temAra = CASA === "todas" || CASA === "aracatuba";
+  if (!F || !temAra) { el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  const lista = MG.lista;
+  const linha = r => { const s = MG_SIT[r.situacao] || [r.situacao, ""];
+    return `<tr${MG.r && MG.r.id === r.id ? ' class="atual"' : ""}><td>${r.titulo ? esc(r.titulo) : '<span class="muted">sem título</span>'}</td><td class="n">${brl(r.preco)}</td><td class="n">${esc(r.quantidade ?? "—")}</td>
+      <td><span class="nk-selo ${s[1]}">${esc(s[0])}</span> ${r.sku && r.situacao === "publicado" ? `<span class="mono">SKU ${esc(r.sku)}</span>` : ""}</td><td>${quando(r.atualizado_em)}${r.atualizado_por ? " · " + esc(r.atualizado_por) : ""}</td>
+      <td>${PODE ? `<button type="button" class="nk-btn mini" onclick="abrirMagalu(${Number(r.id)})">${EDITAVEL.includes(r.situacao) ? "Continuar" : "Ver"}</button>` : ""}</td></tr>`; };
+  let form = "";
+  if (MG.f) {
+    const f = MG.f, r = MG.r, dis = PODE && mgEditavel() ? "" : "disabled", oc = MG.ocupado ? "disabled" : "";
+    const campos = (F.ficha && F.ficha.campos) || {};
+    const medida = (n, u) => campos[n] ? `${esc(campos[n])} ${u}` : '<span class="bad">falta</span>';
+    const s = r ? MG_SIT[r.situacao] || [r.situacao, ""] : null;
+    const erros = r && (r.erros || []).length ? `<div class="nk-aviso ${["publicado", "aguardando"].includes(r.situacao) ? "info" : "bad"}"><b>${r.situacao === "erro" ? "A Magalu recusou:" : r.situacao === "publicado" ? "Atenção:" : r.situacao === "aguardando" ? "Andamento:" : "O que precisa ser acertado:"}</b><ul>${r.erros.map(e => `<li>${esc(e)}</li>`).join("")}</ul></div>` : "";
+    const fotosOp = MG.fotosMl || [];
+    const todasFotos = [...new Set([...f.fotos, ...fotosOp.map(x => x.url)])];
+    form = `<div class="nk-painel-tit" style="margin-top:14px"><div><h3>${r ? `Rascunho Magalu nº ${esc(r.id)} <span class="nk-selo ${s[1]}">${esc(s[0])}</span>` : "Novo anúncio na Magalu"}</h3>
+        <p class="muted">${r ? `versão ${esc(r.versao)} · ${quando(r.atualizado_em)}${r.atualizado_por ? " por " + esc(r.atualizado_por) : ""}` : "Loja de Araçatuba."} SKU na Magalu = <span class="mono">${esc(F.codigo)}</span>.</p></div>
+        <button type="button" class="nk-btn mini" onclick="fecharMagalu()">Fechar</button></div>
+      ${erros}
+      <section class="passo"><h3><span class="num">1</span>Título e marca</h3>
+        <label class="nk-campo"><span>Título na Magalu <span class="muted">${f.titulo.length} de 150 caracteres</span></span>
+          <input ${dis} maxlength="300" value="${esc(f.titulo)}" oninput="MG.f.titulo=this.value;this.previousElementSibling.querySelector('.muted').textContent=this.value.length+' de 150 caracteres'"></label>
+        <label class="nk-campo ${f.marca ? "" : "falta"}"><span>Marca ${f.marca && f.marca === String(campos.marca || "") ? '<span class="orig">da ficha</span>' : ""}</span><input ${dis} maxlength="100" value="${esc(f.marca)}" oninput="MG.f.marca=this.value"></label></section>
+      <section class="passo"><h3><span class="num">2</span>Categoria</h3>
+        ${f.categoria ? `<p>Escolhida: <b>${esc(f.categoria_nome || f.categoria)}</b></p>` : ""}
+        ${PODE && mgEditavel() ? `<div class="barra"><input id="mgCatBusca" placeholder="Parte do nome da categoria (ex.: limpeza automotiva)" style="max-width:340px" onkeydown="if(event.key==='Enter')mgBuscarCategoria()">
+          <button type="button" class="nk-btn mini" ${oc} onclick="mgBuscarCategoria()">${MG.ocupado === "cats" ? "Buscando…" : "Buscar na Magalu"}</button></div>` : ""}
+        ${MG.cats ? `<div class="g1">${MG.cats.map(c => `<label style="display:flex;gap:8px;align-items:center;margin:6px 0;cursor:pointer"><input type="radio" name="mgcat" ${dis} ${c.folha === false ? "disabled" : ""} ${f.categoria === c.categoria ? "checked" : ""} data-id="${esc(c.categoria)}" data-nome="${esc(c.caminho || c.nome)}" onchange="mgEscolherCategoria(this.dataset.id,this.dataset.nome)"> ${esc(c.caminho || c.nome)} ${c.folha === false ? '<span class="muted">(tem subcategorias)</span>' : ""}</label>`).join("") || '<p class="muted">Nenhuma categoria.</p>'}</div>` : ""}</section>
+      <section class="passo"><h3><span class="num">3</span>Ficha técnica e atributos</h3>${mgAtributosHtml()}</section>
+      <section class="passo"><h3><span class="num">4</span>Fotos <span class="muted">(${f.fotos.length} escolhida(s))</span></h3>
+        ${todasFotos.length ? `<div class="fotos-sel">${todasFotos.map((u, i) => `<label style="display:inline-flex;gap:6px;align-items:center;margin:4px 14px 4px 0;cursor:pointer"><input type="checkbox" ${dis} ${f.fotos.includes(u) ? "checked" : ""} data-u="${esc(u)}" onchange="mgFoto(this.dataset.u,this.checked)"> Foto ${i + 1} <a href="${esc(u)}" target="_blank" rel="noopener noreferrer">ver</a></label>`).join("")}</div>` : ""}
+        ${MG.ocupado === "fotos" ? '<p class="muted">Lendo as fotos do anúncio do ML…</p>' : `<p class="muted">As fotos vêm do anúncio do Mercado Livre deste produto, na ordem dele (endereço público, JPEG): a Magalu baixa cada foto pelo endereço. “ver” abre a foto em outra aba. ${PODE && mgEditavel() ? '<button type="button" class="nk-btn mini" onclick="mgTrazerFotos()">Trazer fotos do anúncio do ML</button>' : ""}</p>`}</section>
+      <section class="passo"><h3><span class="num">5</span>Descrição, preço e quantidade</h3>
+        <label class="nk-campo"><span>Descrição <span class="muted">(até 7.000 caracteres)</span></span><textarea ${dis} rows="8" oninput="MG.f.descricao=this.value">${esc(f.descricao)}</textarea></label>
+        <div class="g3"><label class="nk-campo"><span>Preço de venda (R$)</span><input ${dis} value="${esc(f.preco)}" inputmode="decimal" oninput="MG.f.preco=this.value;mgPedirConta()"></label>
+          <label class="nk-campo"><span>Preço “de” (R$) <span class="muted">opcional, riscado</span></span><input ${dis} value="${esc(f.preco_de)}" inputmode="decimal" oninput="MG.f.preco_de=this.value"></label>
+          <label class="nk-campo"><span>Quantidade <span class="muted">(não passa do que dá para montar no Apollo de Araçatuba)</span></span><input ${dis} value="${esc(f.quantidade)}" inputmode="numeric" oninput="MG.f.quantidade=this.value"></label></div>
+        <div class="g3"><label class="nk-campo"><span>Comissão da Magalu (%)</span><input value="${esc(f.comissao)}" inputmode="decimal" oninput="MG.f.comissao=this.value;mgPedirConta()"></label>
+          <label class="nk-campo"><span>Taxa fixa (R$)</span><input value="${esc(f.taxa_fixa)}" inputmode="decimal" oninput="MG.f.taxa_fixa=this.value;mgPedirConta()"></label>
+          <label class="nk-campo"><span>Frete por conta da loja (R$)</span><input value="${esc(f.frete)}" inputmode="decimal" oninput="MG.f.frete=this.value;mgPedirConta()"></label></div>
+        ${mgCartoesPreco()}
+        <p class="muted">Comissão, taxa e frete servem só para a conta do lucro (vêm do Precificador quando ele tem; não vão para a Magalu). Peso e medidas (da ficha, lidos na hora): ${medida("peso_g", "g")} · ${medida("altura_cm", "cm")} × ${medida("largura_cm", "cm")} × ${medida("comprimento_cm", "cm")}.</p></section>
+      <section class="passo"><h3><span class="num">6</span>Conferir e publicar</h3>
+        ${r && r.situacao === "aguardando" ? `<div class="nk-aviso info">Enviado à Magalu. Ela cria o produto em instantes; o Noromak confere a cada poucos segundos e, quando o SKU aparece, manda o preço e o estoque.</div>` : ""}
+        ${r && r.situacao === "incerto" && PODE ? `<div class="nk-aviso bad">A Magalu não mostrou o SKU ${esc(r.sku || F.codigo)}. Confira em Meus produtos no painel da Magalu.</div>
+          <div class="barra"><button type="button" class="nk-btn mini pri" onclick="mgLiberar('conferir')">Conferir de novo</button><button type="button" class="nk-btn mini" onclick="mgLiberar('nao_criado')">Não foi criado</button></div>` : ""}
+        ${r && r.situacao === "erro" && (["preco", "estoque", "confirmar"].includes(r.etapa) || r.enviado_em) && PODE ? `<div class="barra"><button type="button" class="nk-btn mini" onclick="mgLiberar('conferir')">Conferir na Magalu se foi criado</button></div>` : ""}
+        ${r && r.situacao === "publicado" ? `<div class="nk-aviso info">Publicado na Magalu: SKU <b class="mono">${esc(r.sku)}</b>${r.status_magalu ? ` (${esc(r.status_magalu)})` : ""}. Está na lista “Anúncios em todos os canais” com estoque em Manual.</div>` : ""}
+        ${PODE && mgEditavel() ? `<div class="barra"><span class="esp"></span><button type="button" class="nk-btn" ${oc} onclick="mgSalvar()">${MG.ocupado === "salvar" ? "Salvando…" : "Salvar"}</button>
+          <button type="button" class="nk-btn" ${oc} onclick="mgConferir()">${MG.ocupado === "conferir" ? "Conferindo…" : "Conferir"}</button>
+          <button type="button" class="nk-btn pri" ${oc} ${r && r.situacao === "validado" ? "" : "disabled"} onclick="mgPublicar()">${MG.ocupado === "publicar" ? "Enviando…" : "Publicar na Magalu"}</button></div>
+          <p class="muted">A Magalu não confere sem criar: o Conferir é do Noromak (tamanhos, marca, categoria e obrigatórios, fotos JPEG, peso e medidas). Se já existir produto com este SKU na Magalu, o Publicar recusa (nada é sobrescrito).</p>` : ""}</section>`;
+  }
+  el.innerHTML = `<div class="nk-painel-tit"><div><h2>Criar anúncio na Magalu</h2><p>Loja de Araçatuba. Cada tentativa fica guardada como rascunho. Só o “Publicar” cria o produto na Magalu.</p></div>
+      ${PODE && !F.naoExiste ? '<button type="button" class="nk-btn mini pri" onclick="novoMagalu()">+ Criar anúncio na Magalu</button>' : ""}</div>
+    ${MG.erro ? `<div class="nk-aviso bad">${esc(MG.erro)}</div>` : ""}
+    ${lista == null ? (MG.erro ? "" : '<div class="vazio">Carregando…</div>') : lista.length ? `<div class="tw"><table class="nk-tab"><thead><tr><th>Título</th><th class="n">Preço</th><th class="n">Qtd.</th><th>Situação</th><th>Atualizado</th><th></th></tr></thead><tbody>${lista.map(linha).join("")}</tbody></table></div>` : '<p class="muted">Nenhum rascunho da Magalu ainda.</p>'}
     ${form}`;
 }
 
