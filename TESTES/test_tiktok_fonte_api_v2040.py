@@ -400,6 +400,44 @@ class RevisaoAntesDeSubir(Base):
             S.TIKTOK_ESTOQUE_LOCK.release()
 
 
+class SegundaRevisao(Base):
+    """2ª revisão (só das correções) da V20.40."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _conectar()
+        S.tiktok_fonte_definir("api", "dono")
+
+    def _parcial(self):
+        enviado = _line("TT1", 0, status="IN_TRANSIT")
+        enviado["package_id"] = "PKA"
+        aberto = _line("TT1", 1)
+        aberto["package_id"] = "PKB"
+        return _pedido("TT1", [enviado, aberto], status="PARTIALLY_SHIPPING",
+                       packages=[{"id": "PKA"}, {"id": "PKB"}])
+
+    def test_parcial_usa_o_pacote_que_falta_enviar(self):
+        with self._api([self._parcial()]):
+            S.tiktok_importar_pedidos()
+        bruto, _, _ = S.get_storage("conf_pedidos")
+        linha = next(l for l in S._rows_from_storage_value(bruto) if l.get("Pedido") == "TT1")
+        self.assertEqual(linha["PacoteTikTok"], "PKB", "o pacote já despachado nunca vai para a etiqueta")
+        self.assertEqual(S._tiktok_pacotes(S._tiktok_api_pacote_aberto_primeiro(self._parcial()))[0], "PKB")
+
+    def test_parcial_preco_so_do_que_falta_enviar(self):
+        venda = S._tiktok_api_venda(self._parcial())
+        self.assertEqual(venda["itens"][0]["qtd"], 1, "preço e fila contam as mesmas unidades (senão vai a revisar)")
+
+    def test_trocar_a_fonte_nao_espera_o_worker(self):
+        ocupada = mock.Mock()
+        ocupada.acquire.return_value = False  # o worker segurando a trava além do prazo
+        with mock.patch.object(S, "TIKTOK_ESTOQUE_LOCK", ocupada):
+            with self.assertRaises(S.TikTokRodadaOcupada):
+                S.tiktok_fonte_definir("extensao", "dono")
+        self.assertEqual(ocupada.acquire.call_args.kwargs.get("timeout"), 20)
+        self.assertEqual(S.tiktok_fonte(), "api")
+
+
 class Rotas(Base):
 
     def test_fonte_pela_rota(self):

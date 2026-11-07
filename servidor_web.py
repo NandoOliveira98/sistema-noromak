@@ -9393,7 +9393,10 @@ def tiktok_fonte_definir(fonte: str, usuario: str) -> str:
             raise ValueError("Conecte o TikTok Shop e rode o Testar leitura (loja lida) antes de usar a API.")
     # revisar-antes-de-subir (V20.40): sob a mesma trava do envio. Com uma rodada da extensão aberta (ela grava por
     # DIFERENÇA) a API gravaria o número final por cima e o TikTok somaria; espere a rodada fechar ou vencer.
-    with TIKTOK_ESTOQUE_LOCK:
+    # 2ª revisão (V20.40): o worker segura a trava durante o envio (rede); o clique não espera mais que 20 s (504)
+    if not TIKTOK_ESTOQUE_LOCK.acquire(timeout=20):
+        raise TikTokRodadaOcupada("O Noromak está enviando o estoque ao TikTok agora. Tente de novo em instantes.")
+    try:
         if fonte == "api" and TIKTOK_RODADA and time.time() - float(TIKTOK_RODADA.get("desde") or 0) < TIKTOK_RODADA_PRAZO:
             raise TikTokRodadaOcupada("A extensão está no meio de um envio de estoque ao TikTok. Espere ele terminar "
                                       "(até 15 min) e tente de novo.")
@@ -9404,6 +9407,8 @@ def tiktok_fonte_definir(fonte: str, usuario: str) -> str:
         if fonte == "api" and antes != "api" and tiktok_estoque_config()["modo_estoque"] != "simulacao":
             _tiktok_config_gravar("modo_estoque", "simulacao", usuario)
             tiktok_log_event("estoque", "modo", "SIMULACAO", "fonte virou API: o estoque voltou a Simulação")
+    finally:
+        TIKTOK_ESTOQUE_LOCK.release()
     tiktok_log_event("fonte", "", fonte.upper(), f"por {usuario}")
     return fonte
 
@@ -10361,6 +10366,7 @@ def _tiktok_linhas_do_pedido(pedido: dict[str, Any], products: list[dict[str, An
 def tiktok_importar_pedidos() -> dict[str, Any]:
     with TIKTOK_SYNC_LOCK:
         pedidos = tiktok_pedidos_abertos()  # erro aqui = nada gravado
+        pedidos = [_tiktok_api_pacote_aberto_primeiro(o) for o in pedidos]  # 2ª revisão (V20.40)
         # V20.29: etiqueta antes de montar as linhas, para a linha já sair VINCULADA.
         ligada = tiktok_etiqueta_ligada()
         products_raw, _, _ = get_storage("conf_produtos")
@@ -11221,6 +11227,21 @@ TIKTOK_API_RELER_MAX = 50       # pedidos que sumiram da lista "a enviar" relido
 _TIKTOK_API_RELIDO: dict[str, float] = {}  # pedido -> quando foi relido (rodízio: o mais antigo primeiro)
 
 
+def _tiktok_api_pacote_aberto_primeiro(o: Any) -> Any:
+    """2ª revisão (V20.40): o pacote que ainda tem unidade a enviar vem primeiro (é o da coluna e o da etiqueta), como
+    na extensão. Parcialmente enviado: o 1º pacote da API pode ser o que já saiu. Devolve uma cópia; sem como saber,
+    a ordem fica a da API."""
+    if not isinstance(o, dict) or not isinstance(o.get("packages"), list):
+        return o
+    abertos = {str(li.get("package_id") or "") for li in (o.get("line_items") or [])
+               if isinstance(li, dict) and str(li.get("display_status") or "").upper() not in TIKTOK_SC_SAIU}
+    abertos.discard("")
+    if not abertos:
+        return o
+    pacotes = sorted(o["packages"], key=lambda p: 0 if isinstance(p, dict) and str(p.get("id") or "") in abertos else 1)
+    return {**o, "packages": pacotes}
+
+
 def _tiktok_api_para_sc(o: Any) -> dict[str, Any] | None:
     """revisar-antes-de-subir (V20.40): pedido da Open API no formato que _tiktok_sc_montar_fila (a regra da extensão,
     V20.30) entende. Conta só as unidades ainda a enviar (cancelada e já enviada ficam fora); variação sem unidade a
@@ -11296,8 +11317,8 @@ def _tiktok_api_venda(o: dict[str, Any]) -> dict[str, Any] | None:
     for li in o.get("line_items") or []:
         if not isinstance(li, dict):
             continue
-        if str(li.get("display_status") or "").upper() == "CANCELLED":
-            continue
+        if str(li.get("display_status") or "").upper() in TIKTOK_SC_SAIU:
+            continue  # 2ª revisão (V20.40): cancelada E já enviada ficam fora (a fila conta só o que falta enviar)
         sku = str(li.get("seller_sku") or "").strip()
         cheio = _tiktok_num(li.get("original_price"))
         loja = _tiktok_num(li.get("seller_discount"))

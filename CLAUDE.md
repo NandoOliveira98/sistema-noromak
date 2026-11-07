@@ -564,6 +564,9 @@ Erro de preço não apaga o preço bom já lido; CPF ausente vai para o log. Com
 `pendentes` volta vazio (a extensão nem lê); "Atualizar anúncios" em 2º plano (`tiktok_catalogo_iniciar`, `TIKTOK_CATALOGO_LOCK`,
 também no worker); espelho só grava o que mudou e o estoque enviado aparece na hora (`_tiktok_anuncio_estoque`); o aviso de
 situação desconhecida do Painel de saúde é só da extensão.
+2ª revisão (só das correções): pacote com unidade a enviar vem primeiro (`_tiktok_api_pacote_aberto_primeiro`, pelo
+`package_id` dos line_items; coluna e etiqueta do parcialmente enviado nunca são do pacote já despachado); o preço pela API
+também tira as unidades já enviadas (senão o atendimento ia sempre a revisar); trocar a fonte espera no máximo 20 s pela trava.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na
