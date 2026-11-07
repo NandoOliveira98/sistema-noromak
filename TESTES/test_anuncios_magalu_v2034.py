@@ -613,6 +613,52 @@ class Revisao(Base):
             S.magalu_incerto_liberar(r["id"], "conferir", "admin")
         self.assertEqual(S.magalu_acompanhar(r["id"], forcar=True)["situacao"], "publicado")
 
+    def test_caso_real_publicar_de_novo_nao_apaga_a_prova(self):
+        """V20.36 (06/11 20:33): o 2o Publicar reconheceu o SKU como nosso mas trocou o enviado_em; o 3o recusou como
+        "criado fora do Noromak". O historico de envios nunca e sobrescrito."""
+        r = self.conferido()
+        self.publicar(r)  # envio real: a Magalu cria (created_at = agora)
+        self.mg.skus["TUNAP109"]["created_at"] = "2026-11-06T23:18:16.074000"
+        with S.DB_LOCK:  # o envio aconteceu 23:18:15 e o rascunho ficou em erro (V20.35)
+            S.DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET situacao='erro', etapa='', "
+                         "enviado_em='2026-11-06T23:18:15.931+00:00', envios_json='[\"2026-11-06T23:18:15.931+00:00\"]' "
+                         "WHERE id=?", (r["id"],))
+            S.DB.commit()
+        for _ in range(2):  # editar + conferir + publicar, duas vezes, como o dono fez
+            atual = S.magalu_rascunho_ler(r["id"])
+            S.magalu_rascunho_salvar({"id": r["id"], "preco": "91,90" if _ == 0 else "92,00"}, "admin", atual["versao"])
+            self.assertTrue(S.magalu_rascunho_conferir(r["id"], "admin")["ok"])
+            res = self.publicar(S.magalu_rascunho_ler(r["id"]))
+            self.assertEqual(res["situacao"], "aguardando", res)
+            self.assertEqual(len(self.mg.escritas("/portfolios/skus")), 1, "nunca cria de novo")
+            if _ == 0:
+                with S.DB_LOCK:
+                    S.DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET situacao='validado' WHERE id=?", (r["id"],))
+                    S.DB.commit()
+        self.assertEqual(S.magalu_acompanhar(r["id"], forcar=True)["situacao"], "publicado")
+
+    def test_historico_de_envios_vem_do_registro_de_auditoria(self):
+        r = self.conferido()
+        S.audit("luis", "anuncios.magalu_publicar", f"TUNAP109|{r['id']}|aguardando|")
+        S.audit("luis", "anuncios.magalu_publicar", f"TUNAP109|{r['id']}|aguardando|O produto deste envio já está na Magalu")
+        with S.DB_LOCK:
+            S.DB.execute("ALTER TABLE anuncio_rascunho_magalu_v2034 RENAME TO tmp_m")
+            S.DB.execute("CREATE TABLE anuncio_rascunho_magalu_v2034 AS SELECT * FROM tmp_m")
+            S.DB.execute("DROP TABLE tmp_m")
+            cols = [c[1] for c in S.DB.execute("PRAGMA table_info(anuncio_rascunho_magalu_v2034)")]
+            S.DB.commit()
+        if "envios_json" in cols:  # simula o banco da V20.35 (sem a coluna)
+            with S.DB_LOCK:
+                S.DB.execute("CREATE TABLE x AS SELECT " + ",".join(c for c in cols if c != "envios_json")
+                             + " FROM anuncio_rascunho_magalu_v2034")
+                S.DB.execute("DROP TABLE anuncio_rascunho_magalu_v2034")
+                S.DB.execute("ALTER TABLE x RENAME TO anuncio_rascunho_magalu_v2034")
+                S.DB.commit()
+        S.ensure_anuncios_schema()
+        envios = S.magalu_rascunho_ler(r["id"])["envios"]
+        self.assertEqual(len(envios), 1, "só o envio real (o reconhecimento não conta)")
+
+
     def test_republicar_limpa_a_remocao_do_admin(self):
         r = self.conferido()
         with S.DB_LOCK:

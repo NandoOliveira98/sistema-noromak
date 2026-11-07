@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.35-MAGALU-SKU-NOSSO"
+APP_VERSION = "20.36-MAGALU-HISTORICO-ENVIOS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -7551,6 +7551,19 @@ def ensure_anuncios_schema() -> None:
             CREATE INDEX IF NOT EXISTS idx_anuncio_rascunho_magalu_ficha ON anuncio_rascunho_magalu_v2034(ficha_codigo);
             """
         )
+        # V20.36: historico de TODOS os envios reais ao POST /skus (nunca sobrescrito): a prova de que o SKU e nosso e a
+        # hora de criacao logo depois de um envio. Na V20.35 o Publicar seguinte trocava o enviado_em e a prova sumia.
+        if "envios_json" not in {r[1] for r in DB.execute("PRAGMA table_info(anuncio_rascunho_magalu_v2034)")}:
+            DB.execute("ALTER TABLE anuncio_rascunho_magalu_v2034 ADD COLUMN envios_json TEXT NOT NULL DEFAULT '[]'")
+            for row in DB.execute("SELECT id, ficha_codigo, enviado_em FROM anuncio_rascunho_magalu_v2034").fetchall():
+                # so os envios reais: "aguardando" sem mensagem (202) ou com "Sem resposta"/"Falha depois do envio"
+                horas = sorted({str(x[0]) for x in DB.execute(
+                    "SELECT created_at, detail FROM audit_log WHERE action='anuncios.magalu_publicar' AND detail LIKE ?",
+                    (f"{row['ficha_codigo']}|{row['id']}|aguardando|%",)).fetchall()
+                    if str(x[1]).split("|", 3)[3:4] in ([""], []) or str(x[1]).split("|", 3)[3].startswith(
+                        ("Sem resposta", "Falha depois do envio"))}
+                    | ({str(row["enviado_em"])} if row["enviado_em"] else set()))
+                DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET envios_json=? WHERE id=?", (json.dumps(horas), row["id"]))
         # V20.34: o processo caiu no meio do Publicar. Revisao: so o que tem a marca "enviado" (gravada ANTES do POST)
         # vai para `aguardando` (o acompanhamento confere na Magalu, pelo titulo); sem ela o envio nunca saiu e volta a
         # `validado` - um SKU de outra ferramenta com o mesmo codigo nunca e tomado. Nunca fica preso em `publicando`.
@@ -35866,7 +35879,8 @@ def magalu_conta_preco(codigo: str, preco: Any, comissao: Any = None, taxa_fixa:
 # ---- rascunho ----
 def _magalu_rascunho_de_linha(row: Any) -> dict[str, Any]:
     d = dict(row)
-    for campo, padrao in (("atributos_json", {}), ("ficha_tecnica_json", {}), ("fotos_json", []), ("erros_json", [])):
+    for campo, padrao in (("atributos_json", {}), ("ficha_tecnica_json", {}), ("fotos_json", []), ("erros_json", []),
+                          ("envios_json", [])):
         try:
             v = json.loads(d.pop(campo) or "")
         except (TypeError, ValueError):
@@ -36039,7 +36053,8 @@ def _magalu_trocar(rid: int, de: tuple[str, ...], para: str, erros: list[str], a
     extra = extra or {}
     sets, args = ["situacao=?", "erros_json=?", "versao=versao+1", "atualizado_em=?", "atualizado_por=?"], \
         [para, json.dumps(list(erros), ensure_ascii=False), now_iso(), str(ator or "")]
-    for k in ("sku", "trace_id", "enviado_em", "etapa", "status_magalu", "tentativas", "etapa_em", "qtd_enviada"):
+    for k in ("sku", "trace_id", "enviado_em", "etapa", "status_magalu", "tentativas", "etapa_em", "qtd_enviada",
+              "envios_json"):
         if k in extra:
             sets.append(f"{k}=?")
             args.append(extra[k])
@@ -36190,8 +36205,8 @@ def _magalu_sku_e_nosso(lido: dict[str, Any] | None, cod: str, titulo: Any, rid:
     marca = _magalu_marca_do_sku(lido)
     with DB_LOCK:
         enviados = [dict(x) for x in DB.execute(
-            "SELECT id, titulo, enviado_em FROM anuncio_rascunho_magalu_v2034 WHERE ficha_codigo=? "
-            "AND COALESCE(enviado_em,'')<>''", (normalize(cod),)).fetchall()]
+            "SELECT id, titulo, enviado_em, envios_json FROM anuncio_rascunho_magalu_v2034 WHERE ficha_codigo=? "
+            "AND (COALESCE(enviado_em,'')<>'' OR COALESCE(envios_json,'[]')<>'[]')", (normalize(cod),)).fetchall()]
     if marca:
         rid_marca = marca.split(":", 1)[0]
         return rid_marca.isdigit() and int(rid_marca) in {int(x["id"]) for x in enviados}
@@ -36202,9 +36217,14 @@ def _magalu_sku_e_nosso(lido: dict[str, Any] | None, cod: str, titulo: Any, rid:
     criado = _magalu_data_utc(_magalu_texto(lido, "created_at"))
     if criado is not None:
         for x in enviados:
-            env = _magalu_data_utc(x.get("enviado_em"))
-            if env is not None and -MAGALU_CRIADO_ANTES_S <= (criado - env).total_seconds() <= MAGALU_CRIADO_DEPOIS_S:
-                return True
+            try:
+                horas = list(json.loads(x.get("envios_json") or "[]"))
+            except (TypeError, ValueError):
+                horas = []
+            for h in horas + [x.get("enviado_em")]:  # V20.36: todos os envios, nao so o ultimo
+                env = _magalu_data_utc(h)
+                if env is not None and -MAGALU_CRIADO_ANTES_S <= (criado - env).total_seconds() <= MAGALU_CRIADO_DEPOIS_S:
+                    return True
         return False
     titulo_lido = _magalu_texto(lido, "title")
     return _magalu_titulo_igual(titulo_lido, titulo) and any(_magalu_titulo_igual(x["titulo"], titulo_lido) for x in enviados)
@@ -36388,15 +36408,21 @@ def magalu_publicar_executar(r: dict[str, Any], ator: str) -> dict[str, Any]:
                 # revisao: o SKU que um envio NOSSO anterior criou tarde ("Não foi criado" antes de ele aparecer):
                 # mesmo codigo e mesmo titulo = segue para preco e estoque, sem criar de novo
                 return fim("aguardando", ["O produto deste envio já está na Magalu: o Noromak segue com o preço e o estoque."],
-                           sku=sku, enviado_em=now_iso(), etapa="sku", tentativas=0)
+                           sku=sku, etapa_em=now_iso(), etapa="sku", tentativas=0)  # V20.36: sem trocar o enviado_em
             return fim("validado", [f"Já existe um produto com o SKU {sku} na Magalu (criado fora do Noromak). Nada foi "
                                     "enviado: o Noromak não sobrescreve produto de outra ferramenta."])
         agora = now_iso()
         ctx["marca_envio"] = f"{rid}:{agora}"
         corpo = magalu_sku_corpo(r, ficha_ler(cod) or {"codigo": cod}, ctx)
         with DB_LOCK:  # revisao: marca "enviado" antes do POST (o boot so acompanha o que de fato saiu)
-            DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET sku=?, enviado_em=?, etapa='sku', tentativas=0 "
-                       "WHERE id=? AND situacao='publicando'", (sku, agora, rid))
+            antes = DB.execute("SELECT envios_json FROM anuncio_rascunho_magalu_v2034 WHERE id=?", (rid,)).fetchone()
+            try:
+                envios = list(json.loads(antes["envios_json"] or "[]")) if antes else []
+            except (TypeError, ValueError):
+                envios = []
+            DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET sku=?, enviado_em=?, envios_json=?, etapa='sku', "
+                       "tentativas=0 WHERE id=? AND situacao='publicando'", (sku, agora, json.dumps((envios + [agora])[-50:]), rid))
+            sem_este = json.dumps(envios[-50:])  # V20.36: recusado = o envio sai do historico
             DB.commit()
         estado["enviado"] = True
         try:
@@ -36405,11 +36431,11 @@ def magalu_publicar_executar(r: dict[str, Any], ator: str) -> dict[str, Any]:
             _anuncio_amostra("magalu_criar_sku [erro]", {"erro": str(exc), "corpo": exc.corpo, "enviado": corpo})
             if exc.status == 429:
                 return fim("validado", ["A Magalu está com muitas chamadas agora (429): nada foi criado. Tente em 1 minuto."],
-                           enviado_em=None)
+                           enviado_em=None, envios_json=sem_este)
             if exc.status == 423:
                 return fim("validado", [f"A Magalu está com o cadastro bloqueado no momento (423): {exc}. Nada foi criado."],
-                           enviado_em=None)
-            return fim("erro", [f"A Magalu recusou: {exc}"], enviado_em=None, etapa="")
+                           enviado_em=None, envios_json=sem_este)
+            return fim("erro", [f"A Magalu recusou: {exc}"], enviado_em=None, etapa="", envios_json=sem_este)
         except MagaluSemResposta as exc:
             _anuncio_amostra("magalu_criar_sku [erro]", {"erro": str(exc), "enviado": corpo})
             return fim("aguardando", [f"Sem resposta da Magalu no envio ({exc}). O Noromak confere sozinho se o SKU "
@@ -36492,6 +36518,11 @@ def _magalu_passou(iso: Any) -> float:
     return (datetime.now(timezone.utc) - quando).total_seconds()
 
 
+def _magalu_passou_envio(r: dict[str, Any]) -> float:
+    """V20.36: tempo desde o envio OU desde o "Conferir de novo" (etapa_em), o que for mais recente."""
+    return min(_magalu_passou(r.get("enviado_em")), _magalu_passou(r.get("etapa_em")))
+
+
 def _magalu_preco_ler(sku: str) -> int | None:
     """V20.34 (revisao): o preco de venda (centavos) do nosso canal; None = sem preco ou sem leitura."""
     try:
@@ -36550,15 +36581,17 @@ def _magalu_acompanhar_um(r: dict[str, Any], ator: str) -> dict[str, Any] | None
         try:
             lido = _magalu_sku_ler(sku)
         except (MagaluRecusou, MagaluSemResposta) as exc:
-            if _magalu_passou(r.get("enviado_em")) > MAGALU_ACOMPANHAR_PRAZO_S:  # revisao: o prazo conta tambem aqui
+            if _magalu_passou_envio(r) > MAGALU_ACOMPANHAR_PRAZO_S:  # revisao: o prazo conta tambem aqui
                 return _magalu_trocar(rid, ("aguardando",), "incerto", [MAGALU_INCERTO_TEXTO, f"Última leitura: {exc}"], ator)
             return ficar(f"Magalu sem resposta ao conferir o SKU ({str(exc)[:200]}); tento de novo em instantes.")
         if lido is None:
             erro = _magalu_trace_erro(str(r.get("trace_id") or ""))
             if erro:  # 2a revisao: nada foi criado - o envio deixa de valer como prova de SKU nosso
+                # V20.36: o envio recusado tambem sai do historico (nao pode provar que um SKU de outro e nosso)
+                restantes = [h for h in (r.get("envios") or []) if h != r.get("enviado_em")]
                 return _magalu_trocar(rid, ("aguardando",), "erro", [f"A Magalu recusou: {erro}"], ator,
-                                      extra={"etapa": "", "enviado_em": None})
-            if _magalu_passou(r.get("enviado_em")) > MAGALU_ACOMPANHAR_PRAZO_S:
+                                      extra={"etapa": "", "enviado_em": None, "envios_json": json.dumps(restantes)})
+            if _magalu_passou_envio(r) > MAGALU_ACOMPANHAR_PRAZO_S:
                 return _magalu_trocar(rid, ("aguardando",), "incerto", [MAGALU_INCERTO_TEXTO], ator)
             return r
         if not _magalu_sku_e_nosso(lido, str(r["ficha_codigo"]), r.get("titulo"), rid):
@@ -36741,7 +36774,7 @@ def magalu_incerto_liberar(rascunho_id: Any, acao: Any, ator: str) -> dict[str, 
     if acao == "conferir":
         if atual["situacao"] == "incerto":
             novo = _magalu_trocar(rid, ("incerto",), "aguardando", [], ator,
-                                  extra={"enviado_em": now_iso(), "etapa": "sku", "tentativas": 0})
+                                  extra={"etapa_em": now_iso(), "etapa": "sku", "tentativas": 0})  # V20.36
         elif atual["situacao"] == "erro" and (str(atual.get("etapa") or "") in ("preco", "estoque", "confirmar")
                                               or str(atual.get("enviado_em") or "")):
             # 1o uso real: o envio saiu e o SKU nao foi reconhecido; o acompanhamento confere de novo se e nosso

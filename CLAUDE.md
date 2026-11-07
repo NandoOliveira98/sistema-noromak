@@ -971,6 +971,12 @@ do envio some; o SKU criado pelo Noromak foi recusado como "não é o que o Noro
 `created_at` (UTC, sem fuso) do SKU logo depois de um envio nosso desta ficha (de 2 min antes a 3 dias depois,
 `MAGALU_CRIADO_ANTES_S`/`_DEPOIS_S`); SKU criado antes do envio = de outra ferramenta. "Conferir de novo" vale também no `erro`
 cujo envio saiu (`enviado_em`): o acompanhamento confere de novo. O SKU criado fica `DRAFT` na Magalu até receber preço e estoque.
+**V20.36 — histórico de envios** (06/11 20:33–20:35): o 2º Publicar reconheceu o SKU como nosso mas **trocou o `enviado_em`** pela
+hora do clique, e o 3º recusou o próprio SKU como "criado fora do Noromak". Agora cada POST real entra em `envios_json` (nunca
+sobrescrito; até 50) e a prova compara o `created_at` com **todos** os envios da ficha; reconhecer sem enviar e o "Conferir de novo"
+não mexem no `enviado_em` (o prazo recomeça pelo `etapa_em`, `_magalu_passou_envio`); envio recusado (4xx, 429, 423, trace com erro)
+sai do histórico. Migração no boot: a coluna nova é preenchida pelo `audit_log` (`anuncios.magalu_publicar` "aguardando" sem mensagem
+ou com "Sem resposta"/"Falha depois do envio").
 
 **V20.26 — fase 3: controle de estoque dos anúncios do ML** (decisões do dono 05/11; plano
 `docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md`). **Exceção à regra "o Noromak nunca grava estoque": o Noromak grava
