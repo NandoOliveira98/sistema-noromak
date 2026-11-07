@@ -525,7 +525,10 @@ e o crédito pelo Linx web preenche a **data de nascimento vazia** (aleatória 1
 Teste: classe `BotaoDoPainel` em `TESTES/test_tiktok_atendimento_v2033.py`. Extensão **0.52.1**: a rota nova entrou na lista fechada de rotas
 do `noromak-api` do service worker ("Rota não permitida"). **V20.38:** o pedido lido antes da V20.33 tinha o CPF e **não o preço**
 (`venda_json`): "Não criado: sem o preço do detalhe". `tiktok_sc_estado` tira do `com_detalhe` o pedido "a enviar" sem preço lido
-antes de `TIKTOK_SC_PRECO_DESDE` (06/11 22:56 UTC), e a extensão reabre o detalhe (o lido depois sem preço não volta a cada 2 min). **2ª revisão:** o estoque do TikTok continua descontando
+antes de `TIKTOK_SC_PRECO_DESDE` (06/11 22:56 UTC), e a extensão reabre o detalhe (o lido depois sem preço não volta a cada 2 min). **V20.39 — subsídio do TikTok** (1º pedido real): o Seller Center manda o `sku_unit_price` já SEM os dois descontos
+(119,90 − 45,10 da loja − 5,05 do TikTok, `platform_discount_total` = 69,75). `_tiktok_sc_venda` reconhece esse 3º formato e volta ao
+valor com o desconto da loja (74,80: o subsídio o TikTok repassa); unidade cancelada com desconto do TikTok = erro, como a da loja. O
+erro do preço guardado leva `regra` (`TIKTOK_SC_VENDA_REGRA` = 2039): erro de regra mais velha faz o detalhe ser reaberto uma vez. **2ª revisão:** o estoque do TikTok continua descontando
 todo pendente (sem a trava de queda, subiria antes de o Apollo reler); "já atendido" = qualquer romaneio/caixa registrado com número
 de atendimento (inclusive erro/incerto); a conferência usa o SKU atual da linha (o ADMIN que troca o SKU deixa o do TikTok em
 `SkuOrigemImportacao`) e todas as linhas do pedido, de qualquer origem; `fora_da_fila` só marca com a data de ligar, lê fila e tabela

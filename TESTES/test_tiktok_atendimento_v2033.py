@@ -533,3 +533,40 @@ class PrecoRelido(Base):
             S.DB.execute("UPDATE tiktok_sc_pedido_v2030 SET status='IN_TRANSIT' WHERE pedido='582001'")
             S.DB.commit()
         self.assertIn("582001", S.tiktok_sc_estado()["com_detalhe"])
+
+
+class SubsidioDoTikTok(Base):
+    """V20.39 (1º pedido real, 07/11): unidade já sem os dois descontos (119,90 − 45,10 da loja − 5,05 do TikTok = 69,75).
+    A venda leva só o desconto da loja: 74,80."""
+
+    def test_unidade_ja_sem_os_dois_descontos(self):
+        det = _sc("583001", itens=(("SK1", "0893600022", 1, "69.75"),), desconto="45.1", origem="119.9")
+        det["price_module"]["platform_discount_total"] = {"price_val": "5.05"}
+        self.assertEqual(S._tiktok_sc_venda(det)["itens"][0]["valor"], 74.8)
+        self.receber(det)
+        porta = Porta()
+        self.rodar(porta)
+        corpo = porta.corpo("atendimento/criar")
+        self.assertEqual((corpo["valor_esperado"], corpo["itens"][0]["unitario"]), (74.8, 74.8))
+
+    def test_valor_que_nao_bate_com_nenhuma_conta_continua_revisar(self):
+        det = _sc("583002", itens=(("SK1", "0893600022", 1, "60.00"),), desconto="45.1", origem="119.9")
+        det["price_module"]["platform_discount_total"] = {"price_val": "5.05"}
+        self.assertIn("erro", S._tiktok_sc_venda(det))
+
+
+class ErroDeRegraVelha(Base):
+    """V20.39: o pedido real ficou com o erro da regra da V20.38 guardado; o detalhe é reaberto uma vez."""
+
+    def test_erro_antigo_reabre_e_o_novo_nao(self):
+        self.receber(_sc("584001"))
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE tiktok_sc_pedido_v2030 SET venda_json=? WHERE pedido='584001'",
+                         ('{"erro":"preço das unidades (69.75) não confere com o valor do pedido (119.90)"}',))
+            S.DB.commit()
+        self.assertNotIn("584001", S.tiktok_sc_estado()["com_detalhe"], "erro de regra velha: reabre")
+        det = _sc("584001", itens=(("SK1", "0893600022", 1, "60.00"),), desconto="45.1", origem="119.9")
+        self.receber(det)  # relido; ainda não bate, mas agora com a regra nova
+        self.assertIn('"regra":', S._tiktok_sc_guardado("584001")["venda"] and
+                      S.DB.execute("SELECT venda_json FROM tiktok_sc_pedido_v2030 WHERE pedido='584001'").fetchone()[0])
+        self.assertIn("584001", S.tiktok_sc_estado()["com_detalhe"], "erro da regra atual: não reabre a cada 2 min")

@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.38-TIKTOK-PRECO-RELIDO"
+APP_VERSION = "20.39-TIKTOK-SUBSIDIO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -10266,6 +10266,9 @@ TIKTOK_SC_NA_FILA = ("AWAITING_SHIPMENT", "AWAITING_COLLECTION", "PARTIALLY_SHIP
 # V20.38: desde a publicação da V20.33 (06/11 22:56 UTC) todo detalhe lido guarda o preço; só o lido antes disso é reaberto
 # por falta dele (um detalhe novo sem preço não seria resolvido reabrindo, e voltaria a cada 2 min).
 TIKTOK_SC_PRECO_DESDE = "2026-11-06T22:56:00"
+# V20.39: versão da regra do preço. Pedido "a enviar" cujo preço deu erro numa regra mais velha volta a ter o detalhe
+# aberto (uma vez: o erro novo leva esta versão). Mudou a regra do _tiktok_sc_venda? suba o número.
+TIKTOK_SC_VENDA_REGRA = 2039
 TIKTOK_SC_SAIU = ("IN_TRANSIT", "DELIVERED", "COMPLETED", "CANCELLED")
 TIKTOK_SC_MAX_PEDIDOS = 500
 TIKTOK_SC_SEM_LEITURA_S = 30 * 60   # Painel de saúde
@@ -10476,9 +10479,12 @@ def tiktok_sc_estado() -> dict[str, Any]:
         a_enviar = tuple(TIKTOK_SC_NA_FILA)
         com_detalhe = [r["pedido"] for r in DB.execute(
             "SELECT pedido FROM tiktok_sc_pedido_v2030 WHERE detalhe_em<>'' AND (cpf_ok=1 OR tentativas>=?) "
-            f"AND (COALESCE(venda_json,'')<>'' OR status NOT IN ({','.join('?' * len(a_enviar))}) OR detalhe_em>=?) "
+            f"AND (status NOT IN ({','.join('?' * len(a_enviar))}) OR ("
+            "(COALESCE(venda_json,'')<>'' OR detalhe_em>=?) "
+            "AND NOT (venda_json LIKE '%\"erro\"%' AND venda_json NOT LIKE ?))) "
             "ORDER BY detalhe_em DESC LIMIT ?",
-            (TIKTOK_SC_TENTATIVAS_CPF, *a_enviar, TIKTOK_SC_PRECO_DESDE, TIKTOK_SC_MAX_PEDIDOS))]
+            (TIKTOK_SC_TENTATIVAS_CPF, *a_enviar, TIKTOK_SC_PRECO_DESDE, f'%"regra":{TIKTOK_SC_VENDA_REGRA}%',
+             TIKTOK_SC_MAX_PEDIDOS))]
     na_fila = sorted(_tiktok_sc_pedidos_na_fila(_rows_from_storage_value(raw)))[:TIKTOK_SC_MAX_PEDIDOS]
     return {"ok": True, "importacao": tiktok_importacao_ligada(), "na_fila": na_fila, "com_detalhe": com_detalhe,
             "ultima_leitura_epoch": int(float(_tiktok_config_ler("pedidos_extensao_epoch") or 0))}
@@ -10946,25 +10952,34 @@ def _tiktok_sc_venda(o: Any) -> dict[str, Any] | None:
             itens.append({"sku_id": str(sk.get("sku_id") or ""), "sku": sku, "qtd": qtd, "unitario": unit})
     origem = _tiktok_num(pm.get("main_order_origin_sale_price"))
     desconto = _tiktok_num(pm.get("seller_discount_total")) or 0.0
+    plataforma = _tiktok_num(pm.get("platform_discount_total")) or 0.0  # V20.39: subsídio do TikTok
     if origem is None or origem <= 0:
         return {"erro": "o TikTok não informou o valor do pedido"}
     # revisar-antes-de-subir (06/11): desconto negativo inflaria o preço; e com unidade cancelada não dá para saber de
     # qual produto era o desconto da loja (o rateio pelo pedido inteiro erraria o preço do que ficou).
     if desconto < 0:
         return {"erro": "desconto da loja negativo no TikTok"}
-    if parcial and desconto > 0:
+    if plataforma < 0:
+        return {"erro": "desconto do TikTok negativo"}
+    if parcial and (desconto > 0 or plataforma > 0):
         return {"erro": "pedido com unidade cancelada e desconto da loja: não dá para saber de qual produto era o desconto"}
     if abs(soma_cheia - origem) <= 0.02:
         fator = (origem - desconto) / origem
     elif abs(soma_cheia - (origem - desconto)) <= 0.02:
         fator = 1.0
+    elif plataforma > 0 and abs(soma_cheia - (origem - desconto - plataforma)) <= 0.02:
+        # V20.39 (1º pedido real, 07/11, 587022850875164046): o Seller Center manda a unidade já SEM os dois descontos
+        # (119,90 − 45,10 da loja − 5,05 do TikTok = 69,75). A venda leva só o desconto da loja (o subsídio o TikTok
+        # repassa): volta ao valor com o desconto da loja (74,80).
+        fator = (origem - desconto) / soma_cheia
     else:
         return {"erro": f"preço das unidades ({soma_cheia:.2f}) não confere com o valor do pedido ({origem:.2f})"}
     if fator <= 0:
         return {"erro": "desconto da loja maior que o pedido"}
     for i in itens:
         i["valor"] = round(i["unitario"] * i["qtd"] * fator, 4)
-    return {"itens": itens, "fator": round(fator, 6), "desconto_loja": desconto, "origem": origem}
+    return {"itens": itens, "fator": round(fator, 6), "desconto_loja": desconto, "origem": origem,
+            "desconto_tiktok": plataforma}
 
 
 def _tiktok_sc_endereco_cadastro(o: Any) -> dict[str, str] | None:
@@ -10990,6 +11005,8 @@ def _tiktok_sc_guardar_venda(detalhes: list[Any]) -> None:
         numero = str(o["main_order_id"]).strip()
         try:
             venda = _tiktok_sc_venda(o)
+            if isinstance(venda, dict) and venda.get("erro"):
+                venda = {**venda, "regra": TIKTOK_SC_VENDA_REGRA}  # V20.39: erro de regra velha é relido uma vez
             endereco = _tiktok_sc_endereco_cadastro(o)
         except Exception as exc:  # leitura tolerante: nunca derruba a importação
             tiktok_log_event_se_mudou("atendimento", f"leitura {numero}", "ERRO", str(exc)[:300])
