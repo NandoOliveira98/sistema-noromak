@@ -511,3 +511,25 @@ class BotaoDoPainel(Base):
     def test_pedido_que_nao_e_do_tiktok(self):
         with self.assertRaises(ValueError):
             self.criar("NAOEXISTE", Porta())
+
+
+class PrecoRelido(Base):
+    """V20.38 (07/11): pedido "a enviar" lido antes da V20.33 (CPF sim, preço não) volta a ter o detalhe aberto."""
+
+    def test_sem_preco_guardado_a_extensao_reabre(self):
+        self.receber(_sc("582001"))
+        self.assertIn("582001", S.tiktok_sc_estado()["com_detalhe"], "com CPF e preço: não reabre")
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE tiktok_sc_pedido_v2030 SET venda_json='', detalhe_em='2026-11-06T17:44:10.184+00:00' "
+                         "WHERE pedido='582001'")  # lido antes da V20.33 (ainda não guardava o preço)
+            S.DB.commit()
+        self.assertNotIn("582001", S.tiktok_sc_estado()["com_detalhe"], "sem o preço: reabre o detalhe")
+        with S.DB_LOCK:  # lido depois da V20.33 sem preço: reabrir não resolve (não volta a cada 2 min)
+            S.DB.execute("UPDATE tiktok_sc_pedido_v2030 SET detalhe_em='2026-11-07T10:00:00+00:00' WHERE pedido='582001'")
+            S.DB.commit()
+        self.assertIn("582001", S.tiktok_sc_estado()["com_detalhe"])
+        with S.DB_LOCK:  # já enviado: não reabre (não precisa de atendimento)
+            S.DB.execute("UPDATE tiktok_sc_pedido_v2030 SET detalhe_em='2026-11-06T17:44:10.184+00:00' WHERE pedido='582001'")
+            S.DB.execute("UPDATE tiktok_sc_pedido_v2030 SET status='IN_TRANSIT' WHERE pedido='582001'")
+            S.DB.commit()
+        self.assertIn("582001", S.tiktok_sc_estado()["com_detalhe"])

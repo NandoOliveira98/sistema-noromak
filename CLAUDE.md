@@ -522,7 +522,10 @@ atendimento criado; grava `criando` e roda `tiktok_atendimento_pedido` numa thre
 também para o `anterior` da hora de ligar); "aguardando" sem fazer nada vira `revisar` com o motivo. Extensão Linx Cliente **0.52**:
 faixa "Este pedido do TikTok ainda não tem atendimento no Apollo" com o botão "Criar atendimento no Apollo" (confirma, acompanha 2 min)
 e o crédito pelo Linx web preenche a **data de nascimento vazia** (aleatória 1970–2000, regra do robô do Apollo; Erro 2544 do Linx).
-Teste: classe `BotaoDoPainel` em `TESTES/test_tiktok_atendimento_v2033.py`. **2ª revisão:** o estoque do TikTok continua descontando
+Teste: classe `BotaoDoPainel` em `TESTES/test_tiktok_atendimento_v2033.py`. Extensão **0.52.1**: a rota nova entrou na lista fechada de rotas
+do `noromak-api` do service worker ("Rota não permitida"). **V20.38:** o pedido lido antes da V20.33 tinha o CPF e **não o preço**
+(`venda_json`): "Não criado: sem o preço do detalhe". `tiktok_sc_estado` tira do `com_detalhe` o pedido "a enviar" sem preço lido
+antes de `TIKTOK_SC_PRECO_DESDE` (06/11 22:56 UTC), e a extensão reabre o detalhe (o lido depois sem preço não volta a cada 2 min). **2ª revisão:** o estoque do TikTok continua descontando
 todo pendente (sem a trava de queda, subiria antes de o Apollo reler); "já atendido" = qualquer romaneio/caixa registrado com número
 de atendimento (inclusive erro/incerto); a conferência usa o SKU atual da linha (o ADMIN que troca o SKU deixa o do TikTok em
 `SkuOrigemImportacao`) e todas as linhas do pedido, de qualquer origem; `fora_da_fila` só marca com a data de ligar, lê fila e tabela

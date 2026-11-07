@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.37-TIKTOK-ATENDIMENTO-PAINEL"
+APP_VERSION = "20.38-TIKTOK-PRECO-RELIDO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -10263,6 +10263,9 @@ TIKTOK_SC_STATUS = {100: "UNPAID", 105: "ON_HOLD", 111: "AWAITING_SHIPMENT", 112
                     114: "PARTIALLY_SHIPPING", 121: "IN_TRANSIT", 122: "DELIVERED", 130: "COMPLETED",
                     140: "CANCELLED"}
 TIKTOK_SC_NA_FILA = ("AWAITING_SHIPMENT", "AWAITING_COLLECTION", "PARTIALLY_SHIPPING")
+# V20.38: desde a publicação da V20.33 (06/11 22:56 UTC) todo detalhe lido guarda o preço; só o lido antes disso é reaberto
+# por falta dele (um detalhe novo sem preço não seria resolvido reabrindo, e voltaria a cada 2 min).
+TIKTOK_SC_PRECO_DESDE = "2026-11-06T22:56:00"
 TIKTOK_SC_SAIU = ("IN_TRANSIT", "DELIVERED", "COMPLETED", "CANCELLED")
 TIKTOK_SC_MAX_PEDIDOS = 500
 TIKTOK_SC_SEM_LEITURA_S = 30 * 60   # Painel de saúde
@@ -10468,9 +10471,14 @@ def tiktok_sc_estado() -> dict[str, Any]:
     TIKTOK_SC_TENTATIVAS_CPF vezes)."""
     with DB_LOCK:
         raw, _, _ = get_storage("conf_pedidos")
+        # V20.38 (07/11, pedido 587022850875164046): pedido "a enviar" lido antes da V20.33 tem o CPF mas NÃO o preço
+        # (venda_json): sem ele o atendimento não é criado. Fica fora desta lista para a extensão reabrir o detalhe.
+        a_enviar = tuple(TIKTOK_SC_NA_FILA)
         com_detalhe = [r["pedido"] for r in DB.execute(
             "SELECT pedido FROM tiktok_sc_pedido_v2030 WHERE detalhe_em<>'' AND (cpf_ok=1 OR tentativas>=?) "
-            "ORDER BY detalhe_em DESC LIMIT ?", (TIKTOK_SC_TENTATIVAS_CPF, TIKTOK_SC_MAX_PEDIDOS))]
+            f"AND (COALESCE(venda_json,'')<>'' OR status NOT IN ({','.join('?' * len(a_enviar))}) OR detalhe_em>=?) "
+            "ORDER BY detalhe_em DESC LIMIT ?",
+            (TIKTOK_SC_TENTATIVAS_CPF, *a_enviar, TIKTOK_SC_PRECO_DESDE, TIKTOK_SC_MAX_PEDIDOS))]
     na_fila = sorted(_tiktok_sc_pedidos_na_fila(_rows_from_storage_value(raw)))[:TIKTOK_SC_MAX_PEDIDOS]
     return {"ok": True, "importacao": tiktok_importacao_ligada(), "na_fila": na_fila, "com_detalhe": com_detalhe,
             "ultima_leitura_epoch": int(float(_tiktok_config_ler("pedidos_extensao_epoch") or 0))}
