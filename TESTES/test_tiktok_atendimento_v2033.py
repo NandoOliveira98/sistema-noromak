@@ -468,3 +468,46 @@ class EstoqueComAtendimento(Base):
         # 2ª revisão: o TikTok não tem a trava de queda dos anúncios; desconta tudo (erra para menos)
         self.assertEqual(S._tiktok_pendentes_bauru().get("0893600022"), 2)
         self.assertIn("582001", S._anuncio_pedidos_com_atendimento())
+
+
+class BotaoDoPainel(Base):
+    """V20.37 (07/11, pedido 587022850875164046): com o automático desligado, o painel cria o atendimento de UM pedido."""
+
+    def criar(self, pedido, porta, custos=None):
+        custos = custos or {}
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True), \
+                mock.patch.object(S, "_tiktok_atendimento_custo", side_effect=lambda cod, ctx: custos.get(cod)), \
+                mock.patch.object(S, "_financeiro_custos_aracatuba", return_value={}), \
+                mock.patch.object(S.threading, "Thread") as t:
+            t.side_effect = lambda target, **k: mock.Mock(start=target)  # roda na hora (sem thread)
+            return S.tiktok_atendimento_manual_iniciar(pedido, "luis")
+
+    def test_cria_com_o_automatico_desligado(self):
+        S._tiktok_config_gravar("atendimento_auto", "0", "teste")
+        self.receber(_sc("581001"))
+        porta = Porta()
+        r = self.criar("581001", porta)
+        self.assertTrue(r["ok"])
+        self.assertIn("atendimento/criar", porta.rotas())
+        self.assertEqual(self.estado("581001")["situacao"], "criado")
+        with self.assertRaises(ValueError):  # já criado: não cria de novo
+            self.criar("581001", Porta())
+
+    def test_pedido_que_estava_na_fila_ao_ligar_tambem_cria_pelo_botao(self):
+        self.receber(_sc("581002"))
+        S._tiktok_atendimento_registrar("581002", "anterior", "Já estava na fila ao ligar: atendimento à mão.")
+        porta = Porta()
+        self.criar("581002", porta)
+        self.assertEqual(self.estado("581002")["situacao"], "criado")
+
+    def test_kit_sem_cadastro_fica_com_o_motivo(self):
+        self.receber(_sc("581003", itens=(("SK9", "KIT-2050171-2011058", 1, "69.75"),)))
+        porta = Porta()
+        self.criar("581003", porta)
+        e = self.estado("581003")
+        self.assertEqual(e["situacao"], "revisar")
+        self.assertNotIn("atendimento/criar", porta.rotas())
+
+    def test_pedido_que_nao_e_do_tiktok(self):
+        with self.assertRaises(ValueError):
+            self.criar("NAOEXISTE", Porta())

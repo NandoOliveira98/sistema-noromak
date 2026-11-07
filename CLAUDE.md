@@ -515,7 +515,14 @@ cancelamento depois do atendimento aparece como valor diferente. **Revenda pela 
 `ContaMercadoLivre`, TikTok = 3, Shopee/Magalu = 1, manual = filial), não pela filial que confere (Mover de filial); o caixa usa a
 revenda gravada no romaneio; `_exp_revenda` lê a fila guardada (`_ml_fila_leitura`). Romaneio/caixa: o clique espera a porta no máximo
 `EXP_CLIQUE_ESPERA_S` (40 s, "Apollo ocupado") e confere de novo, já na vez, que ninguém soltou/enviou. Estoque: `_anuncio_pedidos_com_atendimento`
-inclui os atendimentos do TikTok (os anúncios de Bauru têm a trava de queda). **2ª revisão:** o estoque do TikTok continua descontando
+inclui os atendimentos do TikTok (os anúncios de Bauru têm a trava de queda). **V20.37 — criar pelo painel** (dono, 07/11, pedido
+587022850875164046: automático desligado e o painel sem como criar): `POST /api/expedicao-apollo/tiktok-atendimento {pedido}` (módulo
+admin, recusa outra filial) → `tiktok_atendimento_manual_iniciar`: só pedido do TikTok (`tiktok_sc_pedido_v2030`) ainda sem
+atendimento criado; grava `criando` e roda `tiktok_atendimento_pedido` numa thread (um por vez, `_TIKTOK_ATEND_MANUAL_LOCK`; vale
+também para o `anterior` da hora de ligar); "aguardando" sem fazer nada vira `revisar` com o motivo. Extensão Linx Cliente **0.52**:
+faixa "Este pedido do TikTok ainda não tem atendimento no Apollo" com o botão "Criar atendimento no Apollo" (confirma, acompanha 2 min)
+e o crédito pelo Linx web preenche a **data de nascimento vazia** (aleatória 1970–2000, regra do robô do Apollo; Erro 2544 do Linx).
+Teste: classe `BotaoDoPainel` em `TESTES/test_tiktok_atendimento_v2033.py`. **2ª revisão:** o estoque do TikTok continua descontando
 todo pendente (sem a trava de queda, subiria antes de o Apollo reler); "já atendido" = qualquer romaneio/caixa registrado com número
 de atendimento (inclusive erro/incerto); a conferência usa o SKU atual da linha (o ADMIN que troca o SKU deixa o do TikTok em
 `SkuOrigemImportacao`) e todas as linhas do pedido, de qualquer origem; `fora_da_fila` só marca com a data de ligar, lê fila e tabela

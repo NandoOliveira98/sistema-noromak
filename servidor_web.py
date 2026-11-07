@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.36-MAGALU-HISTORICO-ENVIOS"
+APP_VERSION = "20.37-TIKTOK-ATENDIMENTO-PAINEL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -11375,6 +11375,46 @@ def tiktok_atendimento_payload() -> dict[str, Any]:
             "SELECT pedido, situacao, detalhe, cliente, atendimento, valor, atualizado_em FROM tiktok_atendimento_v2033 "
             "ORDER BY atualizado_em DESC LIMIT 30")]
     return {"ok": True, "ligado": tiktok_atendimento_ligado(), "pedidos": linhas}
+
+
+# V20.37 (dono, 07/11, pedido 587022850875164046): com o automático desligado o painel do pedido não tinha como criar o
+# atendimento. O botão "Criar atendimento no Apollo" roda para UM pedido a mesma criação da rotina
+# (`tiktok_atendimento_pedido`: cadastro, conferência da fila, preço, kit e a porta `atendimento/criar`, que nunca cria dois
+# para a mesma venda). Em segundo plano (a porta espera a vez; o nginx corta em 60 s); um por vez; a tela relê a situação.
+_TIKTOK_ATEND_MANUAL_LOCK = threading.Lock()
+
+
+def tiktok_atendimento_manual_iniciar(pedido: str, ator: str) -> dict[str, Any]:
+    pedido = str(pedido or "").strip()
+    if not pedido:
+        raise ValueError("Informe o pedido.")
+    with DB_LOCK:
+        row = DB.execute("SELECT status, saiu_epoch FROM tiktok_sc_pedido_v2030 WHERE pedido=?", (pedido,)).fetchone()
+    if row is None:
+        raise ValueError("Este pedido não é do TikTok (ou a extensão ainda não leu o detalhe dele).")
+    atual = tiktok_atendimento_do_pedido(pedido) or {}
+    if str(atual.get("situacao") or "") in TIKTOK_ATEND_FINAIS:
+        raise ValueError(f"O atendimento {atual.get('atendimento') or ''} já foi criado para este pedido.")
+    if not _TIKTOK_ATEND_MANUAL_LOCK.acquire(blocking=False):
+        return {"ok": False, "ocupado": True, "error": "Outro atendimento do TikTok está sendo criado. Aguarde e tente de novo."}
+    try:
+        _tiktok_atendimento_registrar(pedido, "criando", f"Criando pelo painel ({ator})…")
+        audit(ator, "tiktok.atendimento_manual", pedido)
+
+        def rodar() -> None:
+            try:
+                r = tiktok_atendimento_pedido(pedido)
+                if r.get("situacao") == "aguardando":  # nada foi feito: deixa o motivo na tela
+                    _tiktok_atendimento_registrar(pedido, "revisar", "Não criado: " + str(r.get("motivo") or "aguardando"))
+            except Exception as exc:
+                _tiktok_atendimento_registrar(pedido, "erro", str(exc)[:300], espera="erro")
+            finally:
+                _TIKTOK_ATEND_MANUAL_LOCK.release()
+        threading.Thread(target=rodar, name=f"tiktok-atendimento-{pedido}", daemon=True).start()
+    except BaseException:
+        _TIKTOK_ATEND_MANUAL_LOCK.release()
+        raise
+    return {"ok": True, "iniciado": True, "atendimento_tiktok": tiktok_atendimento_do_pedido(pedido)}
 
 
 def tiktok_atendimento_loop(stop_event: threading.Event) -> None:
@@ -47621,7 +47661,7 @@ class AppHandler(BaseHTTPRequestHandler):
         if path in ("/api/expedicao-apollo/romaneio/soltar", "/api/expedicao-apollo/caixa/previa",
                     "/api/expedicao-apollo/caixa/enviar", "/api/expedicao-apollo/cadastro",
                     "/api/expedicao-apollo/valor/reservar", "/api/expedicao-apollo/valor/concluir",
-                    "/api/expedicao-apollo/valor/liberar"):
+                    "/api/expedicao-apollo/valor/liberar", "/api/expedicao-apollo/tiktok-atendimento"):
             ctx = self.auth(admin_only=True)
             if ctx is None:
                 return
@@ -47638,6 +47678,13 @@ class AppHandler(BaseHTTPRequestHandler):
                     resultado = faturamento_correcao_concluir(pedido, str(body.get("trava") or ""), usuario)
                 elif path.endswith("/valor/liberar"):   # pedido fora da fila não aparece no Faturamento
                     resultado = faturamento_correcao_liberar(pedido, usuario)
+                elif path.endswith("/tiktok-atendimento"):  # V20.37: criar o atendimento do TikTok pelo painel
+                    if self.pedido_de_outra_filial(ctx):
+                        return
+                    try:
+                        resultado = tiktok_atendimento_manual_iniciar(pedido, usuario)
+                    except ValueError as exc:
+                        resultado = {"ok": False, "error": str(exc)}
                 elif path.endswith("/caixa/previa"):
                     resultado = exp_caixa_previa_painel(pedido, body.get("atendimento"), body.get("cliente"), usuario,
                                                         valor_conferido=body.get("valor_conferido") is True)
