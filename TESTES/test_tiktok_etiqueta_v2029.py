@@ -44,6 +44,7 @@ class Base(TesteNoromak):
             p.start()
             self.addCleanup(p.stop)
         _conectar()
+        S._tiktok_config_gravar("fonte", "api", "teste")  # V20.40: estes testes são da API
         S._TIKTOK_ETIQUETA_TENTATIVA.clear()
         S._TIKTOK_ETIQUETA_ESTADO.clear()
         S._TIKTOK_ETIQUETA_ORGANIZADO.clear()

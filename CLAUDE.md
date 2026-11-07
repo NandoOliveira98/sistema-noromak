@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.24).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.40).
 
 ---
 
@@ -535,6 +535,23 @@ de atendimento (inclusive erro/incerto); a conferência usa o SKU atual da linha
 na mesma vez e quem volta à fila volta a ser candidato; `_tiktok_venda_mudou` (atendimento criado e o pedido cancelado/saiu ou com
 preço ilegível) barra o caixa (`_exp_caixa_valor_diferente`) e o romaneio do painel; o "Atualizar cadastro" do botão também espera a
 porta no máximo 40 s (`_ExpVezDaPorta`; as rotinas esperam o quanto for); o lote do Faturamento tenta de novo o "ocupado".
+
+**V20.40 — pronto para a API** (dono, 07/11: app "Noromak" criado no Partner Center como **Desenvolvedor de aplicativos →
+ERP, serviço personalizado**, sem gerente de contas; chaves no `.env`; falta o TikTok aprovar e Publicar). **Uma fonte de cada vez**
+(`tiktok_fonte()`, chave `fonte` em `tiktok_config_v1964`: `extensao` padrão | `api`; `POST /api/integracoes/tiktok/fonte`, perfil
+Admin; virar para a API só conectado e com a loja lida; botão "Usar a API" no cartão). Com `api`: o `tiktok_estoque_loop` lê os anúncios
+e grava o estoque pela API, o `tiktok_rodada` importa os pedidos, e a extensão é **recusada** (`TikTokFonteApi` → 409 em
+`extensao/{produtos,pedidos,iniciar}`; o `resultado` de uma rodada aberta ainda fecha) — o estoque da extensão grava por diferença. Com
+`extensao`: Sincronizar, `tiktok-estoque/{enviar,atualizar}` = 409 (antes valia "a extensão leu nas últimas 6 h"). **Atendimento pela
+API:** `tiktok_importar_pedidos` grava em `tiktok_sc_pedido_v2030` a situação, o preço (`_tiktok_api_venda`: um line_item por unidade,
+`original_price − seller_discount`, subsídio fora, cancelada fora, preço ausente = erro), o endereço (`_tiktok_api_endereco`:
+`address_line1/2/3`, `district_info` L1 = UF, L2 = cidade, L3 = bairro) e o nome/CPF da nota (`cpf`/`cpf_name`, `so_se_vazio`);
+pedido que sumiu da lista "a enviar" é relido (`GET /order/202309/orders?ids=`, até 50) e só sai com a situação confirmada. Formato pela
+documentação — **conferir a amostra no 1º pedido real**. Painel de saúde segue a fonte (`pedidos_api_epoch`). **Plataforma de anúncios:**
+cada variação de `tiktok_sku_v1964` (API ou extensão) vira linha `canal='tiktok'`, `conta='bauru'`, `anuncio_id` = id da variação,
+ficha pelo SKU do vendedor (vínculo à mão vence), `controle='tiktok'` (o estoque é da tela Estoque TikTok; "Passar para o Noromak" recusa),
+`user_product_id` = product_id (`_tiktok_anuncios_espelhar`, também no boot); removido pelo ADMIN não volta. Teste:
+`TESTES/test_tiktok_fonte_api_v2040.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

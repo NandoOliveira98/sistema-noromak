@@ -48,6 +48,7 @@ class Base(TesteNoromak):
             p.start()
             self.addCleanup(p.stop)
         _conectar()
+        S._tiktok_config_gravar("fonte", "api", "teste")  # V20.40: estes testes são da API
         self.enviados = []
         S._TIKTOK_APOLLO_CHAMADAS.clear()
 

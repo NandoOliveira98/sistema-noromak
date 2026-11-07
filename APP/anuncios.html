@@ -168,7 +168,7 @@ function trocarCasa(v) {
   // ficha: só refiltra o que já está na tela (o digitado está em FORM/CR e não se perde); lista: relê com a conta
   if (F) desenharFicha(); else { desenharLista(); carregarLista(); }
 }
-const CONTROLE = {noromak: ["Noromak", "ok"], alephee: ["Alephee", "warn"], full: ["Full", "info"]};
+const CONTROLE = {noromak: ["Noromak", "ok"], alephee: ["Alephee", "warn"], full: ["Full", "info"], tiktok: ["Estoque TikTok", "info"]};  // V20.40
 const STATUS = {active: "Ativo", paused: "Pausado", closed: "Encerrado", under_review: "Em revisão", inactive: "Inativo"};
 const TIPO_ANUNCIO = {gold_special: "Clássico", gold_pro: "Premium", gold_premium: "Premium", free: "Grátis"};
 const ORIGEM = {admin: "da ficha", anuncio_ml: "do anúncio ML", alephee: "da Alephee", apollo: "do Apollo", agente: "do agente (confira)"};
@@ -299,7 +299,7 @@ function desenharListaDados() {
       <td>${f.nome ? esc(f.nome) : '<span class="muted">sem nome</span>'}${f.sem_ficha ? ' <span class="nk-selo bad">sem ficha</span>' : ""}${f.kit_suspeito ? ` ${SELO_KIT}` : ""}</td>
       <td>${f.tipo === "kit" ? "Kit" : "Peça"}</td>
       <td><div class="selos">${(f.canais || []).map(c => `<span class="nk-selo ${f.misto ? "warn" : f.noromak ? "ok" : ""}">${esc(CANAL_CURTO[c] || c)}</span>`).join("") || '<span class="muted">—</span>'}</div></td>
-      <td>${f.misto ? '<span class="nk-selo warn">Misto</span>' : f.noromak ? '<span class="nk-selo ok">Noromak</span>' : f.anuncios ? '<span class="muted">Alephee / Full</span>' : '<span class="muted">—</span>'}</td>
+      <td>${f.misto ? '<span class="nk-selo warn">Misto</span>' : f.noromak ? '<span class="nk-selo ok">Noromak</span>' : f.anuncios ? `<span class="muted">${esc((f.controles || ["alephee", "full"]).map(c => (CONTROLE[c] || [c])[0]).join(" / "))}</span>` : '<span class="muted">—</span>'}</td>
       <td class="n">${f.anuncios}</td></tr>`;
   const tabFichas = `<div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_produtos"><thead><tr>
       <th>Código</th><th>Nome</th><th>Tipo</th><th>Canais</th><th>Quem controla</th><th class="n">Anúncios</th></tr></thead>
@@ -882,6 +882,7 @@ function desenharAnuncios() {
     if (a.canal === "ml") b.push(`<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="trazerDadosAnuncio(this)" title="Lê o anúncio no Mercado Livre e traz título, categoria, atributos, descrição e fotos para a ficha (só o que a ficha ainda não tem; o que o Admin digitou fica).">Trazer dados do anúncio</button>`);  // V20.25
     if (a.controle === "alephee" && a.logistica !== "fulfillment") b.push(`<button class="nk-btn mini pri" ${dadosAnuncio(a)} onclick="passarNoromak(this.dataset)">Passar para o Noromak</button>`);
     if (a.controle === "noromak") b.push(`<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="devolverAlephee(this.dataset)">Devolver para a Alephee</button>`);
+    if (a.canal === "tiktok") b.push(`<a class="nk-btn mini" href="/expedicao/tiktok-estoque" target="_blank" rel="noopener" title="O estoque do TikTok é controlado pela tela Estoque TikTok (Apollo de Bauru − fila).">Estoque TikTok</a>`);  // V20.40
     b.push(`<button class="nk-btn mini perigo" ${dadosAnuncio(a)} onclick="removerAnuncio(this.dataset)">Remover</button>`);
     return `<div class="selos">${b.join("")}</div>`;
   };

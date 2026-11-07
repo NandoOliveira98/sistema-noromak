@@ -321,7 +321,8 @@ class TikTokRevisao(BaseTikTok):
         self.assertIn('"cpf_name"', texto, "as chaves continuam visíveis para conferir")
 
     def test_sincronizar_agora_tambem_respeita_a_extensao(self):
-        S._tiktok_config_gravar("pedidos_extensao_epoch", str(int(time.time())), "x")
+        # V20.40: a fonte é a escolha do Admin (começa na extensão), não mais "a extensão leu nas últimas 6 h"
+        S._tiktok_config_gravar("fonte", "extensao", "x")
         with mock.patch.object(S, "tiktok_importar_pedidos") as importar:
             self.assertTrue(S.tiktok_sincronizar_iniciar())
             for t in threading.enumerate():
@@ -331,7 +332,7 @@ class TikTokRevisao(BaseTikTok):
 
     # --- latente: API e extensão juntas ---
     def test_api_nao_importa_enquanto_a_extensao_le(self):
-        S._tiktok_config_gravar("pedidos_extensao_epoch", str(int(time.time())), "x")
+        S._tiktok_config_gravar("fonte", "extensao", "x")  # V20.40: a fonte escolhida no cartão
         with mock.patch.object(S, "tiktok_status_payload", return_value={"connected": True}), \
                 mock.patch.object(S, "tiktok_access_token", return_value="t"), \
                 mock.patch.object(S, "tiktok_importar_pedidos") as importar:

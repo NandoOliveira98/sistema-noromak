@@ -128,7 +128,10 @@ function grupo(i){return ABA==="todos"||(ABA==="zerados"?i.desejado===0:i.situac
 function desenhar(){
   if(!D)return;
   const r=D.resumo||{},modo=D.config.modo_estoque;
-  $("aviso").innerHTML=D.conectado?"":'<div class="alerta">O TikTok Shop ainda não está conectado. Conecte em Integrações → TikTok Shop · Bauru.</div>';
+  // V20.40: uma fonte de cada vez (Integrações → TikTok Shop · Bauru → Fonte)
+  $("aviso").innerHTML=D.fonte==="api"
+    ?(D.conectado?"":'<div class="alerta">A fonte é a API, mas o TikTok Shop não está conectado. Conecte em Integrações → TikTok Shop · Bauru.</div>')
+    :'<div class="alerta">Fonte: extensão do Seller Center. O envio e a leitura dos anúncios são feitos por ela (aba do Seller Center aberta no Edge). Para usar a API, mude a fonte em Integrações → TikTok Shop · Bauru.</div>';
   document.querySelectorAll("#modos button").forEach(b=>b.classList.toggle("on",b.dataset.m===modo));
   $("notaModo").textContent=NOTA[modo]+` O Apollo é lido em rodízio, até ${D.apollo_por_minuto} consultas por minuto, estoque baixo primeiro.`;
   $("btnEnviar").disabled=modo==="simulacao"||!r.enviar;

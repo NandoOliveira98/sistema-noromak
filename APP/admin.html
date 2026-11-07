@@ -2098,6 +2098,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             <b>App Key</b><span id="tiktokAppKey">—</span>
             <b>Loja</b><span id="tiktokLoja">—</span>
             <b>Conectada em</b><span id="tiktokConectadaEm">—</span>
+            <b>Fonte</b><span id="tiktokFonte">—</span>
             <b>Pedidos</b><span id="tiktokImportacao">—</span>
             <b>Etiqueta</b><span id="tiktokEtiqueta">—</span>
             <b>Atendimento no Apollo</b><span id="tiktokAtendimento">—</span>
@@ -2108,6 +2109,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             <button type="button" id="btnTiktokConectar" class="btn-primario" onclick="conectarTiktokAdmin()">Conectar TikTok Shop</button>
             <button type="button" id="btnTiktokDesconectar" class="btn-perigo" onclick="desconectarTiktokAdmin()" disabled>Desconectar</button>
             <button type="button" id="btnTiktokTeste" class="btn-secundario" onclick="testeTiktokAdmin()" disabled title="Só lê: loja e depósitos. Nada é alterado.">Testar leitura</button>
+            <button type="button" id="btnTiktokFonte" class="btn-secundario" onclick="alternarFonteTiktokAdmin()" disabled title="Uma fonte de cada vez: a extensão do Seller Center ou a API do TikTok (anúncios, estoque e pedidos).">Usar a API</button>
             <button type="button" id="btnTiktokImportacao" class="btn-secundario" onclick="alternarImportacaoTiktokAdmin()" disabled>Desligar importação</button>
             <button type="button" id="btnTiktokEtiqueta" class="btn-secundario" onclick="alternarEtiquetaTiktokAdmin()" disabled title="Organiza o envio no TikTok e vincula a etiqueta (PDF) para a Conferência de Bauru.">Ligar etiqueta automática</button>
             <button type="button" id="btnTiktokSincronizar" class="btn-sucesso" onclick="sincronizarTiktokAdmin()" disabled>↻ Sincronizar agora</button>
@@ -9918,6 +9920,11 @@ async function carregarIntegracaoTiktokAdmin(){
     document.getElementById("tiktokLoja").textContent=tk.shop_name?`${tk.shop_name}${tk.shop_region?" ("+tk.shop_region+")":""}`:(tk.connected?"⚠ loja ainda não lida":"—");
     document.getElementById("tiktokConectadaEm").textContent=tk.connected_at?mlDataHora(tk.connected_at):"—";
     document.getElementById("tiktokCallback").textContent=tk.redirect_uri||"—";
+    // V20.40: fonte única (extensão do Seller Center ou API). Virar para a API só conectado e com a loja lida.
+    const api=tk.fonte==="api",bf=document.getElementById("btnTiktokFonte"),pronto=!!(tk.connected&&tk.tem_loja);
+    document.getElementById("tiktokFonte").textContent=api?"🟢 API do TikTok — anúncios, estoque e pedidos pela API (a extensão é recusada)":"🧩 Extensão do Seller Center";
+    if(bf){bf.dataset.fonte=tk.fonte||"extensao";bf.textContent=api?"Voltar para a extensão":"Usar a API";bf.disabled=!api&&!pronto;
+      bf.title=!api&&!pronto?"Conecte o TikTok Shop e rode o Testar leitura antes de usar a API.":"Uma fonte de cada vez: a extensão do Seller Center ou a API do TikTok (anúncios, estoque e pedidos).";}
     if(tk.connected){
       badge.className="integracao-status ok";badge.textContent="🟢 TikTok Shop conectado";
       if(conectar){conectar.disabled=false;conectar.textContent="Reconectar TikTok Shop";}if(disc)disc.disabled=false;if(teste)teste.disabled=false;
@@ -9925,7 +9932,7 @@ async function carregarIntegracaoTiktokAdmin(){
       const lig=!!tk.importacao_ligada,bi=document.getElementById("btnTiktokImportacao"),bs=document.getElementById("btnTiktokSincronizar");
       document.getElementById("tiktokImportacao").textContent=lig?"🟢 Ligada — entram na fila de Bauru a cada 2 min":"⚪ Desligada";
       if(bi){bi.disabled=false;bi.textContent=lig?"Desligar importação":"Ligar importação";bi.dataset.ligada=lig?"1":"0";}
-      if(bs)bs.disabled=!lig;
+      if(bs)bs.disabled=!lig||!api;  // V20.40: com a extensão como fonte, a API não importa
       // V20.29: etiqueta automática (organiza o envio no TikTok) — começa desligada.
       const etq=!!tk.etiqueta_ligada,be=document.getElementById("btnTiktokEtiqueta");
       document.getElementById("tiktokEtiqueta").textContent=etq?"🟢 Automática — organiza o envio e vincula o PDF (nota pelo Linx)":"⚪ Desligada";
@@ -9976,6 +9983,17 @@ async function testeTiktokAdmin(){
       `<div class="integracao-nota">${e.ok?"✅":"❌"} ${esc(e.etapa)}: ${e.ok?esc(e.itens)+" — "+esc((e.nomes||[]).join(", ")||"(sem nome)"):esc(e.erro)}</div>`).join("");
   }catch(e){box.innerHTML=`<div class="integracao-alerta">❌ ${esc(e.message)}</div>`;}
   finally{if(btn){btn.disabled=false;btn.textContent="Testar leitura";}await carregarIntegracaoTiktokAdmin();}
+}
+// V20.40: uma fonte de cada vez. A extensão grava o estoque por diferença: as duas juntas mandariam a mudança em dobro.
+async function alternarFonteTiktokAdmin(){
+  const bf=document.getElementById("btnTiktokFonte");const paraApi=bf?.dataset.fonte!=="api";
+  if(!await nkConfirmar(paraApi
+    ?"Usar a API do TikTok? A partir de agora anúncios, estoque e pedidos de Bauru vêm pela API, e a extensão do Seller Center deixa de gravar (ela é recusada). Confira antes o Testar leitura."
+    :"Voltar para a extensão do Seller Center? A API para de importar pedidos e de mandar estoque; a extensão volta a fazer isso (aba do Seller Center aberta no Edge)."))return;
+  if(bf)bf.disabled=true;
+  try{await mlApiAdmin("/expedicao/api/integracoes/tiktok/fonte",{method:"POST",body:JSON.stringify({fonte:paraApi?"api":"extensao"})});}
+  catch(e){alert("TikTok Shop: "+e.message);}
+  await carregarIntegracaoTiktokAdmin();
 }
 async function alternarImportacaoTiktokAdmin(){
   const bi=document.getElementById("btnTiktokImportacao");const ligar=bi?.dataset.ligada!=="1";
