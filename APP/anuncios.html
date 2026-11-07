@@ -149,7 +149,7 @@ const SELO_KIT = '<span class="nk-selo warn" title="O SKU parece dois códigos j
 const qtdOuSem = v => v == null ? SEM_LEITURA : esc(String(v));
 const CANAL = {ml: "Mercado Livre", shopee: "Shopee", magalu: "Magalu", tiktok: "TikTok Shop", amazon: "Amazon"};
 const CANAL_CURTO = {ml: "ML", shopee: "Shopee", magalu: "Magalu", tiktok: "TikTok", amazon: "Amazon"};
-const CONTA = {aracatuba: "Araçatuba", bauru: "Bauru", shopee: "Shopee · Araçatuba", magalu: "Magalu · Araçatuba"};  // V20.34  // V20.32: conta de estoque da Shopee
+const CONTA = {aracatuba: "Araçatuba", bauru: "Bauru", shopee: "Shopee · Araçatuba", magalu: "Magalu · Araçatuba", tiktok: "TikTok · Bauru"};  // V20.41  // V20.34  // V20.32: conta de estoque da Shopee
 const FILIAIS = [["aracatuba", "Araçatuba"], ["bauru", "Bauru"]];
 // V20.24: seletor de casa no topo (Todas / Araçatuba / Bauru). Vale para a lista e para a ficha; guardado neste navegador.
 const CASA_CHAVE = "nk_anuncios_casa_v2024";
@@ -171,7 +171,7 @@ function trocarCasa(v) {
 const CONTROLE = {noromak: ["Noromak", "ok"], alephee: ["Alephee", "warn"], full: ["Full", "info"], tiktok: ["Estoque TikTok", "info"]};  // V20.40
 const STATUS = {active: "Ativo", paused: "Pausado", closed: "Encerrado", under_review: "Em revisão", inactive: "Inativo"};
 const TIPO_ANUNCIO = {gold_special: "Clássico", gold_pro: "Premium", gold_premium: "Premium", free: "Grátis"};
-const ORIGEM = {admin: "da ficha", anuncio_ml: "do anúncio ML", alephee: "da Alephee", apollo: "do Apollo", agente: "do agente (confira)"};
+const ORIGEM = {admin: "da ficha", anuncio_ml: "do anúncio ML", anuncio_tiktok: "do anúncio TikTok", alephee: "da Alephee", apollo: "do Apollo", agente: "do agente (confira)"};  // V20.41: anuncio_tiktok
 // Ordem decidida pelo dono: título → categoria → o resto (a criação de anúncio segue essa ordem).
 const SECOES = [
   {id: "sec-produto", nome: "Produto", sub: "O nome é o título do produto: o anúncio é montado a partir dele.", campos: [
@@ -880,9 +880,10 @@ function desenharAnuncios() {
     if (!PODE) return "";
     const b = [];
     if (a.canal === "ml") b.push(`<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="trazerDadosAnuncio(this)" title="Lê o anúncio no Mercado Livre e traz título, categoria, atributos, descrição e fotos para a ficha (só o que a ficha ainda não tem; o que o Admin digitou fica).">Trazer dados do anúncio</button>`);  // V20.25
+    if (a.canal === "tiktok" && a.controle === "noromak") b.push(`<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="trazerDadosAnuncio(this)" title="Lê o produto no TikTok (pela API) e traz título, descrição, marca e fotos para a ficha (só o que a ficha ainda não tem; o que o Admin digitou fica).">Trazer dados do anúncio</button>`);  // V20.41
     if (a.controle === "alephee" && a.logistica !== "fulfillment") b.push(`<button class="nk-btn mini pri" ${dadosAnuncio(a)} onclick="passarNoromak(this.dataset)">Passar para o Noromak</button>`);
     if (a.controle === "noromak") b.push(`<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="devolverAlephee(this.dataset)">Devolver para a Alephee</button>`);
-    if (a.canal === "tiktok") b.push(`<a class="nk-btn mini" href="/expedicao/tiktok-estoque" target="_blank" rel="noopener" title="O estoque do TikTok é controlado pela tela Estoque TikTok (Apollo de Bauru − fila).">Estoque TikTok</a>`);  // V20.40
+    if (a.canal === "tiktok" && a.controle === "tiktok") b.push(`<a class="nk-btn mini" href="/expedicao/tiktok-estoque" target="_blank" rel="noopener" title="O estoque do TikTok é controlado pela tela Estoque TikTok (Apollo de Bauru − fila).">Estoque TikTok</a>`);  // V20.40
     b.push(`<button class="nk-btn mini perigo" ${dadosAnuncio(a)} onclick="removerAnuncio(this.dataset)">Remover</button>`);
     return `<div class="selos">${b.join("")}</div>`;
   };
@@ -914,7 +915,8 @@ function desenharAnuncios() {
     <section class="nk-painel" id="secEstoque" hidden></section>
     <section class="nk-painel" id="secRasc"></section>
     <section class="nk-painel" id="secShopee" hidden></section>
-    <section class="nk-painel" id="secMagalu" hidden></section>`;
+    <section class="nk-painel" id="secMagalu" hidden></section>
+    <section class="nk-painel" id="secTiktok" hidden></section>`;
   desenharEstoqueAnuncios();  // V20.26
   carregarEstoqueAnuncios();
   desenharRascunhos();  // V20.24
@@ -923,6 +925,8 @@ function desenharAnuncios() {
   carregarShopee();
   desenharMagalu();  // V20.34
   carregarMagalu();
+  desenharTiktok();  // V20.41
+  carregarTiktok();
 }
 async function passarNoromak({canal, conta, id}) {
   const ok = await nkConfirmar(`Você já desativou este anúncio na Alephee?\nO ${id} passa a ser controlado pelo Noromak. Se a Alephee continuar ligada nele, as duas vão mexer no mesmo estoque.`, {ok: "Já desativei", cancelar: "Ainda não", perigo: false});
@@ -945,7 +949,7 @@ async function trazerDadosAnuncio(botao) {  // V20.25: descricao + fotos + titul
   botao.disabled = true; botao.textContent = "Lendo…";
   try {
     const r = await api("/api/anuncios/trazer-dados", {canal, conta, anuncio_id: id});
-    nkToast(`${r.mlb}: ${r.trazido_texto || "lido."}`, "ok", {duracao: 12000});
+    nkToast(`${r.mlb || r.anuncio_id}: ${r.trazido_texto || "lido."}`, "ok", {duracao: 12000});
     await abrirFicha(F.codigo, {manter: true, apollo: !!F.apollo_lido});
   } catch (e) { nkToast(e.message, e.status === 400 ? "aviso" : "erro", {duracao: 10000}); botao.disabled = false; botao.textContent = "Trazer dados do anúncio"; }
 }
@@ -963,7 +967,8 @@ const ESTQ_MODO_TXT = {simulacao: "Calcula e registra; nada é enviado ao market
   automatico: "Envia sozinho ao marketplace quando o número muda."};
 const ESTQ_RES = {ok: ["Enviado", "ok"], erro: ["Erro", "bad"], simulado: ["Simulado", "info"], ignorado: ["Ignorado", ""]};
 // V20.32/V20.34: Shopee e Magalu de Araçatuba têm a própria conta de estoque ("shopee", "magalu"; a linha é conta aracatuba)
-const ESTQ_FORA = {shopee: ["Shopee", "na Shopee", "Na Shopee", "à Shopee"], magalu: ["Magalu", "na Magalu", "Na Magalu", "à Magalu"]};
+const ESTQ_FORA = {shopee: ["Shopee", "na Shopee", "Na Shopee", "à Shopee"], magalu: ["Magalu", "na Magalu", "Na Magalu", "à Magalu"],
+                   tiktok: ["TikTok", "no TikTok", "No TikTok", "ao TikTok"]};  // V20.41: o TikTok de Bauru (fonte API)
 const podeEstoque = a => (a.canal === "ml" || !!ESTQ_FORA[a.canal]) && a.controle === "noromak" && a.logistica !== "fulfillment";
 const contaEst = a => ESTQ_FORA[a.canal] ? a.canal : a.conta;
 const mktEst = a => ESTQ_FORA[a.canal] ? ESTQ_FORA[a.canal][0] : "ML";
@@ -999,7 +1004,7 @@ function cartaoEstoque(a) {
   if (modo === "manual") {
     corpo = PODE ? `<div class="barra" style="margin:0"><span class="muted">Quantidade ${noMkt(a)}</span>
         <input class="qtd" type="number" min="0" max="99999" step="1" inputmode="numeric" aria-label="Quantidade a enviar ao marketplace" value="${esc(EST_DIG[k] ?? (a.estoque ?? ""))}" data-chave="${esc(k)}" oninput="EST_DIG[this.dataset.chave]=this.value" onkeydown="if(event.key==='Enter')this.nextElementSibling.click()">
-        <button type="button" class="nk-btn mini pri" ${dadosAnuncio(a)} onclick="enviarEstoqueManual(this)">${a.canal === "shopee" ? "Enviar à Shopee" : a.canal === "magalu" ? "Enviar à Magalu" : "Enviar ao ML"}</button>
+        <button type="button" class="nk-btn mini pri" ${dadosAnuncio(a)} onclick="enviarEstoqueManual(this)">${a.canal === "shopee" ? "Enviar à Shopee" : a.canal === "magalu" ? "Enviar à Magalu" : a.canal === "tiktok" ? "Enviar ao TikTok" : "Enviar ao ML"}</button>
         <span class="muted">Vai na hora; o Noromak relê o anúncio para confirmar.</span></div>`
       : `<div class="muted">Manual: o estoque só muda quando o Admin digita e envia.</div>`;
   } else if (!d) corpo = `<div class="muted">Calculando…</div>`;
@@ -1086,6 +1091,7 @@ async function enviarEstoqueManual(b) {
 async function carregarPainelEstoque() {
   const casa = CASA, contas = filiaisVisiveis().map(([f]) => f);
   if (contas.includes("aracatuba")) contas.push("shopee", "magalu");  // V20.32/V20.34: Shopee e Magalu de Araçatuba têm o próprio modo
+  if (contas.includes("bauru")) contas.push("tiktok");  // V20.41: o TikTok de Bauru tem o próprio modo
   const res = await Promise.all(contas.map(c => api(`/api/anuncios/estoque?conta=${c}`).catch(e => ({erro: e.message, status: e.status}))));
   if (casa !== CASA || codigoDaUrl()) return;
   PE = {casa, contas: Object.fromEntries(contas.map((c, i) => [c, res[i]]))};
@@ -1268,7 +1274,7 @@ function cartaoFoto(f, i, n) {
   const arrastar = PODE ? `draggable="true" ondragstart="ARRASTO=${id}" ondragover="event.preventDefault();this.classList.add('alvo')" ondragleave="this.classList.remove('alvo')" ondrop="event.preventDefault();soltarFoto(${id})"` : "";
   return `<figure class="foto" ${arrastar}>
     <img src="${urlFoto(id)}" alt="Foto ${i + 1}" loading="lazy">
-    <figcaption><div>${i === 0 ? '<span class="nk-selo ok">Principal</span>' : `<b>${i + 1}ª</b>`} <span class="muted">${esc(f.largura)}×${esc(f.altura)} px · ${tamanho(f.bytes)}${f.origem === "estudio" ? " · Estúdio" : f.origem === "anuncio_ml" ? " · do anúncio ML" : ""}</span></div>
+    <figcaption><div>${i === 0 ? '<span class="nk-selo ok">Principal</span>' : `<b>${i + 1}ª</b>`} <span class="muted">${esc(f.largura)}×${esc(f.altura)} px · ${tamanho(f.bytes)}${f.origem === "estudio" ? " · Estúdio" : f.origem === "anuncio_ml" ? " · do anúncio ML" : f.origem === "anuncio_tiktok" ? " · do anúncio TikTok" : ""}</span></div>
     ${PODE ? `<div class="selos"><button type="button" class="nk-btn mini" ${i === 0 ? "disabled" : ""} onclick="moverFoto(${i},-1)" aria-label="Mover para a esquerda">←</button><button type="button" class="nk-btn mini" ${i === n - 1 ? "disabled" : ""} onclick="moverFoto(${i},1)" aria-label="Mover para a direita">→</button><button type="button" class="nk-btn mini perigo" onclick="removerFoto(${id})">Remover</button></div>` : ""}</figcaption></figure>`;
 }
 async function relerFotos() {
@@ -1922,6 +1928,269 @@ function desenharMagalu() {
       ${PODE && !F.naoExiste ? '<button type="button" class="nk-btn mini pri" onclick="novoMagalu()">+ Criar anúncio na Magalu</button>' : ""}</div>
     ${MG.erro ? `<div class="nk-aviso bad">${esc(MG.erro)}</div>` : ""}
     ${lista == null ? (MG.erro ? "" : '<div class="vazio">Carregando…</div>') : lista.length ? `<div class="tw"><table class="nk-tab"><thead><tr><th>Título</th><th class="n">Preço</th><th class="n">Qtd.</th><th>Situação</th><th>Atualizado</th><th></th></tr></thead><tbody>${lista.map(linha).join("")}</tbody></table></div>` : '<p class="muted">Nenhum rascunho da Magalu ainda.</p>'}
+    ${form}`;
+}
+
+// --- V20.41: criar anúncio no TikTok Shop (Bauru). Igual ao da Shopee: o Conferir é do Noromak + o “listing_check”
+// do TikTok (não cria nada); só o Publicar cria o produto. Preço digitado pelo Admin (o preço ideal do TikTok só sugere);
+// a quantidade no Publicar não passa do Apollo de Bauru menos o que está a baixar em Bauru. Só com a fonte “API”.
+const TT_SIT = {rascunho: ["Rascunho", ""], validado: ["Conferido", "info"], publicando: ["Publicando…", "warn"],
+  publicado: ["Publicado", "ok"], erro: ["Recusado pelo TikTok", "bad"], incerto: ["Confira no Seller Center", "bad"]};
+let TT = {codigo: null, lista: null, fonte: "", erro: "", r: null, f: null, cats: null, defs: null, marcas: null,
+  marcaFicha: null, regras: null, conta: null, ocupado: ""};
+let ttContaTimer = null;
+const ttEditavel = () => !TT.r || EDITAVEL.includes(TT.r.situacao);
+
+async function carregarTiktok(forcar) {
+  if (!F || F.naoExiste) { TT.lista = []; desenharTiktok(); return; }
+  const cod = F.codigo;
+  if (!forcar && TT.codigo === cod && TT.lista) { desenharTiktok(); return; }
+  try {
+    const d = await api(`/api/anuncios/tiktok/rascunhos?codigo=${enc(cod)}`);
+    if (!F || F.codigo !== cod) return;
+    if (TT.codigo !== cod) TT = {...TT, r: null, f: null, cats: null, defs: null, marcas: null, regras: null, conta: null};
+    TT.codigo = cod; TT.lista = d.rascunhos || []; TT.fonte = d.fonte || ""; TT.erro = "";
+  } catch (e) { TT.lista = null; TT.erro = e.message; }
+  desenharTiktok();
+}
+function ttForm(r) {
+  const campos = (F.ficha && F.ficha.campos) || {};
+  return r ? {titulo: r.titulo || "", categoria: r.categoria || "", categoria_nome: r.categoria_nome || "",
+      descricao: r.descricao || "", preco: r.preco == null ? "" : String(r.preco).replace(".", ","),
+      quantidade: r.quantidade == null ? "" : String(r.quantidade), atributos: JSON.parse(JSON.stringify(r.atributos || {})),
+      marca: {...(r.marca || {})}, fotos: [...(r.fotos || [])]}
+    : {titulo: String(campos.nome || "").replace(/\s+/g, " ").trim(), categoria: "", categoria_nome: "",
+      descricao: String(campos.descricao || ""), preco: "", quantidade: "", atributos: {}, marca: {},
+      fotos: (F.fotos || []).map(x => x.id).slice(0, 9)};
+}
+function novoTiktok() { TT.r = null; TT.f = ttForm(null); TT.cats = null; TT.defs = null; TT.marcas = null; TT.regras = null; TT.conta = null; desenharTiktok(); ttPedirConta(); }
+async function abrirTiktok(id) {
+  const r = (TT.lista || []).find(x => x.id === id); if (!r) return;
+  TT.r = r; TT.f = ttForm(r); TT.cats = null; TT.conta = null;
+  desenharTiktok();
+  if (r.categoria) await ttCarregarCategoria(r.categoria);
+  ttPedirConta();
+}
+function fecharTiktok() { TT.r = null; TT.f = null; desenharTiktok(); }
+async function ttSugerir() {
+  if (!TT.f.titulo.trim()) { nkToast("Escreva o título antes.", "aviso"); return; }
+  TT.ocupado = "cats"; desenharTiktok();
+  try {
+    const d = await api(`/api/anuncios/tiktok/categorias?titulo=${enc(TT.f.titulo)}`);
+    TT.cats = d.categorias || [];
+    if (!TT.cats.length) nkToast("O TikTok não sugeriu categoria para este título.", "aviso");
+  } catch (e) { nkToast(e.message, "erro"); }
+  TT.ocupado = ""; desenharTiktok();
+}
+async function ttEscolherCategoria(cid, nome) {
+  if (!cid) return;
+  if (TT.f.categoria && TT.f.categoria !== cid) { TT.f.atributos = {}; TT.f.marca = {}; }
+  TT.f.categoria = cid; TT.f.categoria_nome = nome || cid;
+  await ttCarregarCategoria(cid);
+}
+async function ttCarregarCategoria(cid) {
+  TT.ocupado = "attrs"; desenharTiktok();
+  try {
+    const d = await api(`/api/anuncios/tiktok/atributos?categoria=${enc(cid)}&codigo=${enc(F.codigo)}`);
+    TT.defs = d.atributos || []; TT.marcas = d.marcas || []; TT.regras = d.regras || null;
+    TT.marcaFicha = d.marca_da_ficha || null;
+    if (!(TT.f.marca && TT.f.marca.id) && TT.marcaFicha) TT.f.marca = {...TT.marcaFicha};
+  } catch (e) { TT.defs = null; nkToast(e.message, "erro"); }
+  TT.ocupado = ""; desenharTiktok();
+}
+function ttPedirConta() {
+  clearTimeout(ttContaTimer);
+  ttContaTimer = setTimeout(async () => {
+    if (!TT.f) return;
+    const p = numBr(TT.f.preco);
+    try { TT.conta = await api(`/api/anuncios/tiktok/conta?codigo=${enc(F.codigo)}&preco=${p == null ? "" : enc(p)}`); }
+    catch (e) { TT.conta = {erro: e.message}; }
+    desenharTiktok();
+  }, 400);
+}
+function ttAttr(id, campo, valor) {
+  const a = TT.f.atributos[id] = TT.f.atributos[id] || {};
+  a[campo] = valor;
+  if (!a.valor && !a.valor_id) delete TT.f.atributos[id];
+}
+function ttMarca(texto) {
+  const t = String(texto || "").trim().toLowerCase();
+  if (!t) { TT.f.marca = {}; return; }
+  const m = (TT.marcas || []).find(x => String(x.nome).toLowerCase() === t);
+  TT.f.marca = m ? {id: m.id, nome: m.nome} : {};
+  if (!m) nkToast("Marca fora da lista do TikTok para esta categoria: o anúncio vai sem marca.", "aviso");
+}
+function ttFoto(id, on) {
+  const s = TT.f.fotos;
+  if (on && !s.includes(id)) { if (s.length >= 9) { nkToast("O TikTok aceita até 9 fotos.", "aviso"); desenharTiktok(); return; } s.push(id); }
+  if (!on) TT.f.fotos = s.filter(x => x !== id);
+  desenharTiktok();
+}
+function ttCorpo() {
+  const f = TT.f;
+  return {titulo: f.titulo, categoria: f.categoria, categoria_nome: f.categoria_nome, descricao: f.descricao,
+    preco: f.preco, quantidade: f.quantidade, atributos: f.atributos, marca: f.marca, fotos: f.fotos};
+}
+async function ttSalvar(silencioso) {
+  if (!PODE || !TT.f) return null;
+  const corpo = TT.r ? {id: TT.r.id, versao: TT.r.versao, ...ttCorpo()} : {codigo: F.codigo, ...ttCorpo()};
+  TT.ocupado = "salvar"; desenharTiktok();
+  try {
+    const d = await api("/api/anuncios/tiktok/rascunho", corpo);
+    TT.r = d.rascunho; TT.f = ttForm(d.rascunho);
+    const i = (TT.lista || []).findIndex(x => x.id === TT.r.id);
+    if (i >= 0) TT.lista[i] = TT.r; else (TT.lista = TT.lista || []).unshift(TT.r);
+    if (!silencioso) nkToast("Rascunho do TikTok salvo.", "ok");
+    return TT.r;
+  } catch (e) {
+    nkToast(e.status === 409 ? "Outra pessoa alterou este rascunho: recarregue a ficha." : e.message, "erro");
+    return null;
+  } finally { TT.ocupado = ""; desenharTiktok(); }
+}
+async function ttConferir() {
+  const r = await ttSalvar(true); if (!r) return;
+  TT.ocupado = "conferir"; desenharTiktok();
+  try {
+    const d = await api("/api/anuncios/tiktok/conferir", {id: r.id});
+    TT.r = d.rascunho; TT.f = ttForm(d.rascunho);
+    nkToast(d.ok ? (d.conferido_tiktok ? "Conferido pelo Noromak e pelo TikTok: pode publicar." : "Conferido pelo Noromak: pode publicar.") : "Há o que acertar antes de publicar.", d.ok ? "ok" : "aviso");
+    (d.avisos || []).forEach(a => nkToast(a, "aviso", {duracao: 12000}));
+  } catch (e) { nkToast(e.message, "erro"); }
+  TT.ocupado = ""; carregarTiktok(true);
+}
+async function ttPublicar() {
+  const r = TT.r; if (!PODE || !r || r.situacao !== "validado") return;
+  if (!await nkConfirmar(`Publicar no TikTok?\n${r.titulo}\nR$ ${String(r.preco).replace(".", ",")} · ${r.quantidade} un. · ${(r.fotos || []).length} foto(s).\nIsto cria o anúncio de verdade na loja de Bauru. O Apollo de Bauru é lido de novo na hora.`, {ok: "Publicar no TikTok", perigo: false})) return;
+  TT.ocupado = "publicar"; desenharTiktok();
+  try {
+    await api("/api/anuncios/tiktok/publicar", {id: r.id});  // em segundo plano: a tela acompanha o rascunho
+    const cod = F.codigo, limite = Date.now() + 5 * 60 * 1000;
+    let atual = null;
+    while (Date.now() < limite) {
+      await new Promise(ok => setTimeout(ok, 2000));
+      if (!F || F.codigo !== cod) { TT.ocupado = ""; return; }
+      try { atual = ((await api(`/api/anuncios/tiktok/rascunhos?codigo=${enc(cod)}`)).rascunhos || []).find(x => x.id === r.id); }
+      catch (_) { atual = null; }
+      if (atual && atual.situacao !== "publicando") break;
+    }
+    if (atual) { TT.r = atual; TT.f = ttForm(atual); }
+    if (atual && atual.situacao === "publicado") { nkToast(`Anúncio criado no TikTok: produto ${atual.product_id}. Ele já aparece na lista com estoque em Manual.`, "ok", {duracao: 12000}); recarregar(); }
+    else if (atual && atual.situacao !== "publicando") nkToast((atual.erros || [])[0] || "Não publicado.", "erro", {duracao: 12000});
+    else nkToast("A publicação ainda está em andamento. Atualize a ficha em instantes para ver o resultado.", "aviso", {duracao: 12000});
+  } catch (e) { nkToast(e.status === 409 ? (e.message || "Outra publicação em andamento: aguarde.") : e.message, "erro", {duracao: 10000}); }
+  TT.ocupado = ""; carregarTiktok(true);
+}
+async function ttLiberar() {
+  const r = TT.r; if (!PODE || !r) return;
+  const pid = String(($("ttProdutoIncerto") || {}).value || "").trim();
+  if (!await nkConfirmar(pid ? `Marcar o rascunho como publicado com o produto ${pid}?\nO Noromak lê o produto no TikTok e só aceita se o SKU for ${F.codigo}.` : "Liberar sem número? Use só se conferiu no Seller Center que o anúncio NÃO foi criado.", {ok: "Liberar", perigo: !pid})) return;
+  try {
+    const d = await api("/api/anuncios/tiktok/liberar", {id: r.id, product_id: pid});
+    TT.r = d.rascunho; TT.f = ttForm(d.rascunho);
+    nkToast(pid ? "Rascunho marcado como publicado." : "Liberado: pode conferir e publicar de novo.", "ok");
+    if (pid) recarregar();
+  } catch (e) { nkToast(e.message, "erro"); }
+  carregarTiktok(true);
+}
+function ttCartoesPreco() {
+  const c = TT.conta;
+  if (!c) return '<p class="muted">Calculando…</p>';
+  if (c.erro) return `<div class="nk-aviso bad">${esc(c.erro)}</div>`;
+  const cart = (t, v, s) => `<div class="nk-kpi"><span>${t}</span><b>${v}</b><small>${s}</small></div>`;
+  const m = v => v == null ? "—" : Number(v).toLocaleString("pt-BR", {maximumFractionDigits: 2}) + "%";
+  const a = c.atual;
+  const ideais = (c.precos || []).map(p => cart(`Preço ideal (${m(p.margem_pedida)})`, brl(p.preco), `lucro ${brl(p.lucro)}`
+    + (PODE && ttEditavel() ? ` <button type="button" class="nk-btn mini" onclick="TT.f.preco='${String(p.preco).replace(".", ",")}';ttPedirConta();desenharTiktok()">Usar</button>` : "")));
+  return `<div class="g3">${[
+    cart("Custo (Bauru)", brl(c.custo), c.custo == null ? `sem custo de Bauru${(c.faltando || []).length ? ": " + esc(c.faltando.join(", ")) : ""}` : esc(((c.pecas || [])[0] || {}).origem || "")),
+    cart("Tarifa do TikTok", a ? brl(a.tarifa) : "—", a ? esc(a.faixa) : "digite o preço"),
+    cart("Afiliado + frete", a ? brl(a.afiliado + a.frete) : "—", c.config ? `${m(c.config.afiliado)} + ${m(c.config.frete)} (teto do frete R$ 50)` : ""),
+    cart("Imposto", a ? brl(a.imposto) : "—", c.config ? m(c.config.imposto) + " da venda" : ""),
+    cart("Lucro", a ? brl(a.lucro) : "—", a ? "margem " + m(a.margem) : (c.custo == null ? "sem custo, sem lucro" : "digite o preço")),
+    ...ideais].join("")}</div>
+    <p class="muted">O preço é o que você digitar; o preço ideal é só sugestão (custo de Bauru, afiliado e frete grátis da loja, como a extensão do TikTok).</p>`;
+}
+function ttAtributosHtml() {
+  if (!TT.f.categoria) return '<p class="muted">Escolha a categoria primeiro.</p>';
+  if (TT.ocupado === "attrs") return '<p class="muted">Lendo os atributos da categoria no TikTok…</p>';
+  if (!TT.defs) return `<p class="muted">Atributos não lidos. <button type="button" class="nk-btn mini" onclick="ttCarregarCategoria(TT.f.categoria)">Ler de novo</button></p>`;
+  const dis = PODE && ttEditavel() ? "" : "disabled";
+  const campo = a => {
+    const v = TT.f.atributos[a.id] || {};
+    const falta = a.obrigatorio && !(v.valor || v.valor_id);
+    let ctl;
+    if (!a.livre) {
+      ctl = `<select ${dis} data-id="${esc(a.id)}" onchange="ttAttr(this.dataset.id,'valor_id',this.value);desenharTiktok()"><option value="">—</option>${a.valores.map(x => `<option value="${esc(x.id)}" ${String(v.valor_id) === String(x.id) ? "selected" : ""}>${esc(x.nome)}</option>`).join("")}</select>`;
+    } else {
+      const lista = a.valores.length ? `list="ttl${esc(a.id)}"` : "";
+      ctl = `<input ${dis} ${lista} data-id="${esc(a.id)}" value="${esc(v.valor_id ? ((a.valores.find(x => String(x.id) === String(v.valor_id)) || {}).nome || "") : (v.valor || ""))}" oninput="const m=(TT.defs.find(d=>d.id===this.dataset.id)||{valores:[]}).valores.find(x=>x.nome===this.value);ttAttr(this.dataset.id,'valor_id',m?m.id:'');ttAttr(this.dataset.id,'valor',m?'':this.value)">`
+        + (a.valores.length ? `<datalist id="ttl${esc(a.id)}">${a.valores.map(x => `<option value="${esc(x.nome)}">`).join("")}</datalist>` : "");
+    }
+    return `<label class="nk-campo ${falta ? "falta" : ""}"><span>${esc(a.nome)} ${a.obrigatorio ? '<span class="orig bad">obrigatório</span>' : ""}</span>${ctl}</label>`;
+  };
+  const obrig = TT.defs.filter(a => a.obrigatorio), outros = TT.defs.filter(a => !a.obrigatorio);
+  const marca = TT.f.marca && TT.f.marca.id ? TT.f.marca.nome : "";
+  const rg = TT.regras || {};
+  const avisoRegra = [rg.tabela_medidas_obrigatoria ? "exige tabela de medidas" : "", (rg.certificados_obrigatorios || []).length ? "exige certificado (" + rg.certificados_obrigatorios.join(", ") + ")" : ""].filter(Boolean);
+  return `${avisoRegra.length ? `<div class="nk-aviso bad">Esta categoria ${esc(avisoRegra.join(" e "))}, que o Noromak não envia: escolha outra categoria ou crie pelo Seller Center.</div>` : ""}
+    <div class="g2">${obrig.map(campo).join("") || '<p class="muted">Esta categoria não tem atributo obrigatório.</p>'}</div>
+    <label class="nk-campo"><span>Marca no TikTok <span class="muted">(opcional; fora da lista = sem marca)</span>${TT.marcaFicha && marca === TT.marcaFicha.nome ? ' <span class="orig">da ficha</span>' : ""}</span>
+      <input ${dis} list="ttMarcas" value="${esc(marca)}" placeholder="Digite e escolha da lista" onchange="ttMarca(this.value);desenharTiktok()">
+      <datalist id="ttMarcas">${(TT.marcas || []).slice(0, 3000).map(m => `<option value="${esc(m.nome)}">`).join("")}</datalist></label>
+    ${outros.length ? `<details class="rem"><summary>Outros atributos (opcionais, ${outros.length})</summary><div class="g2">${outros.map(campo).join("")}</div></details>` : ""}`;
+}
+function desenharTiktok() {
+  const el = $("secTiktok"); if (!el) return;
+  const temBau = CASA === "todas" || CASA === "bauru";
+  if (!F || !temBau) { el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  const lista = TT.lista, api_ = TT.fonte === "api";
+  const linha = r => { const s = TT_SIT[r.situacao] || [r.situacao, ""];
+    return `<tr${TT.r && TT.r.id === r.id ? ' class="atual"' : ""}><td>${r.titulo ? esc(r.titulo) : '<span class="muted">sem título</span>'}</td><td class="n">${brl(r.preco)}</td><td class="n">${esc(r.quantidade ?? "—")}</td>
+      <td><span class="nk-selo ${s[1]}">${esc(s[0])}</span> ${r.product_id ? `<span class="mono">produto ${esc(r.product_id)}</span>` : ""}</td><td>${quando(r.atualizado_em)}${r.atualizado_por ? " · " + esc(r.atualizado_por) : ""}</td>
+      <td>${PODE ? `<button type="button" class="nk-btn mini" onclick="abrirTiktok(${Number(r.id)})">${EDITAVEL.includes(r.situacao) ? "Continuar" : "Ver"}</button>` : ""}</td></tr>`; };
+  let form = "";
+  if (TT.f) {
+    const f = TT.f, r = TT.r, dis = PODE && ttEditavel() ? "" : "disabled", oc = TT.ocupado ? "disabled" : "";
+    const campos = (F.ficha && F.ficha.campos) || {};
+    const medida = (n, u) => campos[n] ? `${esc(campos[n])} ${u}` : '<span class="bad">falta</span>';
+    const s = r ? TT_SIT[r.situacao] || [r.situacao, ""] : null;
+    const erros = r && (r.erros || []).length ? `<div class="nk-aviso ${r.situacao === "publicado" ? "info" : "bad"}"><b>${r.situacao === "erro" ? "O TikTok recusou:" : "O que precisa ser acertado:"}</b><ul>${r.erros.map(e => `<li>${esc(e)}</li>`).join("")}</ul></div>` : "";
+    form = `<div class="nk-painel-tit" style="margin-top:14px"><div><h3>${r ? `Rascunho TikTok nº ${esc(r.id)} <span class="nk-selo ${s[1]}">${esc(s[0])}</span>` : "Novo anúncio no TikTok"}</h3>
+        <p class="muted">${r ? `versão ${esc(r.versao)} · ${quando(r.atualizado_em)}${r.atualizado_por ? " por " + esc(r.atualizado_por) : ""}` : "Loja de Bauru."}</p></div>
+        <button type="button" class="nk-btn mini" onclick="fecharTiktok()">Fechar</button></div>
+      ${erros}
+      <section class="passo"><h3><span class="num">1</span>Título</h3>
+        <label class="nk-campo"><span>Título no TikTok <span class="muted">${f.titulo.length} de 255 caracteres</span></span>
+          <input ${dis} maxlength="255" value="${esc(f.titulo)}" oninput="TT.f.titulo=this.value;this.previousElementSibling.querySelector('.muted').textContent=this.value.length+' de 255 caracteres'"></label></section>
+      <section class="passo"><h3><span class="num">2</span>Categoria</h3>
+        ${f.categoria ? `<p>Escolhida: <b>${esc(f.categoria_nome || f.categoria)}</b> <span class="muted mono">${esc(f.categoria)}</span></p>` : ""}
+        ${PODE && ttEditavel() ? `<div class="barra"><button type="button" class="nk-btn mini" ${oc} onclick="ttSugerir()">${TT.ocupado === "cats" ? "Consultando…" : "Sugerir pelo TikTok (pelo título)"}</button>
+          <input id="ttCatManual" placeholder="ou o número da categoria" style="max-width:220px"><button type="button" class="nk-btn mini" onclick="ttEscolherCategoria(String($('ttCatManual').value).trim(),'')">Usar</button></div>` : ""}
+        ${TT.cats ? `<div class="g1">${TT.cats.map(c => `<label style="display:flex;gap:8px;align-items:center;margin:6px 0;cursor:pointer"><input type="radio" name="ttcat" ${dis} ${c.folha ? "" : "disabled"} ${f.categoria === c.categoria ? "checked" : ""} data-id="${esc(c.categoria)}" data-nome="${esc(c.caminho || c.nome)}" onchange="ttEscolherCategoria(this.dataset.id,this.dataset.nome)"> ${esc(c.caminho || c.nome)}</label>`).join("") || '<p class="muted">Nenhuma sugestão.</p>'}</div>` : ""}</section>
+      <section class="passo"><h3><span class="num">3</span>Atributos e marca</h3>${ttAtributosHtml()}</section>
+      <section class="passo"><h3><span class="num">4</span>Fotos <span class="muted">(${f.fotos.length} de até 9)</span></h3>
+        ${(F.fotos || []).length ? `<div class="fotos-sel">${(F.fotos || []).map(x => `<label style="display:inline-flex;gap:6px;align-items:center;margin:4px 10px 4px 0;cursor:pointer"><input type="checkbox" ${dis} ${f.fotos.includes(x.id) ? "checked" : ""} data-id="${x.id}" onchange="ttFoto(Number(this.dataset.id),this.checked)"><img src="${urlFoto(x.id)}" alt="" style="width:56px;height:56px;object-fit:contain;border:1px solid var(--nk-line);border-radius:6px;background:#fff"></label>`).join("")}</div><p class="muted">O TikTok aceita JPG, PNG e WEBP. As fotos só sobem no Publicar.</p>` : '<p class="muted">A ficha não tem fotos: suba na aba Fotos.</p>'}</section>
+      <section class="passo"><h3><span class="num">5</span>Descrição, preço e quantidade</h3>
+        <label class="nk-campo"><span>Descrição</span><textarea ${dis} rows="8" oninput="TT.f.descricao=this.value">${esc(f.descricao)}</textarea></label>
+        <div class="g2"><label class="nk-campo"><span>Preço (R$)</span><input ${dis} value="${esc(f.preco)}" inputmode="decimal" oninput="TT.f.preco=this.value;ttPedirConta()"></label>
+          <label class="nk-campo"><span>Quantidade <span class="muted">(no Publicar não pode passar do Apollo de Bauru menos o que está a baixar em Bauru)</span></span><input ${dis} value="${esc(f.quantidade)}" inputmode="numeric" oninput="TT.f.quantidade=this.value"></label></div>
+        ${ttCartoesPreco()}
+        <p class="muted">Peso e medidas do pacote (da ficha, lidos na hora): ${medida("peso_g", "g")} · ${medida("altura_cm", "cm")} × ${medida("largura_cm", "cm")} × ${medida("comprimento_cm", "cm")}. O estoque vai para o único depósito de venda da loja.</p></section>
+      <section class="passo"><h3><span class="num">6</span>Conferir e publicar</h3>
+        ${r && r.situacao === "incerto" && PODE ? `<div class="nk-aviso bad">O TikTok não respondeu ao criar: confira em Produtos no Seller Center.</div>
+          <div class="barra"><input id="ttProdutoIncerto" placeholder="número do produto, se foi criado" style="max-width:260px"><button type="button" class="nk-btn mini pri" onclick="ttLiberar()">Liberar</button></div>` : ""}
+        ${r && r.situacao === "publicado" ? `<div class="nk-aviso info">Publicado no TikTok: produto <b class="mono">${esc(r.product_id)}</b>, variação <span class="mono">${esc(r.sku_id || "")}</span>. Está na lista “Anúncios em todos os canais” com estoque em Manual.</div>` : ""}
+        ${PODE && ttEditavel() ? `<div class="barra"><span class="esp"></span><button type="button" class="nk-btn" ${oc} onclick="ttSalvar()">${TT.ocupado === "salvar" ? "Salvando…" : "Salvar"}</button>
+          <button type="button" class="nk-btn" ${oc} onclick="ttConferir()">${TT.ocupado === "conferir" ? "Conferindo…" : "Conferir"}</button>
+          <button type="button" class="nk-btn pri" ${oc} ${r && r.situacao === "validado" && api_ ? "" : "disabled"} onclick="ttPublicar()">${TT.ocupado === "publicar" ? "Publicando…" : "Publicar no TikTok"}</button></div>
+          <p class="muted">O Conferir é do Noromak (título, descrição, fotos, atributos, regras da categoria, peso/medidas e depósito) e do TikTok (“listing check”, que não cria nada). Se o TikTok recusar no Publicar, o motivo aparece aqui e nada é criado.</p>` : ""}</section>`;
+  }
+  el.innerHTML = `<div class="nk-painel-tit"><div><h2>Criar anúncio no TikTok</h2><p>Loja de Bauru. Cada tentativa fica guardada como rascunho. Só o “Publicar” cria o anúncio no TikTok.</p></div>
+      ${PODE && !F.naoExiste ? '<button type="button" class="nk-btn mini pri" onclick="novoTiktok()">+ Criar anúncio no TikTok</button>' : ""}</div>
+    ${TT.erro ? `<div class="nk-aviso bad">${esc(TT.erro)}</div>` : ""}
+    ${lista != null && !api_ ? '<div class="nk-aviso">A fonte do TikTok é a extensão do Seller Center: dá para preparar e conferir o rascunho, mas o Publicar só com a fonte “API” (Integrações → TikTok Shop).</div>' : ""}
+    ${lista == null ? (TT.erro ? "" : '<div class="vazio">Carregando…</div>') : lista.length ? `<div class="tw"><table class="nk-tab"><thead><tr><th>Título</th><th class="n">Preço</th><th class="n">Qtd.</th><th>Situação</th><th>Atualizado</th><th></th></tr></thead><tbody>${lista.map(linha).join("")}</tbody></table></div>` : '<p class="muted">Nenhum rascunho do TikTok ainda.</p>'}
     ${form}`;
 }
 

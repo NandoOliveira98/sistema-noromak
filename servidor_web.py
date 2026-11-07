@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.40-TIKTOK-API-PRONTA"
+APP_VERSION = "20.41-TIKTOK-ANUNCIOS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -7347,7 +7347,9 @@ ANUNCIO_CAMPOS_FICHA = ("nome", "marca", "modelo", "ean", "ncm", "peso_g", "altu
                         "comprimento_cm", "descricao", "categoria_ml")
 # revisar-antes-de-subir (06/11): "agente" = o que o agente de anúncios propôs e o Admin aceitou (abaixo do
 # anúncio do ML: o Puxar corrige; nunca vira "admin").
-ANUNCIO_ORIGENS = {"admin": 1, "alephee": 2, "anuncio_ml": 3, "agente": 4, "apollo": 5}  # menor = mais autoridade
+# V20.41: "anuncio_tiktok" = o "Trazer dados do anúncio" do TikTok (logo abaixo do anúncio do ML).
+ANUNCIO_ORIGENS = {"admin": 1, "alephee": 2, "anuncio_ml": 3, "anuncio_tiktok": 4, "agente": 5,
+                   "apollo": 6}  # menor = mais autoridade
 
 
 class FichaConflito(Exception):
@@ -7520,6 +7522,31 @@ def ensure_anuncios_schema() -> None:
             CREATE INDEX IF NOT EXISTS idx_anuncio_rascunho_shopee_ficha ON anuncio_rascunho_shopee_v2032(ficha_codigo);
             """
         )
+        # V20.41: rascunho de anuncio do TikTok Shop (Bauru). `product_id`/`sku_id` = os devolvidos pelo TikTok.
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS anuncio_rascunho_tiktok_v2041 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ficha_codigo TEXT NOT NULL,
+                titulo TEXT NOT NULL DEFAULT '',
+                categoria TEXT NOT NULL DEFAULT '',
+                categoria_nome TEXT NOT NULL DEFAULT '',
+                atributos_json TEXT NOT NULL DEFAULT '{}',
+                marca_json TEXT NOT NULL DEFAULT '{}',
+                fotos_json TEXT NOT NULL DEFAULT '[]',
+                descricao TEXT NOT NULL DEFAULT '',
+                preco REAL,
+                quantidade INTEGER,
+                situacao TEXT NOT NULL DEFAULT 'rascunho',
+                product_id TEXT,
+                sku_id TEXT,
+                erros_json TEXT NOT NULL DEFAULT '[]',
+                versao INTEGER NOT NULL DEFAULT 1,
+                criado_em TEXT, criado_por TEXT, atualizado_em TEXT, atualizado_por TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_anuncio_rascunho_tiktok_ficha ON anuncio_rascunho_tiktok_v2041(ficha_codigo);
+            """
+        )
         # V20.34: rascunho de anuncio da Magalu. `sku` = o enviado (o codigo da ficha); `trace_id` = o do 202;
         # `etapa` sku -> preco -> estoque (o que ja foi aceito depois de o SKU aparecer); peso/medidas lidos da ficha.
         DB.executescript(
@@ -7576,6 +7603,10 @@ def ensure_anuncios_schema() -> None:
                    "WHERE situacao='publicando' AND COALESCE(enviado_em,'')<>'' AND enviado_em >= COALESCE(reservado_em,'')")
         DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET situacao='validado', versao=versao+1, erros_json="
                    "'[\"O servidor reiniciou antes de enviar à Magalu: nada foi criado. Publique de novo.\"]' "
+                   "WHERE situacao='publicando'")
+        # V20.41: o TikTok pode ter criado (processo caiu no meio do POST): incerto, o Admin confere e libera
+        DB.execute("UPDATE anuncio_rascunho_tiktok_v2041 SET situacao='incerto', versao=versao+1, "
+                   "erros_json='[\"O servidor reiniciou durante a publicação: confira no Seller Center do TikTok se o anúncio foi criado.\"]' "
                    "WHERE situacao='publicando'")
         DB.execute("UPDATE anuncio_rascunho_shopee_v2032 SET situacao='incerto', versao=versao+1, "
                    "erros_json='[\"O servidor reiniciou durante a publicação: confira no Seller Center se o anúncio foi criado.\"]' "
@@ -8615,9 +8646,14 @@ def _anuncio_descricao_ml(mlb: str) -> tuple[str, str]:
     return (str(d.get("plain_text") or "").strip() if isinstance(d, dict) else ""), ""
 
 
-def _anuncio_fotos_do_ml(cod: str, urls: list[Any], ator: str) -> dict[str, Any]:
+def _anuncio_fotos_do_ml(cod: str, urls: list[Any], ator: str, *, url_ok: Any = None, baixar: Any = None,
+                         candidatos: Any = None, origem: str = "anuncio_ml") -> dict[str, Any]:
     """V20.25: so quando a ficha ainda NAO tem foto (nunca duplica, nunca apaga). Baixa fora do DB_LOCK; foto que
-    falha (rede, endereco fora do mlstatic, pequena) e pulada e contada, as outras entram."""
+    falha (rede, endereco fora do mlstatic, pequena) e pulada e contada, as outras entram.
+    V20.41: `url_ok`/`baixar`/`candidatos`/`origem` trocam a CDN (o TikTok usa as mesmas regras com os hosts dele)."""
+    url_ok = url_ok or _anuncio_foto_ml_url_ok
+    baixar = baixar or _anuncio_foto_ml_baixar
+    candidatos = candidatos or _anuncio_foto_ml_urls
     out: dict[str, Any] = {"fotos": 0, "fotos_falharam": 0, "fotos_ja_tinha": False}
     urls = [u for u in (urls or []) if str(u or "").strip()][:ANUNCIO_FOTOS_MAX]
     if not urls or not cod:
@@ -8628,11 +8664,11 @@ def _anuncio_fotos_do_ml(cod: str, urls: list[Any], ator: str) -> dict[str, Any]
     baixadas: list[bytes] = []
     for u in urls:
         dados = None
-        for cand in _anuncio_foto_ml_urls(u):
-            if not _anuncio_foto_ml_url_ok(cand):
+        for cand in candidatos(u):
+            if not url_ok(cand):
                 continue
             try:
-                dados = _anuncio_foto_ml_baixar(cand)
+                dados = baixar(cand)
                 break
             except Exception as exc:
                 print(f"Aviso: foto do anuncio nao baixada ({cand[:120]}): {exc}", file=sys.stderr)
@@ -8647,7 +8683,7 @@ def _anuncio_fotos_do_ml(cod: str, urls: list[Any], ator: str) -> dict[str, Any]
             return out
         for dados in baixadas:
             try:
-                anuncio_foto_adicionar(cod, dados, ator, origem="anuncio_ml")
+                anuncio_foto_adicionar(cod, dados, ator, origem=origem)
                 out["fotos"] += 1
             except ValueError as exc:  # pequena, nao e imagem, ficha cheia
                 out["fotos_falharam"] += 1
@@ -8717,8 +8753,10 @@ def _anuncio_completar(conta: str, mlb: str, d: dict[str, Any], ator: str) -> di
 def anuncio_trazer_dados(canal: Any, conta: Any, anuncio_id: Any, ator: str) -> dict[str, Any]:
     """V20.25: botao "Trazer dados do anuncio" (aba Anuncios em todos os canais): le o anuncio com o token da conta
     dele e faz o mesmo que o "puxar um" (titulo, categoria, atributos, descricao e fotos). So leitura no ML."""
+    if str(canal or "").strip().lower() == "tiktok":  # V20.41: o TikTok de Bauru (pela Open API)
+        return tiktok_trazer_dados(conta, anuncio_id, ator)
     if str(canal or "").strip().lower() != "ml":
-        raise ValueError("Só anúncios do Mercado Livre por enquanto.")
+        raise ValueError("Só anúncios do Mercado Livre e do TikTok por enquanto.")
     conta = str(conta or "").strip()
     if conta not in ml_casas_conectadas():
         raise ValueError("Conta do Mercado Livre desconhecida ou não conectada.")
@@ -9220,7 +9258,7 @@ def anuncio_foto_adicionar(codigo: str, dados: bytes, ator: str, origem: str = "
         cur = DB.execute("INSERT INTO anuncio_foto_v2024(ficha_codigo,arquivo,tipo,largura,altura,bytes,origem,ordem,"
                          "criado_em,criado_por) VALUES(?,?,?,?,?,?,?,?,?,?)",
                          (cod, "", tipo, largura, altura, len(dados),
-                          origem if origem in ("pc", "estudio", "anuncio_ml") else "pc",  # V20.25: anuncio_ml
+                          origem if origem in ("pc", "estudio", "anuncio_ml", "anuncio_tiktok") else "pc",  # V20.25/V20.41
                           int(ultima) + 1, now_iso(), str(ator or "")))
         foto_id = int(cur.lastrowid)
         DB.commit()
@@ -9409,6 +9447,9 @@ def tiktok_fonte_definir(fonte: str, usuario: str) -> str:
             tiktok_log_event("estoque", "modo", "SIMULACAO", "fonte virou API: o estoque voltou a Simulação")
     finally:
         TIKTOK_ESTOQUE_LOCK.release()
+    with DB_LOCK:  # V20.41: os anúncios do TikTok passam a ser (ou deixam de ser) controlados pela plataforma
+        _tiktok_anuncios_espelhar()
+        DB.commit()
     tiktok_log_event("fonte", "", fonte.upper(), f"por {usuario}")
     return fonte
 
@@ -9581,6 +9622,12 @@ def _tiktok_sku_gravar(vistos: dict[str, dict[str, Any]], apagar_ausentes: bool)
 # aqui. Variação que sumiu da loja fica como estava (regra do puxar do ML); removido pelo ADMIN não volta.
 TIKTOK_ANUNCIO_CANAL = "tiktok"
 TIKTOK_ANUNCIO_CONTROLE = "tiktok"
+# V20.41 (dono, 07/11: "plataforma, por anúncio"): com a fonte "api" os anúncios do TikTok ficam com controle 'noromak' e
+# ganham Manual/Automático em /anuncios (conta de estoque 'tiktok'); com a extensão, 'tiktok' (a tela Estoque TikTok manda).
+
+
+def _tiktok_controle_atual() -> str:
+    return "noromak" if tiktok_fonte() == "api" else TIKTOK_ANUNCIO_CONTROLE
 TIKTOK_STATUS_HUB = {"ACTIVATE": "active", "SELLER_DEACTIVATED": "paused", "PLATFORM_DEACTIVATED": "paused",
                      "FREEZE": "paused", "PENDING": "under_review", "DRAFT": "inactive", "FAILED": "inactive"}
 
@@ -9606,6 +9653,7 @@ def tiktok_anuncios_espelhar_boot() -> None:
 def _tiktok_anuncios_espelhar() -> int:
     """Espelha tiktok_sku_v1964 em anuncio_canal_v2023. Quem chama segura o DB_LOCK e faz o commit."""
     vinculos = {str(r["sku_id"]): str(r["codigos"] or "") for r in DB.execute("SELECT sku_id, codigos FROM tiktok_vinculo_v1964")}
+    controle = _tiktok_controle_atual()  # V20.41
     # revisar-antes-de-subir (V20.40): uma leitura só e grava só o que mudou (sem regravar centenas de linhas)
     atuais = {str(r["anuncio_id"]): r for r in DB.execute(
         "SELECT * FROM anuncio_canal_v2023 WHERE canal=? AND conta=?", (TIKTOK_ANUNCIO_CANAL, TIKTOK_CASA))}
@@ -9622,7 +9670,7 @@ def _tiktok_anuncios_espelhar() -> int:
         if atual is not None and (str(atual["ficha_codigo"] or ""), str(atual["sku_anuncio"] or ""),
                                   str(atual["controle"] or ""), str(atual["status"] or ""),
                                   str(atual["user_product_id"] or "")) == (
-                ficha, str(r["seller_sku"] or ""), TIKTOK_ANUNCIO_CONTROLE, status, str(r["product_id"] or "")) \
+                ficha, str(r["seller_sku"] or ""), controle, status, str(r["product_id"] or "")) \
                 and (not str(r["titulo"] or "") or str(atual["titulo"] or "") == str(r["titulo"] or "")) \
                 and (r["qtd_tiktok"] is None or atual["estoque"] == r["qtd_tiktok"]):
             continue  # nada mudou
@@ -9630,13 +9678,15 @@ def _tiktok_anuncios_espelhar() -> int:
             DB.execute("INSERT INTO anuncio_canal_v2023(canal,conta,anuncio_id,ficha_codigo,sku_anuncio,controle,titulo,"
                        "estoque,status,user_product_id,lido_em) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                        (TIKTOK_ANUNCIO_CANAL, TIKTOK_CASA, sku_id, ficha, str(r["seller_sku"] or ""),
-                        TIKTOK_ANUNCIO_CONTROLE, str(r["titulo"] or ""), r["qtd_tiktok"], status,
+                        controle, str(r["titulo"] or ""), r["qtd_tiktok"], status,
                         str(r["product_id"] or ""), agora))
         else:
+            # V20.41: o controle segue a fonte; saiu do Noromak = o Automático vira Manual (nunca religa sozinho)
             DB.execute("UPDATE anuncio_canal_v2023 SET ficha_codigo=?, sku_anuncio=?, controle=?, "
+                       "estoque_modo=CASE WHEN ?<>'noromak' THEN 'manual' ELSE estoque_modo END, "
                        "titulo=COALESCE(NULLIF(?,''),titulo), estoque=COALESCE(?,estoque), status=?, user_product_id=?, "
                        "lido_em=? WHERE canal=? AND conta=? AND anuncio_id=?",
-                       (ficha, str(r["seller_sku"] or ""), TIKTOK_ANUNCIO_CONTROLE, str(r["titulo"] or ""),
+                       (ficha, str(r["seller_sku"] or ""), controle, controle, str(r["titulo"] or ""),
                         r["qtd_tiktok"], status, str(r["product_id"] or ""), agora,
                         TIKTOK_ANUNCIO_CANAL, TIKTOK_CASA, sku_id))
         n += 1
@@ -11887,13 +11937,8 @@ def tiktok_estoque_loop(stop_event: threading.Event) -> None:
                         ultimo_catalogo = time.monotonic()
                     finally:
                         TIKTOK_CATALOGO_LOCK.release()
-                lido = tiktok_apollo_ler_proximo()
-                _, versao, _ = get_storage("conf_pedidos")
-                if lido or versao != ultima_versao:
-                    ultima_versao = versao
-                    r = tiktok_estoque_enviar(ator="sistema", automatico=True)
-                    if r.get("erros"):
-                        tiktok_log_event_se_mudou("estoque", "worker", "ERRO", f"{r['erros']} variação(ões) recusada(s)")
+                # V20.41: com a API o estoque é da plataforma de anúncios (Manual/Automático por anúncio, conta
+                # 'tiktok' do anuncios_estoque_loop); aqui só o catálogo. Nada mais é enviado por esta rotina.
             elif time.time() - float(_tiktok_config_ler("extensao_lida_epoch") or 0) < TIKTOK_EXTENSAO_RECENTE \
                     and _tiktok_linhas_sku():
                 # V19.81: sem a API, as variações vêm da extensão; o rodízio do Apollo continua só
@@ -36237,6 +36282,1024 @@ def shopee_incerto_liberar(rascunho_id: Any, item_id: Any, ator: str) -> dict[st
 
 
 # ---------------------------------------------------------------------------
+# V20.41 - Criar anuncio no TikTok Shop (Bauru) pela plataforma de anuncios (decisoes do dono, 07/11). Molde: a
+# Shopee (V20.32). Construido pela documentacao da Open API 202309, sem resposta real: a 1a resposta de cada chamada
+# fica em anuncio_amostra_v2024 (tipos tiktok_*) e, mascarada, em tiktok_amostra_v1963 - CONFERIR no 1o uso.
+# - Leituras (categorias, sugestao, atributos, regras, marcas, deposito) pelo tiktok_api, cache de 24 h.
+# - Escritas (foto, listing_check, criar) pelo _tiktok_chamar, que separa RECUSA (nada feito) de SEM RESPOSTA (pode
+#   ter feito). Publicar = so com a fonte "api" (V20.40), perfil Admin, ANUNCIOS_PUBLICAR_LOCK, em segundo plano.
+# - Preco digitado pelo Admin (o preco ideal do TikTok so sugere); estoque inicial = Apollo de Bauru lido AGORA menos
+#   o vendido e nao baixado em Bauru (so pode ser menor); peso e medidas sempre da ficha na hora.
+# - Publicado = linha canal='tiktok', conta='bauru', anuncio_id = id da variacao, user_product_id = product_id,
+#   controle 'noromak', estoque Manual; e tiktok_sku_v1964 (espelho V20.40 e tela Estoque TikTok).
+# ---------------------------------------------------------------------------
+TIKTOK_ANUNCIO_CONTA = TIKTOK_CASA
+TIKTOK_LEITURA_CACHE_S = 24 * 3600
+TIKTOK_ANUNCIO_TITULO_MAX = 255
+TIKTOK_ANUNCIO_DESC_MAX = 10000
+TIKTOK_ANUNCIO_FOTOS_MAX = 9
+TIKTOK_ANUNCIO_ITEM_TIMEOUT = 90
+TIKTOK_ANUNCIO_UPLOAD_TIMEOUT = 60
+TIKTOK_MARCAS_PAGINAS = 40
+TIKTOK_FOTO_HOSTS = ("tiktokcdn.com", "ibyteimg.com", "tiktokcdn-us.com", "ttwstatic.com")
+TIKTOK_RASCUNHO_EDITAVEL = ("rascunho", "validado", "erro")
+TIKTOK_RASCUNHO_CAMPOS = ("titulo", "categoria", "categoria_nome", "descricao", "preco", "quantidade")
+TIKTOK_INCERTO_TEXTO = ("O TikTok não respondeu ao criar o anúncio: ele pode ter sido criado. Confira no Seller Center "
+                        "(Produtos) e informe o número do produto (product_id), ou libere sem número se ele não existe. "
+                        "Nada é repetido sozinho.")
+_TIKTOK_LEITURA_CACHE: dict[tuple[str, str], tuple[float, Any]] = {}
+_TIKTOK_LEITURA_LOCK = threading.Lock()
+# Erro do lado do TikTok (interno, ocupado, tempo) numa ESCRITA pode ter feito: no criar vira `incerto`.
+_TIKTOK_ERRO_TALVEZ_FEZ = re.compile(r"internal|server|busy|time[ _-]?out|system|unknown|retry", re.I)
+
+
+class TikTokSemResposta(Exception):
+    """V20.41: rede, timeout, 5xx ou resposta ilegivel: o TikTok PODE ter feito."""
+
+
+class TikTokRecusou(Exception):
+    """V20.41: o TikTok respondeu com recusa (ou a chamada nem saiu): nada foi feito no TikTok."""
+
+    def __init__(self, mensagem: str, corpo: Any = None, status: int | None = None) -> None:
+        super().__init__(mensagem)
+        self.corpo = corpo
+        self.status = status
+
+
+class TikTokFonteNaoApi(ValueError):
+    """V20.41: a fonte do TikTok e a extensao do Seller Center: a plataforma nao cria anuncio pela API (409)."""
+
+
+def _tiktok_talvez_fez(exc: Exception) -> bool:
+    if isinstance(exc, TikTokSemResposta):
+        return True
+    if isinstance(exc, TikTokRecusou):
+        if exc.status == 408 or (exc.status or 0) >= 500:
+            return True
+        msg = str((exc.corpo or {}).get("message") or "") if isinstance(exc.corpo, dict) else ""
+        return bool(_TIKTOK_ERRO_TALVEZ_FEZ.search(msg))
+    return False
+
+
+def _tiktok_http_bruto(metodo: str, url: str, token: str, corpo: bytes | None, tipo: str,
+                       timeout: float) -> tuple[int, str]:
+    """V20.41: so a rede (isolada para o teste). (status, texto); falha de rede = TikTokSemResposta."""
+    req = urllib.request.Request(url, method=metodo, data=corpo, headers={
+        "x-tts-access-token": token, "Content-Type": tipo, "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return int(resp.status or 200), resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        return int(exc.code), exc.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise TikTokSemResposta(f"sem resposta do TikTok ({exc})")
+
+
+def _tiktok_chamar(metodo: str, path: str, params: dict[str, Any] | None = None, body: Any = None, *,
+                   multipart: tuple[dict[str, str], tuple[str, str, bytes, str]] | None = None,
+                   timeout: float = 35, amostra: str = "") -> dict[str, Any]:
+    """V20.41: chamada da loja que separa RECUSA de SEM RESPOSTA (o tiktok_api, que as leituras usam, devolve so
+    RuntimeError e nao muda). Multipart: a assinatura do TikTok NAO inclui o corpo (so caminho + parametros)."""
+    try:
+        token = tiktok_access_token()
+        row = tiktok_integration_row()
+        cipher = str(row["shop_cipher"] or "").strip() if row else ""
+        if not cipher:
+            cipher = tiktok_buscar_loja()
+    except Exception as exc:
+        raise TikTokRecusou(f"TikTok sem conexão: {exc}")
+    query = {k: str(v) for k, v in (params or {}).items() if v is not None and v != ""}
+    query.update({"app_key": TIKTOK_APP_KEY, "timestamp": str(int(time.time())), "shop_cipher": cipher})
+    if multipart is not None:
+        corpo_b, tipo = _shopee_multipart(*multipart)
+        query["sign"] = tiktok_assinar(path, query, "")
+    else:
+        texto_corpo = json.dumps(body, ensure_ascii=False, separators=(",", ":")) if body is not None else ""
+        corpo_b, tipo = (texto_corpo.encode("utf-8") if texto_corpo else None), "application/json"
+        query["sign"] = tiktok_assinar(path, query, texto_corpo)
+    status, texto = _tiktok_http_bruto(metodo, TIKTOK_API_BASE + path + "?" + urlencode(query), token, corpo_b, tipo,
+                                       timeout)
+    dados = _anuncio_json_ou_none(texto)
+    if status >= 500:
+        raise TikTokSemResposta(f"TikTok HTTP {status}: {texto[:300]}")
+    if not isinstance(dados, dict):
+        if status >= 400:
+            raise TikTokRecusou(f"TikTok HTTP {status}: {texto[:300]}", texto[:2000], status=status)
+        raise TikTokSemResposta("resposta ilegível do TikTok")
+    rota = f"{metodo} " + re.sub(r"/products/\d+", "/products/{id}", path)
+    ok = status < 400 and int(dados.get("code") or 0) == 0
+    _tiktok_guardar_amostra(rota if ok else rota + " [erro]", _tiktok_sc_mascarar(dados))
+    if amostra:
+        _anuncio_amostra(amostra if ok else amostra + " [erro]", dados)
+    if not ok:
+        raise TikTokRecusou(f"TikTok {path}: {dados.get('code')} {dados.get('message') or ''}".strip(), dados,
+                            status=status)
+    return dados
+
+
+def _tiktok_ler(metodo: str, path: str, params: dict[str, Any] | None = None, body: Any = None,
+                amostra: str = "") -> dict[str, Any]:
+    """V20.41: leitura pelo tiktok_api (ja assina e guarda a amostra mascarada). Falha = RuntimeError."""
+    try:
+        resp = tiktok_api(metodo, path, params=params, body=body)
+    except Exception as exc:
+        if amostra:
+            _anuncio_amostra(f"{amostra} [erro]", {"erro": str(exc)[:1000]})
+        raise RuntimeError(str(exc))
+    if amostra:
+        _anuncio_amostra(amostra, resp)
+    d = resp.get("data") if isinstance(resp, dict) else None
+    return d if isinstance(d, dict) else {}
+
+
+def _tiktok_cache(chave: tuple[str, str], ler: Any) -> Any:
+    agora = time.time()
+    with _TIKTOK_LEITURA_LOCK:
+        hit = _TIKTOK_LEITURA_CACHE.get(chave)
+        if hit and agora - hit[0] < TIKTOK_LEITURA_CACHE_S:
+            return hit[1]
+    valor = ler()
+    with _TIKTOK_LEITURA_LOCK:
+        if len(_TIKTOK_LEITURA_CACHE) > 500:
+            _TIKTOK_LEITURA_CACHE.clear()
+        _TIKTOK_LEITURA_CACHE[chave] = (agora, valor)
+    return valor
+
+
+def tiktok_categorias() -> dict[str, dict[str, Any]]:
+    """V20.41: arvore de categorias da loja: id -> {id, nome, pai, folha}."""
+    def ler() -> dict[str, dict[str, Any]]:
+        d = _tiktok_ler("GET", "/product/202309/categories", None, None, "tiktok_categorias")
+        saida: dict[str, dict[str, Any]] = {}
+        for c in d.get("categories") or []:
+            if not isinstance(c, dict) or c.get("id") in (None, ""):
+                continue
+            cid = str(c["id"])
+            saida[cid] = {"id": cid, "nome": str(c.get("local_name") or c.get("name") or cid),
+                          "pai": str(c.get("parent_id") or ""), "folha": bool(c.get("is_leaf"))}
+        if not saida:
+            raise RuntimeError("o TikTok devolveu a lista de categorias vazia")
+        return saida
+    return _tiktok_cache(("categorias", ""), ler)
+
+
+def _tiktok_caminho(cid: str, cats: dict[str, dict[str, Any]]) -> str:
+    nomes: list[str] = []
+    atual, voltas = str(cid), 0
+    while atual and atual in cats and voltas < 10:
+        nomes.append(cats[atual]["nome"])
+        atual, voltas = cats[atual]["pai"], voltas + 1
+    return " > ".join(reversed(nomes))
+
+
+def tiktok_categoria_sugerir(titulo: str) -> list[dict[str, Any]]:
+    """V20.41: categoria sugerida pelo TikTok para o titulo (categories/recommend), com nome e caminho."""
+    titulo = " ".join(str(titulo or "").split())
+    if not titulo:
+        raise ValueError("Informe o título.")
+    d = _tiktok_ler("POST", "/product/202309/categories/recommend", None, {"product_title": titulo[:255]},
+                    "tiktok_categoria_sugerir")
+    try:
+        cats = tiktok_categorias()
+    except RuntimeError:
+        cats = {}
+    ids: list[str] = []
+    if d.get("leaf_category_id") not in (None, ""):
+        ids.append(str(d["leaf_category_id"]))
+    for c in d.get("categories") or []:
+        if isinstance(c, dict) and c.get("id") not in (None, ""):
+            cid = str(c["id"])
+            if cid not in ids and (c.get("is_leaf") or cid in cats and cats[cid]["folha"]):
+                ids.append(cid)
+    saida = []
+    for cid in ids:
+        c = cats.get(cid)
+        nome = c["nome"] if c else next((str(x.get("name") or cid) for x in d.get("categories") or []
+                                         if isinstance(x, dict) and str(x.get("id")) == cid), cid)
+        saida.append({"categoria": cid, "nome": nome, "caminho": _tiktok_caminho(cid, cats) if c else nome,
+                      "folha": bool(c["folha"]) if c else True})
+    return saida
+
+
+def tiktok_categoria_atributos(categoria: Any) -> dict[str, Any]:
+    """V20.41: atributos do PRODUTO da categoria (os de venda/variacao ficam fora: um SKU so). `obrigatorio` =
+    is_requried (grafia da doc) ou is_required; `livre` = aceita texto (is_customizable)."""
+    cid = str(categoria or "").strip()
+    if not cid.isdigit():
+        raise ValueError("Categoria do TikTok inválida.")
+
+    def ler() -> dict[str, Any]:
+        d = _tiktok_ler("GET", f"/product/202309/categories/{cid}/attributes", None, None, "tiktok_atributos")
+        lista = []
+        for a in d.get("attributes") or []:
+            if not isinstance(a, dict) or a.get("id") in (None, ""):
+                continue
+            if str(a.get("type") or "PRODUCT_PROPERTY").upper() != "PRODUCT_PROPERTY":
+                continue
+            valores = [{"id": str(v.get("id")), "nome": str(v.get("name") or v.get("id"))}
+                       for v in a.get("values") or [] if isinstance(v, dict) and v.get("id") not in (None, "")]
+            lista.append({"id": str(a["id"]), "nome": str(a.get("name") or a["id"]),
+                          "obrigatorio": bool(a.get("is_requried") or a.get("is_required")),
+                          "livre": bool(a.get("is_customizable")) or not valores, "valores": valores,
+                          "multiplo": bool(a.get("is_multiple_selection"))})
+        return {"categoria": cid, "atributos": lista}
+    return _tiktok_cache(("atributos", cid), ler)
+
+
+def tiktok_categoria_regras(categoria: Any) -> dict[str, Any]:
+    """V20.41: o que a categoria exige (categories/{id}/rules): medidas do pacote, tabela de medidas, certificados."""
+    cid = str(categoria or "").strip()
+    if not cid.isdigit():
+        raise ValueError("Categoria do TikTok inválida.")
+
+    def ler() -> dict[str, Any]:
+        d = _tiktok_ler("GET", f"/product/202309/categories/{cid}/rules", None, None, "tiktok_regras")
+        pd_ = d.get("package_dimension") if isinstance(d.get("package_dimension"), dict) else {}
+        sc = d.get("size_chart") if isinstance(d.get("size_chart"), dict) else {}
+        certs = [str(c.get("name") or c.get("id")) for c in d.get("product_certifications") or d.get("certifications") or []
+                 if isinstance(c, dict) and (c.get("is_required") or c.get("is_requried"))]
+        return {"categoria": cid, "medidas_obrigatorias": bool(pd_.get("is_required")),
+                "tabela_medidas_obrigatoria": bool(sc.get("is_required")), "certificados_obrigatorios": certs}
+    return _tiktok_cache(("regras", cid), ler)
+
+
+def tiktok_marcas(categoria: Any) -> dict[str, Any]:
+    """V20.41: marcas da categoria (brands, paginado por page_token)."""
+    cid = str(categoria or "").strip()
+    if not cid.isdigit():
+        raise ValueError("Categoria do TikTok inválida.")
+
+    def ler() -> dict[str, Any]:
+        marcas: list[dict[str, str]] = []
+        token = ""
+        for pagina in range(TIKTOK_MARCAS_PAGINAS):
+            d = _tiktok_ler("GET", "/product/202309/brands", {"category_id": cid, "page_size": 100, "page_token": token},
+                            None, "tiktok_marcas" if pagina == 0 else "")
+            for b in d.get("brands") or []:
+                if isinstance(b, dict) and b.get("id") not in (None, ""):
+                    marcas.append({"id": str(b["id"]), "nome": str(b.get("name") or "")})
+            token = str(d.get("next_page_token") or "")
+            if not token:
+                break
+        return {"categoria": cid, "marcas": marcas}
+    return _tiktok_cache(("marcas", cid), ler)
+
+
+def tiktok_marca_da_ficha(marca: Any, lista: dict[str, Any]) -> dict[str, str] | None:
+    """V20.41 (pura): a marca da ficha na lista do TikTok (sem acento/caixa/espaco)."""
+    alvo = re.sub(r"\s+", "", _anuncio_sem_acento(marca))
+    if not alvo:
+        return None
+    for b in lista.get("marcas") or []:
+        if re.sub(r"\s+", "", _anuncio_sem_acento(b.get("nome"))) == alvo:
+            return {"id": str(b["id"]), "nome": str(b.get("nome"))}
+    return None
+
+
+def tiktok_deposito_venda() -> dict[str, Any]:
+    """V20.41: o UNICO deposito de venda ativo da loja. Nenhum ou mais de um = erro listando (nunca escolhe)."""
+    def ler() -> list[dict[str, Any]]:
+        d = _tiktok_ler("GET", "/logistics/202309/warehouses", None, None, "tiktok_depositos")
+        return [w for w in d.get("warehouses") or [] if isinstance(w, dict)]
+    lista = _tiktok_cache(("depositos", ""), ler)
+    ativos = [w for w in lista if str(w.get("type") or "").upper() == "SALES_WAREHOUSE"
+              and str(w.get("effect_status") or "ENABLED").upper() in ("ENABLED", "")]
+    if len(ativos) != 1 or not str(ativos[0].get("id") or ""):
+        nomes = ", ".join(f"{w.get('name') or '?'} ({w.get('id') or 'sem id'})" for w in ativos) or "nenhum"
+        raise RuntimeError(f"a loja tem {len(ativos)} depósitos de venda ativos no TikTok ({nomes}): o Noromak não "
+                           "escolhe o depósito — ajuste no Seller Center")
+    return {"id": str(ativos[0]["id"]), "nome": str(ativos[0].get("name") or "")}
+
+
+def _tiktok_descricao_html(texto: str) -> str:
+    """V20.41 (pura): texto da ficha -> HTML simples (paragrafos e quebras), tudo escapado."""
+    blocos = [b.strip() for b in re.split(r"\n\s*\n", str(texto or "").replace("\r\n", "\n")) if b.strip()]
+    return "".join("<p>" + "<br>".join(html_module.escape(l.strip()) for l in b.split("\n")) + "</p>" for b in blocos)
+
+
+def _tiktok_html_texto(htm: Any) -> str:
+    """V20.41 (pura): descricao HTML do TikTok -> texto (quebras nos paragrafos/itens; sem tags)."""
+    t = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", "", str(htm or ""))
+    t = re.sub(r"(?i)<br\s*/?>", "\n", t)
+    t = re.sub(r"(?i)</(p|div|li|h[1-6])\s*>", "\n", t)
+    t = re.sub(r"(?i)<li[^>]*>", "- ", t)
+    t = html_module.unescape(re.sub(r"<[^>]+>", "", t))
+    linhas = [re.sub(r"[ \t]+", " ", l).strip() for l in t.split("\n")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(linhas)).strip()
+
+
+# ---- rascunho ----
+def _tiktok_rascunho_de_linha(row: Any) -> dict[str, Any]:
+    d = dict(row)
+    for campo, padrao in (("atributos_json", {}), ("fotos_json", []), ("erros_json", []), ("marca_json", {})):
+        try:
+            v = json.loads(d.pop(campo) or "")
+        except (TypeError, ValueError):
+            v = padrao
+        d[campo[:-5]] = v if isinstance(v, type(padrao)) else padrao
+    d["canal"] = "tiktok"
+    return d
+
+
+def tiktok_rascunho_ler(rid: Any) -> dict[str, Any] | None:
+    try:
+        n = int(rid)
+    except (TypeError, ValueError):
+        return None
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM anuncio_rascunho_tiktok_v2041 WHERE id=?", (n,)).fetchone()
+    return _tiktok_rascunho_de_linha(row) if row else None
+
+
+def tiktok_rascunhos_da_ficha(codigo: str) -> list[dict[str, Any]]:
+    with DB_LOCK:
+        rows = DB.execute("SELECT * FROM anuncio_rascunho_tiktok_v2041 WHERE ficha_codigo=? ORDER BY id DESC",
+                          (normalize(codigo),)).fetchall()
+    return [_tiktok_rascunho_de_linha(r) for r in rows]
+
+
+def _tiktok_rascunho_limpar(dados: dict[str, Any]) -> dict[str, Any]:
+    """V20.41: so os campos que vieram, conferidos (tipo e tamanho). Mesma regra da Shopee."""
+    base = {k: v for k, v in dados.items() if k not in ("atributos", "fotos", "marca")}
+    cat = str(base.get("categoria") or "").strip() if "categoria" in base else ""
+    if cat and not cat.isdigit():
+        raise ValueError("Categoria do TikTok inválida.")
+    out = _shopee_rascunho_limpar(base)  # titulo, categoria, descricao, preco, quantidade: mesmas conferencias
+    if "titulo" in dados:
+        out["titulo"] = " ".join(str(dados.get("titulo") or "").split())[:TIKTOK_ANUNCIO_TITULO_MAX]
+    if "atributos" in dados:
+        brutos = dados.get("atributos") if isinstance(dados.get("atributos"), dict) else {}
+        attrs: dict[str, dict[str, str]] = {}
+        for k, v in brutos.items():
+            if not str(k).isdigit() or not isinstance(v, dict):
+                continue
+            item = {"valor_id": str(v.get("valor_id") or "").strip(),
+                    "valor": " ".join(str(v.get("valor") or "").split())[:255]}
+            if item["valor_id"] and not item["valor_id"].isdigit():
+                continue
+            if item["valor_id"] or item["valor"]:
+                attrs[str(k)] = item
+        out["atributos"] = attrs
+    if "marca" in dados:
+        m = dados.get("marca") if isinstance(dados.get("marca"), dict) else {}
+        mid = str(m.get("id") or "").strip()
+        out["marca"] = {"id": mid, "nome": str(m.get("nome") or "")[:120]} if mid.isdigit() else {}
+    if "fotos" in dados:
+        brutas = dados.get("fotos") or []
+        if not isinstance(brutas, list) or any(isinstance(x, bool) for x in brutas):
+            raise ValueError("Fotos inválidas.")
+        try:
+            fotos = list(dict.fromkeys(int(x) for x in brutas))
+        except (TypeError, ValueError):
+            raise ValueError("Fotos inválidas.")
+        if len(fotos) > TIKTOK_ANUNCIO_FOTOS_MAX:
+            raise ValueError(f"O TikTok aceita até {TIKTOK_ANUNCIO_FOTOS_MAX} fotos.")
+        out["fotos"] = fotos
+    return out
+
+
+def tiktok_rascunho_salvar(dados: dict[str, Any], ator: str, versao: Any) -> dict[str, Any]:
+    """V20.41: cria (sem `id`, com `codigo`) ou atualiza (com `id`; `versao` conferida, senao FichaConflito)."""
+    dados = dados if isinstance(dados, dict) else {}
+    limpos = _tiktok_rascunho_limpar(dados)
+    agora = now_iso()
+    with DB_LOCK:
+        rid = dados.get("id")
+        if rid in (None, ""):
+            cod = normalize(dados.get("codigo"))
+            if not cod or _ficha_ler_sem_lock(cod) is None:
+                raise ValueError("Produto não encontrado.")
+            cur = DB.execute(
+                "INSERT INTO anuncio_rascunho_tiktok_v2041(ficha_codigo,titulo,categoria,categoria_nome,atributos_json,"
+                "marca_json,fotos_json,descricao,preco,quantidade,situacao,versao,criado_em,criado_por,atualizado_em,"
+                "atualizado_por) VALUES(?,?,?,?,?,?,?,?,?,?,'rascunho',1,?,?,?,?)",
+                (cod, limpos.get("titulo", ""), limpos.get("categoria", ""), limpos.get("categoria_nome", ""),
+                 json.dumps(limpos.get("atributos", {}), ensure_ascii=False),
+                 json.dumps(limpos.get("marca", {}), ensure_ascii=False), json.dumps(limpos.get("fotos", [])),
+                 limpos.get("descricao", ""), limpos.get("preco"), limpos.get("quantidade"), agora, str(ator or ""),
+                 agora, str(ator or "")))
+            novo_id = int(cur.lastrowid)
+        else:
+            row = DB.execute("SELECT * FROM anuncio_rascunho_tiktok_v2041 WHERE id=?", (rid,)).fetchone()
+            if row is None:
+                raise ValueError("Rascunho não encontrado.")
+            atual = _tiktok_rascunho_de_linha(row)
+            try:
+                ok_versao = versao is not None and int(versao) == int(atual["versao"])
+            except (TypeError, ValueError):
+                ok_versao = False
+            if not ok_versao:
+                raise FichaConflito(atual)
+            if atual["situacao"] not in TIKTOK_RASCUNHO_EDITAVEL:
+                raise ValueError("Este rascunho já foi publicado ou está em publicação; não pode mais ser editado.")
+            novo = {k: limpos.get(k, atual.get(k)) for k in TIKTOK_RASCUNHO_CAMPOS}
+            trocou_cat = "categoria" in limpos and limpos["categoria"] != str(atual.get("categoria") or "")
+            attrs = limpos.get("atributos", {} if trocou_cat else atual.get("atributos") or {})
+            marca = limpos.get("marca", {} if trocou_cat else atual.get("marca") or {})  # marca e da lista da categoria
+            fotos = limpos.get("fotos", atual.get("fotos") or [])
+            mudou = (any(novo[k] != atual.get(k) for k in TIKTOK_RASCUNHO_CAMPOS) or attrs != (atual.get("atributos") or {})
+                     or marca != (atual.get("marca") or {}) or fotos != (atual.get("fotos") or []))
+            if not mudou:
+                return atual
+            situacao = "rascunho" if atual["situacao"] == "validado" else atual["situacao"]
+            DB.execute(
+                "UPDATE anuncio_rascunho_tiktok_v2041 SET titulo=?,categoria=?,categoria_nome=?,atributos_json=?,marca_json=?,"
+                "fotos_json=?,descricao=?,preco=?,quantidade=?,situacao=?,versao=versao+1,atualizado_em=?,atualizado_por=? "
+                "WHERE id=?",
+                (novo["titulo"], novo["categoria"], novo["categoria_nome"], json.dumps(attrs, ensure_ascii=False),
+                 json.dumps(marca, ensure_ascii=False), json.dumps(fotos), novo["descricao"], novo["preco"],
+                 novo["quantidade"], situacao, agora, str(ator or ""), atual["id"]))
+            novo_id = int(atual["id"])
+        linha_r = DB.execute("SELECT ficha_codigo, fotos_json FROM anuncio_rascunho_tiktok_v2041 WHERE id=?",
+                             (novo_id,)).fetchone()
+        fotos_ok = json.loads(linha_r["fotos_json"] or "[]")
+        if fotos_ok:
+            achadas = {int(r["id"]) for r in DB.execute(
+                f"SELECT id FROM anuncio_foto_v2024 WHERE ficha_codigo=? AND id IN ({','.join('?' * len(fotos_ok))})",
+                (linha_r["ficha_codigo"], *fotos_ok))}
+            if achadas != set(fotos_ok):
+                DB.rollback()
+                raise ValueError("Há foto que não pertence a este produto.")
+        DB.commit()
+        row = DB.execute("SELECT * FROM anuncio_rascunho_tiktok_v2041 WHERE id=?", (novo_id,)).fetchone()
+    return _tiktok_rascunho_de_linha(row)
+
+
+def _tiktok_trocar(rid: int, de: tuple[str, ...], para: str, erros: list[str], ator: str, *,
+                   product_id: str | None = None, sku_id: str | None = None,
+                   versao: int | None = None) -> dict[str, Any] | None:
+    with DB_LOCK:
+        extra, args_v = ("", ()) if versao is None else (" AND versao=?", (int(versao),))
+        cur = DB.execute(
+            f"UPDATE anuncio_rascunho_tiktok_v2041 SET situacao=?, erros_json=?, product_id=COALESCE(?,product_id), "
+            f"sku_id=COALESCE(?,sku_id), versao=versao+1, atualizado_em=?, atualizado_por=? WHERE id=? "
+            f"AND situacao IN ({','.join('?' * len(de))})" + extra,
+            (para, json.dumps(list(erros), ensure_ascii=False), product_id, sku_id, now_iso(), str(ator or ""), rid,
+             *de, *args_v))
+        DB.commit()
+        if cur.rowcount != 1:
+            return None
+        row = DB.execute("SELECT * FROM anuncio_rascunho_tiktok_v2041 WHERE id=?", (rid,)).fetchone()
+    return _tiktok_rascunho_de_linha(row)
+
+
+def _tiktok_conferir_local(r: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    """V20.41: confere o rascunho contra o que o TikTok publica (categoria folha, atributos, regras, marca, deposito)
+    e a ficha (peso, medidas). Devolve (erros, contexto do corpo). Leitura que falha = erro (nunca adivinha)."""
+    erros: list[str] = []
+    ctx: dict[str, Any] = {"avisos": []}
+    ficha = ficha_ler(r["ficha_codigo"]) or {}
+    campos = ficha.get("campos") or {}
+    titulo = str(r.get("titulo") or "").strip()
+    if not titulo:
+        erros.append("Informe o título.")
+    elif len(titulo) > TIKTOK_ANUNCIO_TITULO_MAX:
+        erros.append(f"Título com {len(titulo)} caracteres: o TikTok aceita até {TIKTOK_ANUNCIO_TITULO_MAX}.")
+    desc = str(r.get("descricao") or "").strip()
+    if not desc:
+        erros.append("Informe a descrição.")
+    elif len(desc) > TIKTOK_ANUNCIO_DESC_MAX:
+        erros.append(f"Descrição longa: até {TIKTOK_ANUNCIO_DESC_MAX} caracteres.")
+    if "[CONFIRMAR]" in desc.upper():
+        erros.append("A descrição ainda tem [CONFIRMAR]: troque pelo texto certo.")
+    fotos = list(r.get("fotos") or [])
+    if not fotos:
+        erros.append("Escolha pelo menos uma foto.")
+    elif len(fotos) > TIKTOK_ANUNCIO_FOTOS_MAX:
+        erros.append(f"{len(fotos)} fotos: o TikTok aceita até {TIKTOK_ANUNCIO_FOTOS_MAX}.")
+    else:
+        with DB_LOCK:
+            tipos = {int(x["id"]): str(x["tipo"]) for x in DB.execute(
+                f"SELECT id, tipo FROM anuncio_foto_v2024 WHERE id IN ({','.join('?' * len(fotos))})", fotos)}
+        for pos, fid in enumerate(fotos, 1):
+            if tipos.get(int(fid)) not in ("jpg", "png", "webp"):
+                erros.append(f"Foto {pos}: o TikTok aceita JPG, PNG ou WEBP (troque a foto).")
+    preco = r.get("preco")
+    if not preco or float(preco) <= 0:
+        erros.append("Informe o preço.")
+    if not r.get("quantidade") or int(r["quantidade"]) < 1:
+        erros.append("Informe a quantidade.")
+    peso, medidas, falta = _shopee_pacote_da_ficha(campos)  # peso (kg) e medidas (cm) lidos da FICHA agora
+    ctx["peso"], ctx["medidas"] = peso, medidas
+    if falta:
+        erros.append(f"Falta na ficha (Peso e medidas): {', '.join(falta)}. Preencha a ficha do produto.")
+    cat = str(r.get("categoria") or "")
+    if not cat:
+        erros.append("Escolha a categoria.")
+        return erros, ctx
+    try:
+        cats = tiktok_categorias()
+        if cat in cats and not cats[cat]["folha"]:
+            erros.append("A categoria escolhida tem subcategorias: escolha a mais específica.")
+        defs = tiktok_categoria_atributos(cat)["atributos"]
+        regras = tiktok_categoria_regras(cat)
+        marcas = tiktok_marcas(cat)
+    except (RuntimeError, ValueError) as exc:
+        erros.append(f"Não consegui ler a categoria no TikTok ({exc}).")
+        return erros, ctx
+    ctx["defs"] = defs
+    attrs = r.get("atributos") or {}
+    for d in defs:
+        v = attrs.get(d["id"]) or {}
+        if d["obrigatorio"] and not (v.get("valor_id") or v.get("valor")):
+            erros.append(f"Atributo obrigatório sem valor: {d['nome']}.")
+        if v.get("valor_id") and d["valores"] and v["valor_id"] not in {x["id"] for x in d["valores"]}:
+            erros.append(f"Valor de {d['nome']} fora da lista do TikTok.")
+        if not d["livre"] and v.get("valor") and not v.get("valor_id"):
+            erros.append(f"{d['nome']}: escolha um valor da lista do TikTok.")
+    if regras.get("tabela_medidas_obrigatoria"):
+        erros.append("Esta categoria exige tabela de medidas, que o Noromak não envia: escolha outra categoria ou "
+                     "crie pelo Seller Center.")
+    if regras.get("certificados_obrigatorios"):
+        erros.append("Esta categoria exige certificado (" + ", ".join(regras["certificados_obrigatorios"])
+                     + "), que o Noromak não envia: escolha outra categoria ou crie pelo Seller Center.")
+    marca = r.get("marca") or {}
+    if marca.get("id"):
+        if marca["id"] not in {str(b.get("id")) for b in marcas.get("marcas") or []}:
+            erros.append("A marca escolhida não é da lista desta categoria: escolha de novo.")
+    else:
+        achada = tiktok_marca_da_ficha(campos.get("marca"), marcas)
+        if achada:
+            marca = achada
+        elif str(campos.get("marca") or "").strip():  # nunca "sem marca" calado
+            ctx["avisos"].append(f"A marca da ficha ({campos.get('marca')}) não está na lista do TikTok para esta "
+                                 "categoria: o anúncio vai sem marca. Escolha a marca se ela existir na lista.")
+    ctx["marca"] = marca
+    try:
+        ctx["deposito"] = tiktok_deposito_venda()
+    except RuntimeError as exc:
+        erros.append(f"Depósito do TikTok: {exc}.")
+    return erros, ctx
+
+
+def tiktok_produto_corpo(r: dict[str, Any], ficha: dict[str, Any], uris: list[str] | None,
+                         ctx: dict[str, Any]) -> dict[str, Any]:
+    """V20.41 (pura): corpo do POST /product/202309/products (e do listing_check). `uris` None = sem fotos."""
+    medidas = ctx.get("medidas") or {}
+    attrs = []
+    for aid, v in (r.get("atributos") or {}).items():
+        if v.get("valor_id"):
+            valores = [{"id": str(v["valor_id"])}]
+        elif v.get("valor"):
+            valores = [{"name": str(v["valor"])}]
+        else:
+            continue
+        attrs.append({"id": str(aid), "values": valores})
+    corpo: dict[str, Any] = {
+        "title": str(r.get("titulo") or "").strip(),
+        "description": _tiktok_descricao_html(str(r.get("descricao") or "")),
+        "category_id": str(r.get("categoria") or ""),
+        "skus": [{"seller_sku": str(ficha.get("codigo") or r.get("ficha_codigo") or "")[:50],
+                  "price": {"amount": f"{float(r['preco']):.2f}", "currency": "BRL"},
+                  "inventory": [{"warehouse_id": str((ctx.get("deposito") or {}).get("id") or ""),
+                                 "quantity": int(r.get("quantidade") or 0)}]}],
+        "package_weight": {"value": f"{float(ctx.get('peso') or 0):g}", "unit": "KILOGRAM"},
+        "package_dimensions": {"length": str(max(1, math.ceil(float(medidas.get("length") or 0)))),
+                               "width": str(max(1, math.ceil(float(medidas.get("width") or 0)))),
+                               "height": str(max(1, math.ceil(float(medidas.get("height") or 0)))),
+                               "unit": "CENTIMETER"},
+    }
+    if uris is not None:
+        corpo["main_images"] = [{"uri": u} for u in uris]
+    marca = ctx.get("marca") or {}
+    if marca.get("id"):
+        corpo["brand_id"] = str(marca["id"])
+    if attrs:
+        corpo["product_attributes"] = attrs
+    return corpo
+
+
+def _tiktok_motivos_check(dados: dict[str, Any]) -> list[str]:
+    """V20.41: motivos do listing_check (leitura tolerante: a doc tem fail_reasons[].reasons ou .reason)."""
+    d = dados.get("data") if isinstance(dados.get("data"), dict) else {}
+    motivos: list[str] = []
+    for f in d.get("fail_reasons") or []:
+        if isinstance(f, dict):
+            for m in f.get("reasons") or ([f.get("reason") or f.get("message")] if (f.get("reason") or f.get("message")) else []):
+                if str(m or "").strip():
+                    motivos.append(str(m).strip())
+        elif str(f or "").strip():
+            motivos.append(str(f).strip())
+    return motivos
+
+
+def tiktok_rascunho_conferir(rascunho_id: Any, ator: str) -> dict[str, Any]:
+    """V20.41: conferencia local e, se ela passou, o "Conferir no TikTok" (listing_check, sem fotos: elas so sobem no
+    Publicar; motivo sobre foto e ignorado). listing_check que falha/nao existe = fica a conferencia local (com aviso)."""
+    r = tiktok_rascunho_ler(rascunho_id)
+    if r is None:
+        raise ValueError("Rascunho não encontrado.")
+    if r["situacao"] not in TIKTOK_RASCUNHO_EDITAVEL:
+        raise ValueError("Este rascunho já foi publicado, está em publicação ou aguarda conferência no Seller Center.")
+    erros, ctx = _tiktok_conferir_local(r)
+    conferido_tiktok = False
+    if not erros:
+        corpo = tiktok_produto_corpo(r, ficha_ler(r["ficha_codigo"]) or {"codigo": r["ficha_codigo"]}, None, ctx)
+        try:
+            resp = _tiktok_chamar("POST", "/product/202309/products/listing_check", body=corpo,
+                                  amostra="tiktok_listing_check")
+            d = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+            motivos = [m for m in _tiktok_motivos_check(resp) if not re.search(r"image|imagem|foto|picture", m, re.I)]
+            if str(d.get("check_result") or "").upper() in ("FAILED", "FAIL") and motivos:
+                erros.extend(f"O TikTok recusaria: {m}" for m in motivos)
+            conferido_tiktok = True
+        except (TikTokRecusou, TikTokSemResposta) as exc:
+            ctx["avisos"].append(f"O TikTok não conferiu ({str(exc)[:200]}): ficou só a conferência do Noromak. O "
+                                 "Publicar é o teste de verdade.")
+    para = "rascunho" if erros else "validado"
+    novo = _tiktok_trocar(int(r["id"]), TIKTOK_RASCUNHO_EDITAVEL, para, erros, ator, versao=int(r["versao"]))
+    if novo is None:
+        raise FichaConflito(tiktok_rascunho_ler(r["id"]) or {})
+    return {"ok": not erros, "situacao": para, "erros": erros, "avisos": ctx.get("avisos") or [],
+            "conferido_tiktok": conferido_tiktok, "rascunho": novo}
+
+
+def tiktok_conta_preco(codigo: str, preco: Any, margens: Any = None) -> dict[str, Any]:
+    """V20.41: conta do preco no TikTok para a tela (so le): a regra da V19.84 (custo de BAURU, afiliado, frete,
+    tarifa por faixa, imposto) e o preco ideal das margens pedidas. Kit do Cadastro = as pecas (KITn-X/...)."""
+    cod = normalize(codigo)
+    if not cod:
+        raise ValueError("Informe o produto.")
+    comp = kit_composicao(cod)
+    sku = "/".join((f"KIT{int(c['quantidade'])}-{c['sku']}" if int(c["quantidade"]) > 1 else str(c["sku"]))
+                   for c in comp["componentes"]) if comp else cod
+    try:
+        ms = [float(x) for x in str(margens or "15,20").split(",") if str(x).strip()][:4]
+    except ValueError:
+        raise ValueError("Margens inválidas.")
+    try:
+        p = round(float(str(preco).replace(",", ".")), 2) if preco not in (None, "") else None
+    except (TypeError, ValueError):
+        p = None
+    if p is not None and (not math.isfinite(p) or p <= 0):
+        p = None
+    return tiktok_preco_sku(sku, ms, preco_atual=p)
+
+
+def _tiktok_ja_anunciado(cod: str) -> str:
+    """V20.41: o produto ja tem anuncio no TikTok (na lista, nao removido) ou um rascunho publicando/incerto? SOB o
+    DB_LOCK. Devolve o motivo ('' = pode)."""
+    ja = DB.execute("SELECT anuncio_id FROM anuncio_canal_v2023 WHERE canal='tiktok' AND ficha_codigo=? "
+                    "AND COALESCE(removido_em,'')='' LIMIT 1", (cod,)).fetchone()
+    if ja:
+        return (f"Este produto já tem anúncio no TikTok (variação {ja['anuncio_id']}). Para outro anúncio, remova o "
+                "atual da lista antes.")
+    outro = DB.execute("SELECT id FROM anuncio_rascunho_tiktok_v2041 WHERE ficha_codigo=? AND situacao IN "
+                       "('publicando','incerto') LIMIT 1", (cod,)).fetchone()
+    if outro:
+        return f"O rascunho nº {outro['id']} deste produto está publicando ou aguarda conferência no Seller Center."
+    return ""
+
+
+def _tiktok_canal_noromak(product_id: str, sku_id: str, r: dict[str, Any], ator: str, warehouse_id: str = "") -> None:
+    """V20.41: anuncio criado pelo Noromak entra na lista (controle 'noromak', estoque Manual) e em tiktok_sku_v1964
+    (espelho V20.40 e tela Estoque TikTok). SOB o DB_LOCK."""
+    agora = now_iso()
+    DB.execute("""INSERT INTO tiktok_sku_v1964(sku_id,product_id,titulo,status,seller_sku,warehouse_id,armazens,qtd_tiktok,visto_em)
+                  VALUES(?,?,?,'PENDING',?,?,?,?,?)
+                  ON CONFLICT(sku_id) DO UPDATE SET product_id=excluded.product_id, seller_sku=excluded.seller_sku""",
+               (sku_id, product_id, str(r.get("titulo") or ""), r["ficha_codigo"], warehouse_id, 1 if warehouse_id else 0,
+                r.get("quantidade"), agora))
+    DB.execute(
+        "INSERT INTO anuncio_canal_v2023(canal,conta,anuncio_id,ficha_codigo,sku_anuncio,controle,titulo,preco,estoque,"
+        "status,categoria,user_product_id,lido_em,controle_em,controle_por) "
+        "VALUES('tiktok',?,?,?,?,'noromak',?,?,?,'under_review',?,?,?,?,?) "
+        "ON CONFLICT(canal,conta,anuncio_id) DO UPDATE SET ficha_codigo=excluded.ficha_codigo,controle='noromak',"
+        "user_product_id=excluded.user_product_id,controle_em=excluded.controle_em,controle_por=excluded.controle_por",
+        (TIKTOK_ANUNCIO_CONTA, sku_id, r["ficha_codigo"], r["ficha_codigo"], str(r.get("titulo") or ""), r.get("preco"),
+         r.get("quantidade"), str(r.get("categoria") or ""), product_id, agora, agora, str(ator or "")))
+
+
+def tiktok_publicar_reservar(rascunho_id: Any, ator: str) -> dict[str, Any]:
+    """V20.41: so com a fonte "api" (senao TikTokFonteNaoApi, 409). Confere e troca `validado -> publicando` sob o
+    DB_LOCK (um anuncio por rascunho e por produto). Erro aqui = nada mudou."""
+    if tiktok_fonte() != "api":
+        raise TikTokFonteNaoApi("A fonte do TikTok é a extensão do Seller Center: criar anúncio pela plataforma só com a "
+                                "fonte “API” (Integrações → TikTok Shop). Nada foi enviado.")
+    try:
+        rid = int(rascunho_id)
+    except (TypeError, ValueError):
+        raise ValueError("Rascunho não encontrado.")
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM anuncio_rascunho_tiktok_v2041 WHERE id=?", (rid,)).fetchone()
+        if row is None:
+            raise ValueError("Rascunho não encontrado.")
+        r = _tiktok_rascunho_de_linha(row)
+        sit = r["situacao"]
+        if sit == "publicando":
+            raise ValueError("Este rascunho já está sendo publicado.")
+        if sit == "publicado":
+            raise ValueError(f"Este rascunho já foi publicado (produto {r.get('product_id') or ''}).")
+        if sit == "incerto":
+            raise ValueError("A última tentativa ficou sem resposta do TikTok: confira no Seller Center e libere antes.")
+        if sit != "validado":
+            raise ValueError("Confira (passo 6) antes de publicar.")
+        motivo = _tiktok_ja_anunciado(str(r["ficha_codigo"]))
+        if motivo:
+            raise ValueError(motivo)
+        cur = DB.execute("UPDATE anuncio_rascunho_tiktok_v2041 SET situacao='publicando', erros_json='[]', versao=versao+1, "
+                         "atualizado_em=?, atualizado_por=? WHERE id=? AND situacao='validado'", (now_iso(), str(ator or ""), rid))
+        DB.commit()
+        if cur.rowcount != 1:
+            raise ValueError("Este rascunho já está sendo publicado.")
+    return r
+
+
+def _tiktok_subir_foto(dados: bytes, mime: str, pos: int) -> str:
+    """V20.41: images/upload (multipart, campo `data`, use_case MAIN_IMAGE) -> uri."""
+    ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}.get(mime)
+    if not ext:
+        raise ValueError("o TikTok aceita JPG, PNG ou WEBP")
+    resp = _tiktok_chamar("POST", "/product/202309/images/upload",
+                          multipart=({"use_case": "MAIN_IMAGE"}, ("data", f"foto{pos}.{ext}", dados, mime)),
+                          timeout=TIKTOK_ANUNCIO_UPLOAD_TIMEOUT, amostra="tiktok_upload_image")
+    uri = str(((resp.get("data") or {}) if isinstance(resp.get("data"), dict) else {}).get("uri") or "")
+    if not uri:
+        raise ValueError("o TikTok não devolveu o endereço da foto")
+    return uri
+
+
+def _tiktok_sku_criado(resp: dict[str, Any], cod: str) -> tuple[str, str]:
+    """V20.41: (product_id, sku_id) da resposta do criar. Sem o sku_id = ''."""
+    d = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+    pid = str(d.get("product_id") or "")
+    skus = [s for s in d.get("skus") or [] if isinstance(s, dict) and str(s.get("id") or "")]
+    escolhido = next((s for s in skus if normalize(s.get("seller_sku")) == normalize(cod)), skus[0] if len(skus) == 1 else None)
+    return pid, str((escolhido or {}).get("id") or "")
+
+
+def tiktok_publicar_executar(r: dict[str, Any], ator: str) -> dict[str, Any]:
+    """V20.41: o trabalho do Publicar (rascunho ja em `publicando`). Falha antes do criar = `validado`."""
+    rid, cod = int(r["id"]), str(r["ficha_codigo"])
+    estado: dict[str, Any] = {"etapa": "antes", "fim": None, "product_id": None}
+
+    def fim(para: str, erros: list[str], product_id: str | None = None, sku_id: str | None = None) -> dict[str, Any]:
+        novo = _tiktok_trocar(rid, ("publicando",), para, erros, ator, product_id=product_id, sku_id=sku_id)
+        estado["fim"] = novo or tiktok_rascunho_ler(rid) or r
+        audit(ator, "anuncios.tiktok_publicar", f"{cod}|{rid}|{para}|{product_id or ''}|{'; '.join(erros)[:500]}")
+        return {"ok": para == "publicado", "situacao": para, "product_id": product_id or "", "sku_id": sku_id or "",
+                "erros": [] if para == "publicado" else erros, "rascunho": estado["fim"]}
+
+    try:
+        try:
+            tiktok_access_token()
+        except Exception as exc:
+            return fim("validado", [f"TikTok sem conexão: {exc}"])
+        try:  # V20.41: Apollo de Bauru (revenda 3) lido AGORA menos o vendido e nao baixado em Bauru
+            ficha_ap = anuncio_ficha_payload(cod, ler_apollo=True, filiais=(TIKTOK_ANUNCIO_CONTA,))
+        except Exception as exc:
+            ficha_ap = None
+            print(f"Aviso: Apollo nao lido para publicar {cod} no TikTok: {exc}", file=sys.stderr)
+        est = (((ficha_ap or {}).get("estoque") or {}).get(TIKTOK_ANUNCIO_CONTA) or {})
+        dpm = est.get("da_para_montar") if isinstance(est, dict) else None
+        qtd = int(r.get("quantidade") or 0)
+        if dpm is None:
+            return fim("validado", ["O Apollo de Bauru não respondeu (ou a fila não foi lida) — não publicado. Tente de novo."])
+        if int(dpm) <= 0:
+            return fim("validado", ["Sem estoque no Apollo de Bauru para montar este produto — não publicado."])
+        if qtd < 1 or qtd > int(dpm):
+            return fim("validado", [f"Quantidade {qtd} acima do que dá para montar no Apollo de Bauru ({int(dpm)}) — "
+                                    "não publicado."])
+        erros, ctx = _tiktok_conferir_local(r)
+        if erros:
+            return fim("validado", erros)
+        uris: list[str] = []
+        for pos, fid in enumerate(r.get("fotos") or [], 1):
+            try:
+                dados, mime = anuncio_foto_bytes(fid)
+                uris.append(_tiktok_subir_foto(dados, mime, pos))
+            except Exception as exc:
+                return fim("validado", [f"A foto {pos} não subiu para o TikTok ({str(exc)[:200]}). Nada foi criado."])
+        corpo = tiktok_produto_corpo(r, ficha_ler(cod) or {"codigo": cod}, uris, ctx)
+        estado["etapa"] = "enviado"
+        try:
+            resp = _tiktok_chamar("POST", "/product/202309/products", body=corpo, timeout=TIKTOK_ANUNCIO_ITEM_TIMEOUT,
+                                  amostra="tiktok_criar_produto")
+        except (TikTokRecusou, TikTokSemResposta) as exc:
+            _anuncio_amostra("tiktok_criar_produto [erro]", {"erro": str(exc), "corpo": getattr(exc, "corpo", None),
+                                                             "enviado": corpo})
+            if _tiktok_talvez_fez(exc):  # erro interno/ocupado/tempo = o TikTok pode ter criado
+                return fim("incerto", [TIKTOK_INCERTO_TEXTO, f"Detalhe: {str(exc)[:300]}"])
+            estado["etapa"] = "antes"
+            return fim("erro", [f"O TikTok recusou: {str(exc)[:500]}"])
+        product_id, sku_id = _tiktok_sku_criado(resp, cod)
+        if not product_id.isdigit():
+            return fim("incerto", [TIKTOK_INCERTO_TEXTO, "O TikTok respondeu sem o número do produto."])
+        estado["product_id"] = product_id
+        if not sku_id:
+            return fim("incerto", [TIKTOK_INCERTO_TEXTO, f"O TikTok criou o produto {product_id} mas não devolveu a "
+                                   "variação: libere com o número do produto."], product_id=product_id)
+        with DB_LOCK:
+            try:
+                cur = DB.execute("UPDATE anuncio_rascunho_tiktok_v2041 SET situacao='publicado', product_id=?, sku_id=?, "
+                                 "erros_json='[]', versao=versao+1, atualizado_em=?, atualizado_por=? WHERE id=? "
+                                 "AND situacao='publicando'", (product_id, sku_id, now_iso(), str(ator or ""), rid))
+                if cur.rowcount == 1:
+                    _tiktok_canal_noromak(product_id, sku_id, {**r, "quantidade": qtd}, ator,
+                                          str((ctx.get("deposito") or {}).get("id") or ""))
+                DB.commit()
+            except Exception:
+                DB.rollback()
+                raise
+            estado["fim"] = _tiktok_rascunho_de_linha(
+                DB.execute("SELECT * FROM anuncio_rascunho_tiktok_v2041 WHERE id=?", (rid,)).fetchone())
+        audit(ator, "anuncios.tiktok_publicar", f"{cod}|{rid}|publicado|{product_id}|{sku_id}")
+        return {"ok": True, "situacao": "publicado", "product_id": product_id, "sku_id": sku_id, "erros": [],
+                "rascunho": estado["fim"]}
+    finally:
+        if estado["fim"] is None:
+            try:
+                if estado["etapa"] == "antes":
+                    fim("validado", ["Falha inesperada antes de criar o anúncio; nada foi criado no TikTok."])
+                else:
+                    fim("incerto", [TIKTOK_INCERTO_TEXTO], product_id=estado["product_id"])  # o numero nunca se perde
+            except Exception as exc:
+                print(f"Aviso: rascunho TikTok {rid} nao saiu de publicando: {exc}", file=sys.stderr)
+
+
+def tiktok_publicar(rascunho_id: Any, ator: str) -> dict[str, Any]:
+    """V20.41: reserva e publica (sincrono; a rota usa tiktok_publicar_iniciar, em segundo plano)."""
+    return tiktok_publicar_executar(tiktok_publicar_reservar(rascunho_id, ator), ator)
+
+
+def tiktok_publicar_iniciar(rascunho_id: Any, ator: str) -> dict[str, Any]:
+    """V20.41: como a Shopee: reserva aqui (erro = na hora) e o resto numa thread que solta o ANUNCIOS_PUBLICAR_LOCK.
+    Chamar COM o ANUNCIOS_PUBLICAR_LOCK pego."""
+    r = tiktok_publicar_reservar(rascunho_id, ator)
+    resposta = {"ok": True, "iniciado": True, "rascunho": tiktok_rascunho_ler(r["id"])}
+
+    def rodar() -> None:
+        try:
+            tiktok_publicar_executar(r, ator)
+        except Exception as exc:
+            print(f"Aviso: publicar no TikTok {r['id']} falhou: {exc}", file=sys.stderr)
+        finally:
+            ANUNCIOS_PUBLICAR_LOCK.release()
+    try:
+        threading.Thread(target=rodar, name=f"tiktok-publicar-{r['id']}", daemon=True).start()
+    except BaseException:
+        _tiktok_trocar(int(r["id"]), ("publicando",), "validado", ["A publicação não começou; tente de novo."], ator)
+        raise
+    return resposta
+
+
+def tiktok_incerto_liberar(rascunho_id: Any, product_id: Any, ator: str) -> dict[str, Any]:
+    """V20.41: o Admin conferiu no Seller Center: com o numero do produto = `publicado` (le o produto no TikTok e so
+    aceita se uma variacao tem o SKU do vendedor = codigo da ficha); sem numero = volta a `validado`."""
+    try:
+        rid = int(rascunho_id)
+    except (TypeError, ValueError):
+        raise ValueError("Rascunho não encontrado.")
+    texto = str(product_id or "").strip()
+    if texto and not texto.isdigit():
+        raise ValueError("Número do produto inválido (só números, como aparece no Seller Center).")
+    sku_id, deposito = "", ""
+    if texto:  # confere no TikTok, fora do DB_LOCK
+        pre = tiktok_rascunho_ler(rid)
+        if pre is None:
+            raise ValueError("Rascunho não encontrado.")
+        try:
+            d = _tiktok_ler("GET", f"/product/202309/products/{texto}", None, None, "tiktok_produto")
+        except RuntimeError as exc:
+            raise ValueError(f"Não consegui conferir o produto {texto} no TikTok ({str(exc)[:200]}). Nada foi alterado.")
+        skus = [s for s in d.get("skus") or [] if isinstance(s, dict)]
+        achado = next((s for s in skus if normalize(s.get("seller_sku")) == normalize(pre["ficha_codigo"])), None)
+        if not d or achado is None:
+            vistos = ", ".join(str(s.get("seller_sku") or "(vazio)") for s in skus) or "nenhuma variação"
+            raise ValueError(f"O produto {texto} no TikTok tem o SKU {vistos}, não {pre['ficha_codigo']}: não é deste "
+                             "produto. Nada foi alterado.")
+        sku_id = str(achado.get("id") or "")
+        inv = [i for i in achado.get("inventory") or [] if isinstance(i, dict)]
+        deposito = str(inv[0].get("warehouse_id") or "") if len(inv) == 1 else ""
+        if not sku_id:
+            raise ValueError("O TikTok não mostrou o id da variação: nada foi alterado.")
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM anuncio_rascunho_tiktok_v2041 WHERE id=?", (rid,)).fetchone()
+        if row is None:
+            raise ValueError("Rascunho não encontrado.")
+        r = _tiktok_rascunho_de_linha(row)
+        if r["situacao"] != "incerto":
+            raise ValueError("Só um rascunho sem resposta do TikTok (incerto) pode ser liberado.")
+        if texto:
+            ja = DB.execute("SELECT ficha_codigo FROM anuncio_canal_v2023 WHERE canal='tiktok' AND anuncio_id=?",
+                            (sku_id,)).fetchone()
+            if ja and str(ja["ficha_codigo"] or "") not in ("", str(r["ficha_codigo"])):
+                raise ValueError(f"A variação {sku_id} já está na lista com outro produto. Nada foi alterado.")
+        para = "publicado" if texto else "validado"
+        try:
+            DB.execute("UPDATE anuncio_rascunho_tiktok_v2041 SET situacao=?, product_id=?, sku_id=?, erros_json='[]', "
+                       "versao=versao+1, atualizado_em=?, atualizado_por=? WHERE id=? AND situacao='incerto'",
+                       (para, texto or None, sku_id or None, now_iso(), str(ator or ""), rid))
+            if texto:
+                _tiktok_canal_noromak(texto, sku_id, r, ator, deposito)
+            DB.commit()
+        except Exception:
+            DB.rollback()
+            raise
+        novo = _tiktok_rascunho_de_linha(DB.execute("SELECT * FROM anuncio_rascunho_tiktok_v2041 WHERE id=?",
+                                                    (rid,)).fetchone())
+    audit(ator, "anuncios.tiktok_liberar", f"{r['ficha_codigo']}|{rid}|{para}|{texto}|{sku_id}")
+    return {"ok": True, "situacao": para, "product_id": texto, "sku_id": sku_id, "rascunho": novo}
+
+
+# ---- V20.41: "Trazer dados do anuncio" do TikTok para a ficha (so leitura no TikTok) ----
+def _tiktok_foto_url_ok(url: Any) -> bool:
+    """So https de um host da CDN do TikTok (TIKTOK_FOTO_HOSTS). Qualquer outro endereco e recusado."""
+    try:
+        p = urlparse(str(url or "").strip())
+        host = (p.hostname or "").lower()
+    except ValueError:
+        return False
+    return p.scheme == "https" and any(host == h or host.endswith("." + h) for h in TIKTOK_FOTO_HOSTS)
+
+
+class _TikTokFotoRedirecionamento(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: N802 (nome do urllib)
+        if not _tiktok_foto_url_ok(newurl):
+            raise urllib.error.URLError("a foto redirecionou para fora da CDN do TikTok")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _tiktok_foto_baixar(url: str) -> bytes:
+    """V20.41: baixa UMA foto do produto (CDN publica, sem token), 20 s. Chamar FORA do DB_LOCK."""
+    if not _tiktok_foto_url_ok(url):
+        raise ValueError("endereço fora da CDN do TikTok")
+    abridor = urllib.request.build_opener(_TikTokFotoRedirecionamento)
+    req = urllib.request.Request(url, headers={"Accept": "image/*", "User-Agent": f"NoromakExpedicao/{APP_VERSION}"})
+    with abridor.open(req, timeout=ANUNCIO_FOTO_ML_TIMEOUT) as resp:
+        dados = resp.read(ANUNCIO_FOTO_MAX_BYTES + 1)
+    if len(dados) > ANUNCIO_FOTO_MAX_BYTES:
+        raise ValueError("a foto passa de 10 MB")
+    return dados
+
+
+def _tiktok_fotos_do_produto(d: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    for img in d.get("main_images") or []:
+        if isinstance(img, dict):
+            cand = [u for u in (img.get("urls") or []) if isinstance(u, str)] + [str(img.get("url") or "")]
+            u = next((x for x in cand if x.strip()), "")
+            if u:
+                urls.append(u.strip())
+    return urls[:ANUNCIO_FOTOS_MAX]
+
+
+def tiktok_trazer_dados(conta: Any, anuncio_id: Any, ator: str) -> dict[str, Any]:
+    """V20.41: le o produto no TikTok (GET /product/202309/products/{id}) e traz para a ficha titulo, descricao e
+    marca (origem anuncio_tiktok: o Admin e o "apagado pelo Admin" nunca mudam) e as fotos so se a ficha nao tem foto.
+    A categoria do TikTok fica na linha do anuncio (a ficha guarda a categoria do ML). So com a fonte "api"."""
+    if str(conta or "").strip() not in ("", TIKTOK_ANUNCIO_CONTA):
+        raise ValueError("O TikTok é só da conta de Bauru.")
+    if tiktok_fonte() != "api":
+        raise ValueError("A fonte do TikTok é a extensão do Seller Center: “Trazer dados” do TikTok só com a fonte API.")
+    sku_id = str(anuncio_id or "").strip()
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM anuncio_canal_v2023 WHERE canal='tiktok' AND conta=? AND anuncio_id=?",
+                         (TIKTOK_ANUNCIO_CONTA, sku_id)).fetchone()
+        linha = dict(row) if row else None
+        if linha is not None and not str(linha.get("user_product_id") or ""):
+            pr = DB.execute("SELECT product_id FROM tiktok_sku_v1964 WHERE sku_id=?", (sku_id,)).fetchone()
+            linha["user_product_id"] = str(pr["product_id"] or "") if pr else ""
+    if linha is None:
+        raise AnuncioNaoEncontrado(f"A variação {sku_id} do TikTok não está na lista.")
+    if str(linha.get("removido_em") or ""):
+        raise ValueError(f"A variação {sku_id} foi removida da lista pelo Admin: reinclua antes de trazer os dados.")
+    product_id = str(linha.get("user_product_id") or "")
+    if not product_id:
+        raise ValueError("O Noromak não sabe o produto desta variação (atualize os anúncios do TikTok).")
+    try:
+        d = _tiktok_ler("GET", f"/product/202309/products/{product_id}", None, None, "tiktok_produto")
+    except RuntimeError as exc:
+        raise AnuncioMLSemResposta(f"O TikTok não respondeu ao ler o produto {product_id} ({str(exc)[:200]}). Nada foi "
+                                   "alterado; tente de novo.")
+    if not d:
+        raise AnuncioNaoEncontrado(f"O produto {product_id} não foi encontrado no TikTok.")
+    ficha = str(linha.get("ficha_codigo") or "")
+    cats = [c for c in d.get("category_chains") or [] if isinstance(c, dict)]
+    folha = next((c for c in cats if c.get("is_leaf")), cats[-1] if cats else {})
+    with DB_LOCK:  # a linha do anuncio guarda o titulo e a categoria do TikTok (nao vao para a ficha do ML)
+        DB.execute("UPDATE anuncio_canal_v2023 SET titulo=COALESCE(NULLIF(?,''),titulo), "
+                   "categoria=COALESCE(NULLIF(?,''),categoria) WHERE canal='tiktok' AND conta=? AND anuncio_id=?",
+                   (str(d.get("title") or ""), str(folha.get("id") or ""), TIKTOK_ANUNCIO_CONTA, sku_id))
+        DB.commit()
+    trazidos: dict[str, Any] = {"campos": [], "fotos": 0, "fotos_falharam": 0, "fotos_ja_tinha": False,
+                                "descricao_erro": "", "sem_ficha": not ficha}
+    if ficha:
+        campos = {"nome": " ".join(html_module.unescape(str(d.get("title") or "")).split()),  # titulo pode vir com &amp;
+                  "descricao": _tiktok_html_texto(d.get("description")),
+                  "marca": str(((d.get("brand") or {}) if isinstance(d.get("brand"), dict) else {}).get("name") or "")}
+        trazidos["campos"] = ficha_importar(ficha, campos, "anuncio_tiktok")
+        trazidos.update(_anuncio_fotos_do_ml(ficha, _tiktok_fotos_do_produto(d), ator, url_ok=_tiktok_foto_url_ok,
+                                             baixar=_tiktok_foto_baixar, candidatos=lambda u: [str(u or "").strip()],
+                                             origem="anuncio_tiktok"))
+    texto = _anuncio_trazido_texto(trazidos)
+    audit(ator, "anuncios.trazer_dados", f"tiktok|{sku_id}|{ficha}|{texto}"[:2000])
+    return {"ok": True, "mlb": sku_id, "anuncio_id": sku_id, "product_id": product_id, "conta": TIKTOK_ANUNCIO_CONTA,
+            "ficha_codigo": ficha, "novo": False, "removido": False, "anuncio": linha, "trazidos": trazidos,
+            "trazido_texto": texto}
+
+
+# ---------------------------------------------------------------------------
 # V20.34 - Criar anuncio e controlar estoque na MAGALU (Araçatuba). Desenho em
 # docs/superpowers/specs/2026-11-06-anuncios-magalu-design.md. Construido pela especificacao OpenAPI oficial
 # (developers.magalu.com/apis/products.openapi.yaml), sem resposta real: a 1a resposta de cada chamada fica em
@@ -37681,8 +38744,11 @@ ANUNCIO_ESTOQUE_STATUS_PARADO = {"closed": "encerrado", "inactive": "inativo", "
 # (a Shopee de Araçatuba: linhas canal='shopee', conta='aracatuba'; Apollo e fila de Araçatuba, o mesmo estoque do ML).
 ESTOQUE_CONTA_SHOPEE = "shopee"
 ESTOQUE_CONTA_MAGALU = "magalu"  # V20.34: a Magalu de Araçatuba (linhas canal='magalu', conta='aracatuba')
+# V20.41: o TikTok de Bauru (linhas canal='tiktok', conta='bauru'; Apollo e fila de Bauru). Só com a fonte "api" (os
+# anúncios ficam com controle 'noromak'); com a extensão o controle é 'tiktok' e quem manda é a tela Estoque TikTok.
+ESTOQUE_CONTA_TIKTOK = "tiktok"
 # V20.34: contas de estoque que nao sao casa do ML (rodam numa thread na volta do worker; ML nao espera por elas)
-ESTOQUE_CONTAS_FORA = (ESTOQUE_CONTA_SHOPEE, ESTOQUE_CONTA_MAGALU)
+ESTOQUE_CONTAS_FORA = (ESTOQUE_CONTA_SHOPEE, ESTOQUE_CONTA_MAGALU, ESTOQUE_CONTA_TIKTOK)
 
 
 def _estoque_conta_valida(conta: Any) -> str:
@@ -37696,6 +38762,8 @@ def _estoque_alvo(conta: str) -> tuple[str, str, str]:
         return "shopee", SHOPEE_ANUNCIO_CONTA, SHOPEE_ANUNCIO_CONTA
     if conta == ESTOQUE_CONTA_MAGALU:
         return "magalu", MAGALU_ANUNCIO_CONTA, MAGALU_ANUNCIO_CONTA
+    if conta == ESTOQUE_CONTA_TIKTOK:  # V20.41
+        return "tiktok", TIKTOK_CASA, TIKTOK_CASA
     return "ml", conta, conta
 
 
@@ -38195,9 +39263,106 @@ def magalu_estoque_gravar(conta: str, item_id: str, quantidade: Any, *, ator: st
                                 modo=modo, motivo=motivo, conferir=conferir)
 
 
+def tiktok_estoque_gravar(conta: str, item_id: str, quantidade: Any, *, ator: str, modo: str, motivo: str,
+                          conferir: Any = None) -> dict[str, Any]:
+    """V20.41: a ÚNICA função que grava estoque no TikTok pela plataforma de anúncios (mesmo contrato). `item_id` = o id
+    da variação (sku_id). Só com a fonte "api"."""
+    return _estoque_gravar_fora(ESTOQUE_CONTA_TIKTOK, item_id, quantidade, _tiktok_estoque_gravar_api, ator=ator,
+                                modo=modo, motivo=motivo, conferir=conferir)
+
+
+TIKTOK_ESTOQUE_RELEITURA_ESPERAS = (2, 3, 5)
+TIKTOK_STATUS_SEM_ESTOQUE = {"DELETED", "SELLER_DELETED", "PLATFORM_DEACTIVATED_DELETED", "FREEZE", "PLATFORM_DEACTIVATED"}
+
+
+def _tiktok_estoque_ler(sku_id: str) -> dict[str, Any]:
+    """V20.41: a variação lida agora no TikTok (GET do produto): SKU, situação, depósitos e quantidade. Só lê."""
+    with DB_LOCK:
+        row = DB.execute("SELECT product_id FROM tiktok_sku_v1964 WHERE sku_id=?", (str(sku_id),)).fetchone()
+        if row is None:
+            row = DB.execute("SELECT user_product_id AS product_id FROM anuncio_canal_v2023 WHERE canal='tiktok' "
+                             "AND anuncio_id=?", (str(sku_id),)).fetchone()
+    product_id = str((row["product_id"] if row else "") or "")
+    if not product_id:
+        raise ValueError("o Noromak não sabe o produto desta variação (atualize os anúncios do TikTok)")
+    resp = tiktok_api("GET", f"/product/202309/products/{product_id}")
+    dados = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+    saida: dict[str, Any] = {"existe": False, "status": str(dados.get("status") or ""), "sku": "", "locais": [],
+                             "estoque": None, "product_id": product_id, "variacoes": False}
+    for sk in dados.get("skus") or []:
+        if isinstance(sk, dict) and str(sk.get("id") or "") == str(sku_id):
+            inv = [i for i in (sk.get("inventory") or []) if isinstance(i, dict)]
+            saida.update(existe=True, sku=str(sk.get("seller_sku") or ""),
+                         locais=[str(i.get("warehouse_id") or "") for i in inv],
+                         estoque=_tiktok_quantidade(inv[0].get("quantity")) if len(inv) == 1 else None)
+    return saida
+
+
+def _tiktok_estoque_gravar_api(sku_id: str, qtd: int, ficha_codigo: str = "") -> dict[str, Any]:
+    """V20.41: lê, grava (inventory/update, número absoluto) e relê; só é ok quando o TikTok mostra o número.
+    Só a variação cujo SKU é o da ficha (ou com vínculo à mão), com UM depósito e produto ativo."""
+    res: dict[str, Any] = {"ok": False, "antes": None, "depois": None, "metodo": "inventory/update", "erro": "", "lido": {}}
+    if tiktok_fonte() != "api":
+        res.update(erro="a fonte do TikTok é a extensão do Seller Center: nada enviado pela API", ignorado="fonte")
+        return res
+    try:
+        antes = _tiktok_estoque_ler(sku_id)
+    except Exception as exc:
+        res["erro"] = f"não consegui ler a variação no TikTok ({str(exc)[:200]})"
+        return res
+    res["antes"] = antes["estoque"]
+    if not antes["existe"]:
+        res["erro"] = "o TikTok não achou esta variação na loja"
+        return res
+    with DB_LOCK:
+        vinc = DB.execute("SELECT codigos FROM tiktok_vinculo_v1964 WHERE sku_id=?", (str(sku_id),)).fetchone()
+    if ficha_codigo and not vinc and normalize(antes["sku"]) != normalize(ficha_codigo):
+        res["erro"] = f"a variação no TikTok tem o SKU {antes['sku'] or '(vazio)'}, não {ficha_codigo}: nada enviado"
+        return res
+    if antes["status"] in TIKTOK_STATUS_SEM_ESTOQUE:
+        res.update(erro=f"produto {antes['status']} no TikTok: nada enviado", ignorado="status")
+        return res
+    if len(antes["locais"]) != 1 or not antes["locais"][0]:
+        res["erro"] = ("a variação tem " + (f"{len(antes['locais'])} depósitos" if antes["locais"] else "nenhum depósito")
+                       + " no TikTok: ajuste no Seller Center, o Noromak não escolhe o depósito")
+        return res
+    if antes["estoque"] is None:
+        res["erro"] = "o TikTok não mostrou a quantidade da variação: nada enviado"
+        return res
+    corpo = {"skus": [{"id": str(sku_id), "inventory": [{"warehouse_id": antes["locais"][0], "quantity": int(qtd)}]}]}
+    try:
+        r = tiktok_api("POST", f"/product/202309/products/{antes['product_id']}/inventory/update", body=corpo)
+        erros = ((r.get("data") or {}).get("errors") or []) if isinstance(r.get("data"), dict) else []
+        if erros:
+            res["erro"] = "o TikTok recusou: " + "; ".join(f"{(e or {}).get('code')} {(e or {}).get('message') or ''}"
+                                                       for e in erros if isinstance(e, dict))[:300]
+            return res
+    except Exception as exc:
+        res["erro"] = f"o TikTok não confirmou o envio ({str(exc)[:200]}); relido abaixo"
+    for espera in TIKTOK_ESTOQUE_RELEITURA_ESPERAS:
+        time.sleep(espera)
+        try:
+            depois = _tiktok_estoque_ler(sku_id)["estoque"]
+        except Exception:
+            continue
+        if depois is None:
+            continue
+        res["depois"] = depois
+        if depois == qtd:
+            res.update(ok=True, erro="")
+            with DB_LOCK:
+                DB.execute("UPDATE tiktok_sku_v1964 SET qtd_tiktok=? WHERE sku_id=?", (qtd, str(sku_id)))
+                DB.commit()
+            return res
+    if not res["erro"]:
+        res["erro"] = f"o TikTok aceitou mas mostra {res['depois']} (enviado {qtd})"
+    return res
+
+
 def _estoque_gravador(canal: str) -> Any:
     """V20.34: quem grava o estoque de cada canal."""
-    return {"shopee": shopee_estoque_gravar, "magalu": magalu_estoque_gravar}.get(canal, ml_estoque_gravar)
+    return {"shopee": shopee_estoque_gravar, "magalu": magalu_estoque_gravar,
+            "tiktok": tiktok_estoque_gravar}.get(canal, ml_estoque_gravar)  # V20.41
 
 
 def _estoque_gravar_fora(conta_est: str, item_id: str, quantidade: Any, api: Any, *, ator: str, modo: str, motivo: str,
@@ -38433,6 +39598,8 @@ def _anuncios_codigos_automatico(filial: str) -> dict[str, str]:
         if filial == SHOPEE_ANUNCIO_CONTA:  # V20.32: a Shopee (V20.34: e a Magalu) le o mesmo Apollo de Araçatuba
             linhas += _anuncios_automatico_linhas(ESTOQUE_CONTA_SHOPEE)
             linhas += _anuncios_automatico_linhas(ESTOQUE_CONTA_MAGALU)
+        if filial == TIKTOK_CASA:  # V20.41: o TikTok lê o mesmo Apollo de Bauru que o ML de Bauru
+            linhas += _anuncios_automatico_linhas(ESTOQUE_CONTA_TIKTOK)
     if not linhas:
         return {}
     catalogo = _load_kit_catalog()
@@ -46687,6 +47854,39 @@ class AppHandler(BaseHTTPRequestHandler):
                     return
                 self.send_json(res)
             return
+        if path in ("/api/anuncios/tiktok/categorias", "/api/anuncios/tiktok/atributos", "/api/anuncios/tiktok/conta",
+                    "/api/anuncios/tiktok/rascunhos"):
+            # V20.41: leituras do TikTok para criar anuncio. Ver os rascunhos = modulo admin (so le o banco); o resto
+            # chama o TikTok/Apollo = perfil Admin.
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                def _qt(nome: str) -> str:
+                    return str((query.get(nome) or [""])[0]).strip()
+                if str(ctx.get("app_role") or "") != "admin" and not path.endswith("/rascunhos"):
+                    self.send_json({"ok": False, "error": "Somente o perfil Admin."}, 403)
+                    return
+                try:
+                    if path.endswith("/categorias"):
+                        res = {"ok": True, "categorias": tiktok_categoria_sugerir(_qt("titulo"))}
+                    elif path.endswith("/atributos"):
+                        marcas_t = tiktok_marcas(_qt("categoria"))
+                        ficha_t = ficha_ler(_qt("codigo")) if _qt("codigo") else None
+                        res = {"ok": True, **tiktok_categoria_atributos(_qt("categoria")),
+                               "regras": tiktok_categoria_regras(_qt("categoria")), "marcas": marcas_t["marcas"],
+                               "marca_da_ficha": tiktok_marca_da_ficha(((ficha_t or {}).get("campos") or {}).get("marca"),
+                                                                       marcas_t)}
+                    elif path.endswith("/conta"):
+                        res = {"ok": True, **tiktok_conta_preco(_qt("codigo"), _qt("preco"), _qt("margens") or None)}
+                    else:
+                        res = {"ok": True, "rascunhos": tiktok_rascunhos_da_ficha(_qt("codigo")), "fonte": tiktok_fonte()}
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                    return
+                except RuntimeError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 502)
+                    return
+                self.send_json(res)
+            return
         if path in ("/api/anuncios/ml/categorias", "/api/anuncios/ml/atributos", "/api/anuncios/ml/tarifa"):
             # V20.24: leituras do ML para criar anuncio (so GET, mas chamam o ML: perfil Admin)
             ctx = self.auth(admin_only=True)
@@ -49127,6 +50327,9 @@ class AppHandler(BaseHTTPRequestHandler):
                     # V20.32: anuncio na Shopee (rascunho, conferir, publicar, liberar)
                     "/api/anuncios/shopee/rascunho", "/api/anuncios/shopee/conferir", "/api/anuncios/shopee/publicar",
                     "/api/anuncios/shopee/liberar",
+                    # V20.41: anuncio no TikTok (rascunho, conferir, publicar, liberar)
+                    "/api/anuncios/tiktok/rascunho", "/api/anuncios/tiktok/conferir", "/api/anuncios/tiktok/publicar",
+                    "/api/anuncios/tiktok/liberar",
                     # V20.34: anuncio na Magalu (rascunho, conferir, publicar, acompanhar o 202, liberar)
                     "/api/anuncios/magalu/rascunho", "/api/anuncios/magalu/conferir", "/api/anuncios/magalu/publicar",
                     "/api/anuncios/magalu/acompanhar", "/api/anuncios/magalu/liberar",
@@ -49340,6 +50543,23 @@ class AppHandler(BaseHTTPRequestHandler):
                         raise
                 elif path == "/api/anuncios/shopee/liberar":
                     res = shopee_incerto_liberar(body.get("id"), body.get("item_id"), ctx["username"])
+                elif path == "/api/anuncios/tiktok/rascunho":  # V20.41: grava so no banco (o TikTok so no Publicar)
+                    rasc = tiktok_rascunho_salvar(body, ctx["username"], body.get("versao"))
+                    audit(ctx["username"], "anuncios.tiktok_rascunho", f"{rasc.get('ficha_codigo')}|{rasc.get('id')}|v{rasc.get('versao')}")
+                    res = {"ok": True, "rascunho": rasc}
+                elif path == "/api/anuncios/tiktok/conferir":  # V20.41: local + listing_check (nao cria nada)
+                    res = tiktok_rascunho_conferir(body.get("id"), ctx["username"])
+                elif path == "/api/anuncios/tiktok/publicar":  # V20.41: a UNICA escrita na criacao do TikTok
+                    if not ANUNCIOS_PUBLICAR_LOCK.acquire(blocking=False):
+                        self.send_json({"ok": False, "error": "Outra publicação em andamento."}, 409)
+                        return
+                    try:  # em segundo plano (a thread solta a trava no fim)
+                        res = tiktok_publicar_iniciar(body.get("id"), ctx["username"])
+                    except BaseException:
+                        ANUNCIOS_PUBLICAR_LOCK.release()
+                        raise
+                elif path == "/api/anuncios/tiktok/liberar":
+                    res = tiktok_incerto_liberar(body.get("id"), body.get("product_id"), ctx["username"])
                 elif path == "/api/anuncios/magalu/rascunho":  # V20.34: grava so no banco (a Magalu so no Publicar)
                     rasc = magalu_rascunho_salvar(body, ctx["username"], body.get("versao"))
                     audit(ctx["username"], "anuncios.magalu_rascunho", f"{rasc.get('ficha_codigo')}|{rasc.get('id')}|v{rasc.get('versao')}")
@@ -49379,6 +50599,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "CONFLITO", "mensagem": str(exc), "atual": exc.atual}, 409)
             except KitCodigoDeProduto as exc:  # V20.28: a tela reconhece o codigo e pede a confirmacao
                 self.send_json({"ok": False, "error": str(exc), "codigo_erro": KitCodigoDeProduto.codigo_erro}, 400)
+            except TikTokFonteNaoApi as exc:  # V20.41: a fonte do TikTok e a extensao
+                self.send_json({"ok": False, "error": str(exc), "codigo_erro": "FONTE_EXTENSAO"}, 409)
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             return
@@ -49445,6 +50667,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 elif path == "/api/tiktok-estoque/vinculo":
                     res = tiktok_vinculo_definir(str(body.get("sku_id") or ""), str(body.get("codigos") or ""), ctx["username"])
                     audit(ctx["username"], "tiktok.estoque.vinculo", f"{res['sku_id']}|{res['codigos']}")
+                elif path == "/api/tiktok-estoque/enviar" and tiktok_fonte() == "api":
+                    # V20.41: com a API o estoque é por anúncio na plataforma (/anuncios)
+                    self.send_json({"ok": False, "error": "Com a API, o estoque do TikTok é controlado por anúncio na "
+                                                          "plataforma de anúncios (Anúncios → Controle de estoque)."}, 409)
+                    return
                 elif path in ("/api/tiktok-estoque/enviar", "/api/tiktok-estoque/atualizar") and tiktok_fonte() != "api":
                     # V20.40: com a extensão como fonte, ler e gravar no TikTok é com ela (nunca as duas juntas)
                     self.send_json({"ok": False, "error": "A fonte do TikTok é a extensão do Seller Center: o envio e a "

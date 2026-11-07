@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.40).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.41).
 
 ---
 
@@ -567,6 +567,25 @@ situação desconhecida do Painel de saúde é só da extensão.
 2ª revisão (só das correções): pacote com unidade a enviar vem primeiro (`_tiktok_api_pacote_aberto_primeiro`, pelo
 `package_id` dos line_items; coluna e etiqueta do parcialmente enviado nunca são do pacote já despachado); o preço pela API
 também tira as unidades já enviadas (senão o atendimento ia sempre a revisar); trocar a fonte espera no máximo 20 s pela trava.
+
+**V20.41 — TikTok igual aos outros na plataforma de anúncios** (dono, 07/11; decisões: estoque "plataforma, por anúncio",
+preço digitado + Apollo de Bauru, promoções do TikTok depois). **Estoque:** conta de estoque `tiktok` (`ESTOQUE_CONTA_TIKTOK` em
+`ESTOQUE_CONTAS_FORA`; `_estoque_alvo` = canal 'tiktok', conta e filial Bauru): com a fonte `api` os anúncios do TikTok ficam com
+`controle='noromak'` (`_tiktok_controle_atual`, refeito pelo espelho e na troca de fonte) e ganham Manual/Automático em /anuncios
+(Apollo de Bauru − pendentes de Bauru; interruptor próprio "TikTok · Bauru", Automático com OWNER); com a extensão o controle volta a
+'tiktok' e o Automático vira Manual. Grava só por `tiktok_estoque_gravar` → `_tiktok_estoque_gravar_api` (lê o produto, SKU da ficha
+ou vínculo à mão, um depósito, `inventory/update` absoluto, relê; só com a fonte api). O `tiktok_estoque_loop` com a API só lê o
+catálogo; `/api/tiktok-estoque/enviar` com a API = 409 (é por anúncio). **Criar anúncio no TikTok** (painel na aba Anúncios em todos os
+canais, Bauru): rascunho `anuncio_rascunho_tiktok_v2041`, categorias/sugestão/atributos/regras/marcas/depósito de venda (cache 24 h),
+"Conferir no TikTok" = `products/listing_check` (sem fotos; falhou = conferência local), Publicar em 2º plano só com a fonte api
+(`TikTokFonteNaoApi` 409), fotos por `images/upload` (multipart, assinatura sem o corpo), `POST /product/202309/products`; estoque
+inicial ≤ Apollo de Bauru − pendentes (sem leitura = não publica); preço digitado com o preço ideal do TikTok como sugestão
+(`tiktok_conta_preco`); sem resposta/erro interno = `incerto` (Liberar confere o seller_sku = código da ficha); já anunciado não publica
+outro; publicado = linha `controle='noromak'`, Manual, + `tiktok_sku_v1964`. **Trazer dados do anúncio** (TikTok): título, descrição,
+marca (origem `anuncio_tiktok`, abaixo de `anuncio_ml`) e fotos só com a ficha sem foto (`TIKTOK_FOTO_HOSTS`). Tudo pela documentação:
+1ª resposta de cada chamada em `anuncio_amostra_v2024` (`tiktok_*`) — **conferir no 1º uso**. Rotas
+`GET /api/anuncios/tiktok/{categorias,atributos,conta,rascunhos}`, `POST /api/anuncios/tiktok/{rascunho,conferir,publicar,liberar}`.
+Testes: `TESTES/test_tiktok_anuncios_estoque_v2041.py`, `TESTES/test_anuncios_tiktok_v2041.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na
