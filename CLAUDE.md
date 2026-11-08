@@ -586,6 +586,11 @@ marca (origem `anuncio_tiktok`, abaixo de `anuncio_ml`) e fotos só com a ficha 
 1ª resposta de cada chamada em `anuncio_amostra_v2024` (`tiktok_*`) — **conferir no 1º uso**. Rotas
 `GET /api/anuncios/tiktok/{categorias,atributos,conta,rascunhos}`, `POST /api/anuncios/tiktok/{rascunho,conferir,publicar,liberar}`.
 Testes: `TESTES/test_tiktok_anuncios_estoque_v2041.py`, `TESTES/test_anuncios_tiktok_v2041.py`.
+**revisar-antes-de-subir da V20.41 (07/11):** SKU do TikTok cortado (V20.08) sem vínculo à mão não recebe estoque pela plataforma
+(`_anuncio_estoque_elegivel`); o envio pela API (`_tiktok_estoque_gravar_api`) roda sob o `TIKTOK_ESTOQUE_LOCK` (a troca de fonte espera);
+o Publicar já reservado confere a fonte de novo antes de criar; amostra uma por rota também em `/products/{id}` e `/categories/{id}`;
+marcas até `TIKTOK_MARCAS_PAGINAS` (20) páginas com `incompleta` e, cortada, a marca da ficha é buscada pelo nome
+(`tiktok_marca_buscar`, `brand_name`); `listing_check` FAILED sem motivo legível não conta como conferido.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

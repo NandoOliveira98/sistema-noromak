@@ -6648,6 +6648,7 @@ def tiktok_api(metodo: str, path: str, params: dict[str, Any] | None = None,
     # revisar-antes-de-subir: a 1ª recusa (ex.: sem NF) fica em "<rota> [erro]" e não ocupa o lugar
     # da 1ª resposta BOA, que é a que mostra o formato real a conferir.
     rota = f"{metodo} " + re.sub(r"/(packages|orders)/[^/]+/", r"/\1/{id}/", path)
+    rota = re.sub(r"/(products|categories)/\d+", r"/\1/{id}", rota)  # revisar-antes-de-subir (V20.41): uma por rota
     # revisar-antes-de-subir (V20.40): a amostra guarda o formato, nunca o CPF/nome/endereço do comprador
     _tiktok_guardar_amostra(rota if int(resp.get("code") or 0) == 0 else rota + " [erro]", _tiktok_sc_mascarar(resp))
     if int(resp.get("code") or 0) != 0:
@@ -36300,7 +36301,7 @@ TIKTOK_ANUNCIO_DESC_MAX = 10000
 TIKTOK_ANUNCIO_FOTOS_MAX = 9
 TIKTOK_ANUNCIO_ITEM_TIMEOUT = 90
 TIKTOK_ANUNCIO_UPLOAD_TIMEOUT = 60
-TIKTOK_MARCAS_PAGINAS = 40
+TIKTOK_MARCAS_PAGINAS = 20  # revisar-antes-de-subir (V20.41): menos páginas por pedido (504); o resto pela busca do nome
 TIKTOK_FOTO_HOSTS = ("tiktokcdn.com", "ibyteimg.com", "tiktokcdn-us.com", "ttwstatic.com")
 TIKTOK_RASCUNHO_EDITAVEL = ("rascunho", "validado", "erro")
 TIKTOK_RASCUNHO_CAMPOS = ("titulo", "categoria", "categoria_nome", "descricao", "preco", "quantidade")
@@ -36541,8 +36542,24 @@ def tiktok_marcas(categoria: Any) -> dict[str, Any]:
             token = str(d.get("next_page_token") or "")
             if not token:
                 break
-        return {"categoria": cid, "marcas": marcas}
+        # revisar-antes-de-subir (V20.41): sobrou página = lista incompleta (a marca da ficha é buscada pelo nome)
+        return {"categoria": cid, "marcas": marcas, "incompleta": bool(token)}
     return _tiktok_cache(("marcas", cid), ler)
+
+
+def tiktok_marca_buscar(categoria: Any, nome: Any) -> dict[str, str] | None:
+    """revisar-antes-de-subir (V20.41): a marca da ficha pelo nome (brand_name), quando a lista da categoria veio cortada."""
+    cid, alvo = str(categoria or "").strip(), str(nome or "").strip()
+    if not cid.isdigit() or not alvo:
+        return None
+    try:
+        d = _tiktok_ler("GET", "/product/202309/brands", {"category_id": cid, "brand_name": alvo, "page_size": 100},
+                        None, "tiktok_marcas_busca")
+    except Exception:
+        return None
+    lista = {"marcas": [{"id": str(b["id"]), "nome": str(b.get("name") or "")} for b in d.get("brands") or []
+                        if isinstance(b, dict) and b.get("id") not in (None, "")]}
+    return tiktok_marca_da_ficha(alvo, lista)
 
 
 def tiktok_marca_da_ficha(marca: Any, lista: dict[str, Any]) -> dict[str, str] | None:
@@ -36815,10 +36832,14 @@ def _tiktok_conferir_local(r: dict[str, Any]) -> tuple[list[str], dict[str, Any]
                      + "), que o Noromak não envia: escolha outra categoria ou crie pelo Seller Center.")
     marca = r.get("marca") or {}
     if marca.get("id"):
-        if marca["id"] not in {str(b.get("id")) for b in marcas.get("marcas") or []}:
+        if marca["id"] not in {str(b.get("id")) for b in marcas.get("marcas") or []} and not (
+                marcas.get("incompleta") and (tiktok_marca_buscar(r.get("categoria"), marca.get("nome")) or {}).get("id")
+                == marca["id"]):
             erros.append("A marca escolhida não é da lista desta categoria: escolha de novo.")
     else:
         achada = tiktok_marca_da_ficha(campos.get("marca"), marcas)
+        if not achada and marcas.get("incompleta"):  # revisar-antes-de-subir (V20.41): lista cortada → busca pelo nome
+            achada = tiktok_marca_buscar(r.get("categoria"), campos.get("marca"))
         if achada:
             marca = achada
         elif str(campos.get("marca") or "").strip():  # nunca "sem marca" calado
@@ -36900,9 +36921,15 @@ def tiktok_rascunho_conferir(rascunho_id: Any, ator: str) -> dict[str, Any]:
                                   amostra="tiktok_listing_check")
             d = resp.get("data") if isinstance(resp.get("data"), dict) else {}
             motivos = [m for m in _tiktok_motivos_check(resp) if not re.search(r"image|imagem|foto|picture", m, re.I)]
-            if str(d.get("check_result") or "").upper() in ("FAILED", "FAIL") and motivos:
+            falhou = str(d.get("check_result") or "").upper() in ("FAILED", "FAIL")
+            if falhou and motivos:
                 erros.extend(f"O TikTok recusaria: {m}" for m in motivos)
-            conferido_tiktok = True
+            if falhou and not motivos and not _tiktok_motivos_check(resp):
+                # revisar-antes-de-subir (V20.41): recusa sem motivo legível não passa como "conferido pelo TikTok"
+                ctx["avisos"].append("O TikTok recusou a conferência sem um motivo legível: confira a amostra "
+                                     "tiktok_listing_check. O Publicar é o teste de verdade.")
+            else:
+                conferido_tiktok = True
         except (TikTokRecusou, TikTokSemResposta) as exc:
             ctx["avisos"].append(f"O TikTok não conferiu ({str(exc)[:200]}): ficou só a conferência do Noromak. O "
                                  "Publicar é o teste de verdade.")
@@ -37063,6 +37090,8 @@ def tiktok_publicar_executar(r: dict[str, Any], ator: str) -> dict[str, Any]:
         erros, ctx = _tiktok_conferir_local(r)
         if erros:
             return fim("validado", erros)
+        if tiktok_fonte() != "api":  # revisar-antes-de-subir (V20.41): a fonte virou extensão depois do clique
+            return fim("validado", ["A fonte do TikTok virou a extensão do Seller Center: nada foi criado."])
         uris: list[str] = []
         for pos, fid in enumerate(r.get("fotos") or [], 1):
             try:
@@ -38784,6 +38813,16 @@ def _anuncio_estoque_elegivel(row: dict[str, Any] | None) -> str:
         return "Anúncio Full: o estoque é do Mercado Livre."
     if str(row.get("controle") or "") != "noromak":
         return "O estoque deste anúncio não é controlado pelo Noromak."
+    # revisar-antes-de-subir (V20.41): SKU do TikTok cortado no limite (V20.08) sem vínculo à mão nunca recebe estoque —
+    # o fim pode ter perdido uma peça inteira, mesmo que o trecho exista como código no Apollo.
+    vinc: Any = True
+    if str(row.get("canal") or "") == "tiktok" and len(str(row.get("sku_anuncio") or "")) >= TIKTOK_SKU_LIMITE:
+        with DB_LOCK:  # reentrante: há quem chame já sob a trava
+            vinc = DB.execute("SELECT 1 FROM tiktok_vinculo_v1964 WHERE sku_id=?",
+                              (str(row.get("anuncio_id") or ""),)).fetchone()
+    if vinc is None:
+        return ("SKU do TikTok cortado em 50 caracteres: o kit pode ter perdido uma peça. Faça o vínculo à mão na tela "
+                "Estoque TikTok antes de controlar o estoque.")
     return ""
 
 
@@ -39302,6 +39341,18 @@ def _tiktok_estoque_gravar_api(sku_id: str, qtd: int, ficha_codigo: str = "") ->
     """V20.41: lê, grava (inventory/update, número absoluto) e relê; só é ok quando o TikTok mostra o número.
     Só a variação cujo SKU é o da ficha (ou com vínculo à mão), com UM depósito e produto ativo."""
     res: dict[str, Any] = {"ok": False, "antes": None, "depois": None, "metodo": "inventory/update", "erro": "", "lido": {}}
+    # revisar-antes-de-subir (V20.41): sob o TIKTOK_ESTOQUE_LOCK (a troca de fonte usa a mesma): a extensão nunca abre uma
+    # rodada (grava por diferença) no meio de um envio absoluto pela API.
+    if not TIKTOK_ESTOQUE_LOCK.acquire(timeout=30):
+        res["erro"] = "outro envio de estoque ao TikTok está em andamento; tenta na próxima volta"
+        return res
+    try:
+        return _tiktok_estoque_gravar_api_na_vez(sku_id, qtd, ficha_codigo, res)
+    finally:
+        TIKTOK_ESTOQUE_LOCK.release()
+
+
+def _tiktok_estoque_gravar_api_na_vez(sku_id: str, qtd: int, ficha_codigo: str, res: dict[str, Any]) -> dict[str, Any]:
     if tiktok_fonte() != "api":
         res.update(erro="a fonte do TikTok é a extensão do Seller Center: nada enviado pela API", ignorado="fonte")
         return res

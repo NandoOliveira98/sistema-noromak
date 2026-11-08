@@ -458,6 +458,42 @@ class TrazerDados(Base):
         self.assertEqual(st, 400, c)
 
 
+class RevisaoAntesDeSubir(Base):
+    """revisar-antes-de-subir da V20.41 (07/11)."""
+
+    def test_publicar_confere_a_fonte_de_novo(self):
+        rid = self.pronto()
+        r = S.tiktok_publicar_reservar(rid, "admin")
+        S._tiktok_config_gravar("fonte", "extensao", "dono")  # virou extensão depois do clique
+        with self.apollo():
+            res = S.tiktok_publicar_executar(r, "admin")
+        self.assertEqual(res["situacao"], "validado")
+        self.assertEqual(self.tt.criou(), [], "nada criado com a fonte extensão")
+
+    def test_listing_check_falhou_sem_motivo_nao_e_conferido(self):
+        self.tt.check = {"code": 0, "data": {"check_result": "FAILED", "fail_reasons": [{"codigo": 1}]}}
+        r = self.rascunho()
+        res = S.tiktok_rascunho_conferir(r["id"], "admin")
+        self.assertFalse(res["conferido_tiktok"])
+        self.assertIn("sem um motivo legível", " ".join(res["avisos"]))
+
+    def test_marca_alem_da_lista_cortada_e_buscada_pelo_nome(self):
+        original = self.tt.api
+
+        def api(metodo, path, params=None, body=None, loja=True):
+            if path == "/product/202309/brands":
+                if (params or {}).get("brand_name"):
+                    return {"code": 0, "data": {"brands": [{"id": "7009", "name": "TUNAP"}]}}
+                return {"code": 0, "data": {"brands": [{"id": "1", "name": "Outra"}], "next_page_token": "mais"}}
+            return original(metodo, path, params, body, loja)
+        with mock.patch.object(S, "tiktok_api", new=api), mock.patch.object(S, "TIKTOK_MARCAS_PAGINAS", 2):
+            S._TIKTOK_LEITURA_CACHE.clear()
+            self.assertTrue(S.tiktok_marcas("200")["incompleta"])
+            r = S.tiktok_rascunho_ler(self.rascunho()["id"])
+            erros, ctx = S._tiktok_conferir_local(r)
+        self.assertEqual(ctx["marca"], {"id": "7009", "nome": "TUNAP"})
+
+
 class Tela(TesteNoromak):
 
     def test_painel_e_botao(self):

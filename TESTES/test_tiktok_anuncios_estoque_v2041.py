@@ -138,6 +138,27 @@ class TikTokEstoque(EstoqueBase):
         st, corpo = self.cliente.pedir("POST", "/api/tiktok-estoque/enviar", {})
         self.assertEqual(st, 409, corpo)
 
+    def test_sku_cortado_sem_vinculo_nao_recebe_estoque(self):
+        # revisar-antes-de-subir (V20.41): a regra da V20.08 também na plataforma
+        cortado = "KIT2-" + "1234567/" * 5 + "201104"[:50 - len("KIT2-" + "1234567/" * 5)]
+        cortado = cortado[:50]
+        self.assertEqual(len(cortado), 50)
+        self.variacao(sku=cortado)
+        with self.assertRaises(ValueError) as ctx:
+            S.anuncio_estoque_manual("tiktok", "V1", 8, "luis")
+        self.assertIn("cortado", str(ctx.exception))
+        S.tiktok_vinculo_definir("V1", "1234567/2011044", "dono")
+        self.assertEqual(S._anuncio_estoque_elegivel(self.hub()), "", "com o vínculo à mão vale")
+
+    def test_envio_pela_api_espera_a_trava_da_troca_de_fonte(self):
+        self.variacao()
+        ocupada = mock.Mock()
+        ocupada.acquire.return_value = False
+        with mock.patch.object(S, "TIKTOK_ESTOQUE_LOCK", ocupada):
+            r = S._tiktok_estoque_gravar_api("V1", 8, "P1")
+        self.assertFalse(r["ok"])
+        self.assertEqual(self.tt.escritas, [])
+
     def test_tela(self):
         texto = (S.APP_DIR / "anuncios.html").read_text(encoding="utf-8")
         self.assertIn('tiktok: ["TikTok", "no TikTok"', texto)

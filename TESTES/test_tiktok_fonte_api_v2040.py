@@ -312,6 +312,17 @@ class RevisaoAntesDeSubir(Base):
             self.assertNotIn(dado, txt)
         self.assertIn('"cpf"', txt, "as chaves continuam para conferir o formato")
 
+    def test_amostra_uma_por_rota_de_produto_e_categoria(self):
+        # revisar-antes-de-subir (V20.41): /products/<id> e /categories/<id> não viram uma linha por produto
+        with mock.patch.object(S, "_tiktok_http", return_value={"code": 0, "data": {}}),                 mock.patch.object(S, "tiktok_access_token", return_value="AT"):
+            for pid in ("111", "222"):
+                S.tiktok_api("GET", f"/product/202309/products/{pid}")
+                S.tiktok_api("GET", f"/product/202309/categories/{pid}/attributes")
+        with S.DB_LOCK:
+            tipos = [r[0] for r in S.DB.execute("SELECT tipo FROM tiktok_amostra_v1963 WHERE tipo LIKE 'GET /product/%'")]
+        self.assertEqual(sorted(tipos), ["GET /product/202309/categories/{id}/attributes",
+                                         "GET /product/202309/products/{id}"])
+
     # --- MÉDIOS
     def test_virar_para_api_volta_o_estoque_a_simulacao(self):
         S.tiktok_fonte_definir("extensao", "dono")
