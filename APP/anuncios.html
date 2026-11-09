@@ -1123,7 +1123,7 @@ function desenharPainelEstoque() {
     const desc = !!(d.config || {}).apollo_desconta_atendimento;
     const chave = `<div class="estq-chave"><label><input type="checkbox" ${desc ? "checked" : ""} ${PODE ? "" : "disabled"} data-conta="${esc(conta)}" onchange="mudarDescontaConta(this)">
         Descontar só os pedidos <b>sem atendimento</b> no Apollo</label>
-      <div class="muted">Desligado: desconta todo pedido da fila. Ligue só depois de confirmar com o Guilherme se o Disponível do Apollo já tira a peça do atendimento aberto (senão a venda seria descontada duas vezes).${d.config && d.config.desconta_em ? ` Mudado ${quando(d.config.desconta_em)}${d.config.desconta_por ? " por " + esc(d.config.desconta_por) : ""}.` : ""}</div></div>`;
+      <div class="muted">Desligado: desconta todo pedido da fila. Confirmado com o Guilherme (09/11): o atendimento aberto já sai do Disponível do Apollo (8 de 9 medidos), então descontar a venda que já tem atendimento tira a peça duas vezes. Compare os dois números por alguns dias antes de ligar.${d.config && d.config.desconta_em ? ` Mudado ${quando(d.config.desconta_em)}${d.config.desconta_por ? " por " + esc(d.config.desconta_por) : ""}.` : ""}</div></div>`;
     const env = d.envio || {};
     const envTxt = env.rodando ? `<div class="nk-aviso">Enviando ao Mercado Livre… (começou ${quando(env.iniciado_em)})</div>` : "";
     const rep = (d.erros_repetidos || []).length ? `<div class="nk-aviso bad">${(d.erros_repetidos || []).length} anúncio(s) com 3 erros seguidos: o Automático parou de tentar até o número ou o anúncio mudar (${esc((d.erros_repetidos || []).slice(0, 3).map(e => e.anuncio_id).join(", "))}).</div>` : "";
@@ -1137,7 +1137,12 @@ function desenharPainelEstoque() {
   const log = contas.flatMap(([, d]) => d.log || []).sort((x, y) => String(y.criado_em).localeCompare(String(x.criado_em))).slice(0, 50);
   const selo = l => { const [t, cl] = ESTQ_RES[l.resultado] || [l.resultado || "—", ""]; return `<span class="nk-selo ${cl}">${esc(t)}</span>`; };
   const MODO_ANU = {automatico: "Automático", manual: "Manual"};
-  el.innerHTML = `<div class="nk-painel-tit"><div><h2>Estoque automático</h2><p>Anúncios do ML controlados pelo Noromak em Automático: Apollo da filial menos o vendido e ainda não baixado. Sem leitura do Apollo nada é enviado (nunca zero). O modo vale para a conta inteira; anúncio em Manual nunca é tocado.</p></div></div>
+  // V20.42: o Apollo é relido em lote (todos os códigos a cada minuto); o rodízio de 3/min só cobre quando o lote falha
+  const lote = (contas.map(([, d]) => d.apollo_lote).find(Boolean)) || null;
+  const loteTxt = !lote ? "" : lote.em_dia
+    ? `<div class="muted">Apollo relido a cada minuto, todos os ${Number(lote.codigos || 0)} código(s) de uma vez (último ${quando(lote.ok_em)}).</div>`
+    : `<div class="nk-aviso">Leitura em lote do Apollo fora do ar${lote.erro ? ": " + esc(lote.erro) : ""}. Enquanto isso, o rodízio relê 3 códigos por minuto.</div>`;
+  el.innerHTML = `<div class="nk-painel-tit"><div><h2>Estoque automático</h2><p>Anúncios do ML controlados pelo Noromak em Automático: Apollo da filial menos o vendido e ainda não baixado. Sem leitura do Apollo nada é enviado (nunca zero). O modo vale para a conta inteira; anúncio em Manual nunca é tocado.</p>${loteTxt}</div></div>
     <div class="estq-contas">${contas.map(blocoConta).join("")}</div>
     ${itens.length ? `<details class="rem bloco"><summary>O que mudaria ou está sem número (${itens.length})</summary>
       <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_estoque_mudaria"><thead><tr><th>Conta</th><th>Anúncio</th><th>Produto</th><th class="n">No ML</th><th class="n">Calculado</th><th>Por quê</th></tr></thead>

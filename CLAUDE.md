@@ -1092,7 +1092,7 @@ Prévia: o ML simulado aceita o PUT e o MLB1129555578 tem depósito do vendedor 
 Teste: `TESTES/test_anuncios_estoque_v2026.py`.
 **Revisão final (05/11, "pode corrigir todos"):** (1) chave **por conta** `apollo_desconta_atendimento` em `anuncio_estoque_config_v2026`
 (padrão 0 = desconta todo pendente). O Disponível do Apollo = Contábil − Negociação − Fulfillment; se a Negociação já inclui o atendimento
-que a integração abre para cada venda, descontar a fila tira a venda duas vezes — **ligar só depois de o Guilherme confirmar**. Ligada,
+que a integração abre para cada venda, descontar a fila tira a venda duas vezes — **ligar só depois de o Guilherme confirmar** (V20.42: confirmado em 09/11 — o atendimento aberto entra na Negociação, 8 de 9 medidos; ligar depois de comparar os dois números por alguns dias). Ligada,
 desconta só os pedidos sem atendimento: com atendimento = linha do `faturamento_v1943` com `atendimento` preenchido ou situação
 `feito`/`pronto_caixa`; pedido que o Faturamento não conhece desconta (o lado seguro). Mudar = perfil Admin (sem OWNER), auditado
 (`anuncios.estoque_desconta_atendimento`) e no registro; `POST /api/anuncios/estoque/config {conta, apollo_desconta_atendimento}`. Cada
@@ -1146,6 +1146,22 @@ continua em 0893270212 mesmo confirmado, e "Peça" numa peça comum (sem selo, s
 confirmação (`confirmar_produto`, lista os kits). A busca de peças guarda os candidatos 60 s (`_anuncio_produtos_candidatos`,
 refeita quando muda Precificador, `conf_produtos`, ficha ou leitura do Apollo). Prévia: MLB8000000007 com esse SKU; `PREVIA_PORTA` sobe uma 2ª
 cópia. Teste: `TESTES/test_anuncios_kit_ficha_v2028.py`.
+
+**V20.42 — Apollo relido em lote** (Guilherme, 09/11: a Linx não tem "o que mudou desde" nem aviso; pedido em
+`PEDIDO_PORTA_ESTOQUE_MUDANCAS.md`). `POST /api/v1/expedicao/estoque/lote {codigos (até 500, código até 30), revendas,
+operador}` devolve `itens[{codigo, revenda, disponivel, tem_cadastro, erro}]`, lido na hora, o mesmo número da porta
+`estoque`; limite de **6/min separado** dos 20/min. `anuncios_apollo_lote` (no começo de cada volta do
+`anuncios_estoque_loop`, no máximo 1 por `ANUNCIO_APOLLO_LOTE_S` = 60 s, até `ANUNCIO_APOLLO_LOTE_POR_MINUTO` = 5
+chamadas): todos os códigos em Automático das duas filiais (Shopee/Magalu = Araçatuba, TikTok = Bauru) **e** os do TikTok
+pela extensão (`_tiktok_extensao_le_apollo`, mesmo sem anúncio em Automático), grava nas mesmas linhas do rodízio
+(`anuncio_apollo_v2026`, `tiktok_apollo_v1964`) e marca a filial que mudou. `disponivel`/`tem_cadastro` null ou `erro`
+= None (nunca zero); `tem_cadastro: false` = 0; código pedido que não voltou = None; `ok` diferente de true ou erro =
+nada gravado daquela chamada. **O rodízio de 3/min virou reserva:** só roda sem lote completo nos últimos
+`ANUNCIO_APOLLO_LOTE_RESERVA_S` (180 s) (`apollo_lote_em_dia`), e com o lote em dia só cobre o código maior que 30
+(`apollo_lote_fora`); o mesmo no `tiktok_estoque_loop` (`apollo_lote_em_dia(tiktok=True)`). Porta 404 = tenta de novo
+em 10 min; o mesmo erro vai ao log uma vez. A trava de queda (pedido concluído) solta na leitura do minuto seguinte.
+Tela: linha "Apollo relido a cada minuto" ou o aviso de lote fora no painel Estoque automático (`apollo_lote` no
+`GET /api/anuncios/estoque`). Teste: `TESTES/test_apollo_lote_v2042.py`.
 
 ### Estúdio de Imagens (V20.17: servidor, tela e agente)
 `APP/imagens.html` (`/imagens`, menu Vendas e anúncios, módulo próprio **`imagens`** = `app_users.can_imagens`, mesma
