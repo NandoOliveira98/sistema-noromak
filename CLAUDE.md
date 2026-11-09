@@ -567,6 +567,18 @@ situação desconhecida do Painel de saúde é só da extensão.
 2ª revisão (só das correções): pacote com unidade a enviar vem primeiro (`_tiktok_api_pacote_aberto_primeiro`, pelo
 `package_id` dos line_items; coluna e etiqueta do parcialmente enviado nunca são do pacote já despachado); o preço pela API
 também tira as unidades já enviadas (senão o atendimento ia sempre a revisar); trocar a fonte espera no máximo 20 s pela trava.
+**V20.43 — peças do atendimento comprometidas** (dono, 09/11: "o atendimento balcão precisa cair comprometido"). O
+`atendimento/criar` só abre o atendimento; a porta nova do Guilherme `atendimento/comprometer {revenda, operador, contato}`
+(idempotente; `ja_comprometido` sem chamar o Apollo; cada item com `comprometido`/`motivo`; `?ensaio=1`) é chamada logo depois
+do criar (`tiktok_atendimento_comprometer`) e, se não comprometeu tudo, de novo **só ela** nas voltas seguintes
+(`_tiktok_comp_candidatos`: pedido na fila, sem romaneio/caixa, até `TIKTOK_COMP_MAX` = 5, espera por situação em
+`TIKTOK_COMP_ESPERA`), na mesma vaga de um pedido por volta. Colunas `comprometido` (sim/parcial/nao/erro/incerto/comprometendo),
+`comp_detalhe`, `comp_itens_json`, `comp_tentativas`, `comp_proxima` em `tiktok_atendimento_v2033`. "sim" só com prova (todos os
+itens `comprometido: true` ou `ja_comprometido`); falha no comprometer nunca desfaz o atendimento. `_anuncio_pedidos_com_atendimento`
+só conta o TikTok com `comprometido='sim'` (sem isso o Apollo não reserva: desconta). O botão do painel (`POST
+/api/expedicao-apollo/tiktok-atendimento`) com o atendimento já criado e sem as peças comprometidas só compromete; extensão Linx
+Cliente **0.53**: faixa "Peças do atendimento N não comprometidas" com o botão "Comprometer peças". Teste:
+`TESTES/test_tiktok_comprometer_v2043.py`.
 
 **V20.41 — TikTok igual aos outros na plataforma de anúncios** (dono, 07/11; decisões: estoque "plataforma, por anúncio",
 preço digitado + Apollo de Bauru, promoções do TikTok depois). **Estoque:** conta de estoque `tiktok` (`ESTOQUE_CONTA_TIKTOK` em

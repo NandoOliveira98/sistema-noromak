@@ -74,6 +74,14 @@ class Porta:
             return {"ok": True, "situacao": "criado", "atendimento": 793500, "revenda": corpo["revenda"],
                     "pedido_externo": corpo["pedido_externo"], "valor": corpo["valor_esperado"],
                     "itens": [dict(i, item=k + 1) for k, i in enumerate(corpo["itens"])]}
+        if rota == "atendimento/comprometer":  # V20.43
+            comp = getattr(self, "comprometer", None)
+            if isinstance(comp, Exception):
+                raise comp
+            if comp is not None:
+                return comp
+            return {"ok": True, "situacao": "comprometido", "atendimento": corpo["contato"],
+                    "itens": [{"codigo": "0893600022", "comprometido": True}]}
         raise AssertionError(f"rota inesperada {rota}")
 
     def corpo(self, rota):
