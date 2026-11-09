@@ -561,5 +561,66 @@ class Revisao2(Base):
         self.assertEqual(self.rotas("estoque/lote"), [])
 
 
+class Revisao3(Base):
+    """3ª revisão (09/11): só sobre as correções da 2ª."""
+
+    # 1: sem a lista na memória (reinício), a tela espera a lista em vez de mostrar erro
+    def test_sem_lista_na_memoria_espera_sem_erro(self):
+        S._APOLLO_FILTROS_CACHE.update(em=0.0, dados=None, falha_em=0.0, erro="")
+        a = self.payload()["apollo"]
+        self.assertTrue(a["aguardando_lista"])
+        self.assertEqual(a["erro"], "")
+
+    def test_puxar_espera_a_lista_que_esta_sendo_lida(self):
+        S._APOLLO_FILTROS_CACHE.update(em=0.0, dados=None, falha_em=0.0, erro="")
+        import threading
+        S._APOLLO_FILTROS_LOCK.acquire()
+        threading.Timer(0.3, S._APOLLO_FILTROS_LOCK.release).start()
+        S.apollo_filtro_validar("TECFIL", "")   # não recusa com "não respondeu agora"
+
+    # 2: grupo com peças que volta vazio na 1ª leitura é erro (não liga o modo grupo vazio)
+    def test_grupo_com_pecas_que_volta_vazio_e_erro(self):
+        S.apollo_filtros()
+        self.catalogo = [x for x in self.catalogo if x[2] != "TECFIL"]
+        r = S.apollo_pecas_ler("TECFIL", "", pausa=0)
+        self.assertFalse(r["ok"])
+        produtos = S._compras_produtos_precificador()
+        self.assertEqual(S._compras_regras_marca(produtos)("WG100", "FILTRO WEGA TECFIL"), ["TECFIL"])
+
+    # 3: a casa sem resposta mantém o número só por 24 h
+    def test_numero_antigo_da_casa_vence(self):
+        S.apollo_estoque_lote(["PSL55"], pausa=0)
+        S._apollo_lote_zerar()
+        velho = (S.datetime.now(S.timezone.utc) - S.timedelta(hours=30)).isoformat()
+        with S.DB_LOCK:
+            r = S.DB.execute("SELECT resultado_json FROM compras_estoque_v1912 WHERE codigo='PSL55'").fetchone()
+            res = json.loads(r["resultado_json"])
+            for b in res["branches"]:
+                b["lido_em"] = velho
+            S.DB.execute("UPDATE compras_estoque_v1912 SET resultado_json=? WHERE codigo='PSL55'", (json.dumps(res),))
+            S.DB.commit()
+        self.sem_revenda = {("PSL55", 1)}
+        S.apollo_estoque_lote(["PSL55"], pausa=0)
+        e = S.compras_estoque_guardado(["PSL55"])["PSL55"]
+        self.assertFalse(e["stock_known"], "o número de 30 h atrás não vale mais")
+
+    # 4: código recusado deixa a leitura incompleta; o teto não abandona os outros lotes
+    def test_recusado_deixa_a_leitura_incompleta(self):
+        self.estoque_recusa = {"RUIM1"}
+        r = S.apollo_estoque_lote(["PSL55", "RUIM1"], pausa=0)
+        self.assertFalse(r["ok"])
+        self.assertIn("RUIM1", r["erro"])
+
+    def test_teto_nao_abandona_os_outros_lotes(self):
+        orig = (S.APOLLO_ESTOQUE_MAX_DIVISOES, S.APOLLO_ESTOQUE_LOTE)
+        S.APOLLO_ESTOQUE_MAX_DIVISOES, S.APOLLO_ESTOQUE_LOTE = 1, 4
+        self.addCleanup(lambda: (setattr(S, "APOLLO_ESTOQUE_MAX_DIVISOES", orig[0]), setattr(S, "APOLLO_ESTOQUE_LOTE", orig[1])))
+        S.ANUNCIO_APOLLO_LOTE_POR_MINUTO, por_min = 99, S.ANUNCIO_APOLLO_LOTE_POR_MINUTO
+        self.addCleanup(setattr, S, "ANUNCIO_APOLLO_LOTE_POR_MINUTO", por_min)
+        self.estoque_recusa = {"A1", "A2", "A3", "A4"}
+        S.apollo_estoque_lote(["A1", "A2", "A3", "A4", "PSL55"], pausa=0)
+        self.assertIn("PSL55", S.compras_estoque_guardado(["PSL55"]))
+
+
 if __name__ == "__main__":
     unittest.main()

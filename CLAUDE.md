@@ -1763,6 +1763,11 @@ leitura (antes, as regras antigas) e a Marca do cadastro não conta com grupo; l
 nome do grupo normalizado dos dois lados (`_apollo_nome`); o iniciar pega a vez (`APOLLO_GRUPO_LOCK`) antes de responder; outra
 leitura rodando aparece na tela (`outra_rodando`, consulta a cada 30 s); a noite confere o fim da janela também no estoque e nas
 perguntas da Linx, e interrompida não conta como ok. Teste: classe `Revisao2`.
+**3ª revisão (09/11):** a tela pede a lista de grupos antes da 1ª demanda e, sem ela na memória (reinício), mostra "buscando" e
+confere de novo (`aguardando_lista`, sem erro falso); quem chega com a lista sendo lida espera ela; grupo que a lista diz ter peças e
+volta vazio é erro, e lista vazia não liga o modo grupo nas outras telas; o número antigo de uma casa sem resposta vale só 24 h e
+guarda a data dele (`lido_em`/`antigo` em cada casa); código recusado (422) deixa a leitura incompleta (o `estoque_em` não é renovado)
+e o teto de divisões desiste só daquele lote. Teste: classe `Revisao3`.
 
 ### Linx Smart API (levantamento 21/09/2026)
 API oficial da Linx para o Linx DMS, na nuvem: gateway `https://auto-gwsmartapi.linx.com.br/<api>`,

@@ -45069,10 +45069,11 @@ def _compras_codigos_dos_fornecedores(nome: str = "") -> list[str]:
         marca = {_compras_codigo(str(p.get("SKU") or ""), produtos) for p in linhas
                  if str(p.get("Marca") or "").strip().upper() == cfg["nome"]}
         ch = apollo_filtro_chave(cfg.get("grupos"), cfg.get("categorias"))
-        if ch and (apollo_filtro_info(ch) or {}).get("lido_em"):
+        pecas_f = [x["codigo"] for x in apollo_pecas_do_filtro(ch)] if ch else []
+        if ch and pecas_f and (apollo_filtro_info(ch) or {}).get("lido_em"):
             # V20.44 (revisão, achado 11): com grupo já lido, as peças do Apollo dele (sem as lidas sem venda)
             # + a lista de códigos; a Marca do cadastro não conta (2ª revisão, achado 7)
-            saida.update(apollo_codigos_a_perguntar([x["codigo"] for x in apollo_pecas_do_filtro(ch)]))
+            saida.update(apollo_codigos_a_perguntar(pecas_f))
             saida.update(c for c in cfg["codigos"])
             continue
         for codigo, p in produtos.items():
@@ -45426,6 +45427,8 @@ def compras_demanda_payload(fornecedor: str, dias: int, filial: str = "1", grupo
         except ValueError as exc:
             invalido = str(exc)
         recusado = bool(invalido) and bool(filtros.get("ok"))   # lista respondeu e o filtro não existe
+        # 3ª revisão (achado 1): sem a lista na memória (reinício) não é erro — a tela pede a lista e confere de novo
+        aguardando_lista = not filtros.get("ok")
         if pode_iniciar and not invalido:
             apollo_filtro_marcar_uso(grupos, categorias)
         info = (apollo_filtro_info(chave) or {}) if not recusado else {}
@@ -45461,7 +45464,8 @@ def compras_demanda_payload(fornecedor: str, dias: int, filial: str = "1", grupo
                   "venderam": len(candidatos), "nao_lidas": nao_lidas,
                   "sem_venda": len(base) - len(candidatos) - nao_lidas, "pode_puxar": pode_iniciar,
                   "sem_categoria_lida": info.get("sem_categoria_lida"), "copia_de": info.get("copia_de") or "",
-                  "estoque_em": info.get("estoque_em") or "", "erro": invalido or info.get("erro") or "",
+                  "estoque_em": info.get("estoque_em") or "",
+                  "erro": (invalido if recusado else "") or info.get("erro") or "", "aguardando_lista": aguardando_lista,
                   "erro_em": info.get("erro_em") or "", "iniciado": iniciado,
                   "rodando": bool(APOLLO_GRUPO_ESTADO.get("rodando")) and APOLLO_GRUPO_ESTADO.get("chave") == chave,
                   "etapa": APOLLO_GRUPO_ESTADO.get("etapa") or "",
@@ -45553,7 +45557,8 @@ APOLLO_ERRO_ESPERA_S = 1800            # revisão: filtro que deu erro não é r
 APOLLO_FILTRO_MAX_VALORES = 10         # revisão: grupos (e categorias) por filtro
 APOLLO_FILTROS_TIMEOUT = 10            # 2ª revisão: prazo de cada leitura da lista de grupos/categorias
 APOLLO_FILTROS_FALHA_S = 300           # 2ª revisão: falha da lista guardada (não repete a cada clique)
-APOLLO_ESTOQUE_MAX_DIVISOES = 12       # 2ª revisão: divisões por 422 numa leitura (depois, para)
+APOLLO_ESTOQUE_MAX_DIVISOES = 12       # 2ª revisão: divisões por 422 em cada lote (depois, desiste daquele lote)
+APOLLO_ESTOQUE_CASA_VALIDADE_S = 24 * 3600   # 3ª revisão: número antigo de uma casa sem resposta vale até isto
 APOLLO_ESTOQUE_RECUSADO_S = 3600       # 2ª revisão: código recusado pela porta fica fora por 1 h
 _APOLLO_ESTOQUE_RECUSADOS: dict[str, float] = {}
 _APOLLO_FILTROS_LOCK = threading.Lock()
@@ -45635,8 +45640,12 @@ def apollo_filtros(forcar: bool = False, so_cache: bool = False) -> dict[str, An
         return cache["dados"]
     if not forcar and cache.get("falha_em") and agora - cache["falha_em"] < APOLLO_FILTROS_FALHA_S:
         return {**(cache["dados"] or vazio), "erro": cache.get("erro") or "a porta não respondeu"}
-    if not _APOLLO_FILTROS_LOCK.acquire(blocking=False):
+    # 3ª revisão (achado 1): quem chega com a lista sendo lida espera ela (2 leituras de até 10 s)
+    if not _APOLLO_FILTROS_LOCK.acquire(timeout=2 * APOLLO_FILTROS_TIMEOUT + 5):
         return cache["dados"] or {**vazio, "erro": "lendo a lista de grupos do Apollo; tente de novo"}
+    if cache["dados"] and time.time() - cache["em"] < APOLLO_FILTROS_CACHE_S and not forcar:
+        _APOLLO_FILTROS_LOCK.release()   # quem estava lendo já trouxe
+        return cache["dados"]
     try:
         g = _exp_porta_get("pecas/grupos", {"operador": "noromak-demanda"}, timeout=APOLLO_FILTROS_TIMEOUT)
         c = _exp_porta_get("pecas/categorias", {"operador": "noromak-demanda"}, timeout=APOLLO_FILTROS_TIMEOUT)
@@ -45796,6 +45805,11 @@ def apollo_pecas_ler(grupos: Any, categorias: Any, *, pausa: float | None = None
                 havia = DB.execute("SELECT 1 FROM apollo_peca_v2044 WHERE chave=? LIMIT 1", (chave,)).fetchone()
             if havia:
                 raise PortaErro("a porta devolveu a lista vazia para esse filtro: a lista anterior fica")
+            # 3ª revisão (achado 2): grupo que a lista diz ter peças e volta vazio = incoerente, não liga o modo grupo
+            conhecidas = {_apollo_nome(x.get("nome")): x.get("pecas")
+                          for x in (apollo_filtros(so_cache=True).get("grupos") or [])}
+            if g and not c and any(isinstance(conhecidas.get(x), (int, float)) and conhecidas[x] > 0 for x in g):
+                raise PortaErro("a porta devolveu a lista vazia para um grupo que tem peças: tente de novo mais tarde")
         if isinstance(total, (int, float)) and len(itens) < 0.9 * total:
             raise PortaErro(f"leitura incompleta ({len(itens)} de {int(total)} peças): a lista anterior fica")
     except PortaErro as exc:
@@ -45853,12 +45867,19 @@ def apollo_estoque_lote(codigos: list[str], *, pausa: float | None = None,
     pedir = [c for c in todos if len(c) <= ANUNCIO_APOLLO_LOTE_COD_MAX and c not in recusados]
     divisoes = 0
     fila = [pedir[i:i + APOLLO_ESTOQUE_LOTE] for i in range(0, len(pedir), APOLLO_ESTOQUE_LOTE)]
+    raiz = {id(x): n for n, x in enumerate(fila)}   # 3ª revisão (achado 4): teto de divisões por lote de origem
+    divisoes_raiz: dict[int, int] = {}
+    desistidos: set[int] = set()
+    recusados_agora: list[str] = []
     revs = list(APOLLO_ESTOQUE_REVENDAS)
     lidos = sem = 0
     erro = ""
     primeira = True
     while fila:
         parte = fila.pop(0)
+        r_id = raiz.get(id(parte), -1)
+        if r_id in desistidos:
+            continue
         if not primeira and pausa > 0:
             if stop_event is not None:
                 if stop_event.wait(pausa):
@@ -45879,14 +45900,20 @@ def apollo_estoque_lote(codigos: list[str], *, pausa: float | None = None,
             if getattr(exc, "status", None) == 422:
                 if len(parte) > 1:
                     divisoes += 1   # 2ª revisão (achado 3): teto de divisões (422 da chamada inteira não vira horas)
-                    if divisoes > APOLLO_ESTOQUE_MAX_DIVISOES:
-                        erro = "a porta do estoque recusou o pedido (422) muitas vezes: o resto fica para depois"
-                        break
+                    divisoes_raiz[r_id] = divisoes_raiz.get(r_id, 0) + 1
+                    if divisoes_raiz[r_id] > APOLLO_ESTOQUE_MAX_DIVISOES:
+                        desistidos.add(r_id)   # 3ª revisão: desiste só deste lote, os outros seguem
+                        primeira = True
+                        continue
                     meio = len(parte) // 2
-                    fila[:0] = [parte[:meio], parte[meio:]]
+                    metades = [parte[:meio], parte[meio:]]
+                    for m in metades:
+                        raiz[id(m)] = r_id
+                    fila[:0] = metades
                     primeira = True
                     continue
                 fora.append(parte[0])
+                recusados_agora.append(parte[0])
                 _APOLLO_ESTOQUE_RECUSADOS[parte[0]] = time.monotonic() + APOLLO_ESTOQUE_RECUSADO_S
                 print(f"[demanda-grupo] estoque/lote recusou o código {parte[0]} (fora por 1 h)",
                       file=sys.stderr, flush=True)
@@ -45905,20 +45932,25 @@ def apollo_estoque_lote(codigos: list[str], *, pausa: float | None = None,
             n = normalize(cod)
             estoques, faltam = [], []
             antes = {}
-            for b in (anteriores.get(cod) or {}).get("branches") or []:
+            ant = anteriores.get(cod) or {}
+            limite_casa = (datetime.now(timezone.utc) - timedelta(seconds=APOLLO_ESTOQUE_CASA_VALIDADE_S)).isoformat()
+            for b in ant.get("branches") or []:
                 try:
-                    if b.get("disponivel") is not None:
-                        antes[int(b.get("revenda"))] = float(b["disponivel"])
+                    lido_b = str(b.get("lido_em") or ant.get("consultado_em") or "")
+                    # 3ª revisão (achado 3): só número de até 24 h, com a data dele (nunca a de agora)
+                    if b.get("disponivel") is not None and lido_b and lido_b >= limite_casa:
+                        antes[int(b.get("revenda"))] = (float(b["disponivel"]), lido_b)
                 except (TypeError, ValueError):
                     pass
             novos = 0
             for rev in revs:
                 v = valores.get((n, rev), (None, 0))[0]
                 if v is not None:
-                    estoques.append({"revenda": rev, "disponivel": v})
+                    estoques.append({"revenda": rev, "disponivel": v, "lido_em": quando})
                     novos += 1
-                elif rev in antes:   # casa sem resposta agora: fica o número que ela tinha (nunca vira desconhecido)
-                    estoques.append({"revenda": rev, "disponivel": antes[rev]})
+                elif rev in antes:   # casa sem resposta agora: fica o número que ela tinha, com a data dele
+                    estoques.append({"revenda": rev, "disponivel": antes[rev][0], "lido_em": antes[rev][1],
+                                     "antigo": True})
                 else:
                     faltam.append(rev)
             if not novos:
@@ -45937,6 +45969,11 @@ def apollo_estoque_lote(codigos: list[str], *, pausa: float | None = None,
                                "resultado_json=excluded.resultado_json", linhas)
                 DB.commit()
         lidos += len(linhas)
+    # 3ª revisão (achado 4): recusado ou lote abandonado = leitura incompleta (o estoque_em não é renovado)
+    if not erro and desistidos:
+        erro = "a porta do estoque recusou o pedido (422) muitas vezes num lote: parte fica para depois"
+    if not erro and recusados_agora:
+        erro = f"a porta do estoque recusou {len(recusados_agora)} código(s): {', '.join(recusados_agora[:5])}"[:300]
     return {"ok": not erro, "codigos": len(todos), "lidos": lidos, "sem_resposta": sem, "fora": len(fora),
             "erro": erro}
 
@@ -46265,7 +46302,9 @@ def _compras_regras_marca(produtos: dict[str, Any]) -> Any:
     for f in fornecedores:
         ch = apollo_filtro_chave(f.get("grupos"), f.get("categorias"))
         if ch and (apollo_filtro_info(ch) or {}).get("lido_em"):
-            do_apollo[f["nome"]] = {x["codigo"] for x in apollo_pecas_do_filtro(ch)}
+            pecas_f = {x["codigo"] for x in apollo_pecas_do_filtro(ch)}
+            if pecas_f:   # 3ª revisão (achado 2): lista vazia não liga o modo grupo
+                do_apollo[f["nome"]] = pecas_f
 
     def marcas(codigo: str, descricao: str) -> list[str]:
         if codigo in manual:
