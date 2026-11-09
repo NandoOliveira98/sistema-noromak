@@ -88,6 +88,14 @@ Consequências práticas, não negociáveis:
   é registrado e o worker reinicia em 60 s. `manutencao_diaria_loop` apaga
   `ml_event_log`/`shopee_event_log` com mais de 90 dias (`audit_log` **não** é limpo).
 - Respostas HTTP são montadas sob o `DB_LOCK` e **enviadas fora dele** (V18.56).
+- **V20.46 — memória presa:** em 09/11 o processo tinha 410 MB (RSS + swap) com 54 min no ar,
+  ~200 MB em 20 arenas do malloc (uma por thread, ~100 threads) que não voltavam ao sistema; na
+  VPS de 1 GB (dividida com o NoromakWeb) tudo ia para o swap e o cadastro/romaneio da extensão
+  passavam de 60 s (nginx cortava = "erro HTTP"). No import, `memoria_limitar_arenas()` pede
+  `mallopt(M_ARENA_MAX, 2)` (antes de qualquer thread); o worker `memoria_loop` chama
+  `malloc_trim(0)` a cada 10 min e mede antes/depois (`_MEMORIA_ESTADO`, item "Memória do Noromak"
+  no Painel de saúde, atenção acima de 400 MB — o systemd tem `MemoryMax` de 500 MB). Fora do
+  Linux não faz nada. Teste: `TESTES/test_memoria_v2046.py`.
 - Front-end: HTML/CSS/JS puro em `APP/`, sem build step. Arquivos monolíticos.
 - Segredos reais só em `/home/expedicao/.env` no servidor. Ver `.env.example`.
 

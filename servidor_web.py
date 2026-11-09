@@ -45,11 +45,95 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
+# V20.46: memória presa. Medido em produção (09/11): 410 MB (RSS + swap) com 54 min no ar,
+# ~200 MB em 20 blocos de 5–17 MB — as "arenas" que o malloc do glibc cria para cada thread
+# (o processo tem ~100) e não devolve ao sistema. Na VPS de 1 GB isso vai para o swap e o
+# cadastro/romaneio passavam de 60 s (o nginx cortava: "erro HTTP" na extensão).
+# 1) limita as arenas a 2 (M_ARENA_MAX) aqui, antes de qualquer thread nascer;
+# 2) o worker memoria_loop chama malloc_trim(0) a cada 10 min e mede quanto voltou
+#    (Painel de saúde). Fora do Linux (testes no Windows) nada acontece.
+MEMORIA_ARENAS_MAX = 2
+MEMORIA_DEVOLVER_SEGUNDOS = 600
+MEMORIA_HISTORICO_MAX = 12
+MEMORIA_ATENCAO_MB = 400   # o serviço tem MemoryMax de 500 MB no systemd
+_MEMORIA_ESTADO: dict[str, Any] = {"arenas": None, "ultimo": None, "historico": [],
+                                   "total_devolvido_mb": 0.0, "vezes": 0}
+_MEMORIA_LOCK = threading.Lock()
+
+
+def _memoria_libc() -> Any:
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        import ctypes
+        return ctypes.CDLL("libc.so.6")
+    except (OSError, ImportError):
+        return None
+
+
+def memoria_limitar_arenas(libc: Any = None) -> bool | None:
+    libc = libc if libc is not None else _memoria_libc()
+    if libc is None:
+        return None
+    try:
+        ok = int(libc.mallopt(-8, MEMORIA_ARENAS_MAX)) == 1   # -8 = M_ARENA_MAX
+    except Exception:
+        return None
+    _MEMORIA_ESTADO["arenas"] = ok
+    return ok
+
+
+def memoria_processo() -> dict[str, float] | None:
+    """RSS e swap deste processo, em MB (só Linux)."""
+    try:
+        dados: dict[str, float] = {}
+        with open("/proc/self/status", encoding="utf-8") as fh:
+            for linha in fh:
+                if linha.startswith(("VmRSS:", "VmSwap:")):
+                    chave, _, valor = linha.partition(":")
+                    dados[chave] = int(valor.split()[0]) / 1024
+        if "VmRSS" not in dados:
+            return None
+        return {"rss_mb": round(dados["VmRSS"], 1), "swap_mb": round(dados.get("VmSwap", 0.0), 1)}
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def memoria_devolver(libc: Any = None, ler: Callable[[], dict[str, float] | None] | None = None) -> dict[str, Any] | None:
+    """malloc_trim(0): devolve ao sistema o que está livre nas arenas. Mede antes/depois."""
+    libc = libc if libc is not None else _memoria_libc()
+    if libc is None:
+        return None
+    ler = ler or memoria_processo
+    with _MEMORIA_LOCK:
+        antes = ler()
+        inicio = time.time()
+        try:
+            libc.malloc_trim(0)
+        except Exception:
+            return None
+        duracao = time.time() - inicio
+        depois = ler()
+        if not antes or not depois:
+            return None
+        a = round(antes["rss_mb"] + antes["swap_mb"], 1)
+        d = round(depois["rss_mb"] + depois["swap_mb"], 1)
+        r = {"quando": time.time(), "antes_mb": a, "depois_mb": d, "devolvido_mb": round(max(0.0, a - d), 1),
+             "duracao_s": round(duracao, 3)}
+        _MEMORIA_ESTADO["ultimo"] = r
+        _MEMORIA_ESTADO["historico"] = (_MEMORIA_ESTADO["historico"] + [r])[-MEMORIA_HISTORICO_MAX:]
+        _MEMORIA_ESTADO["total_devolvido_mb"] = round(_MEMORIA_ESTADO["total_devolvido_mb"] + r["devolvido_mb"], 1)
+        _MEMORIA_ESTADO["vezes"] += 1
+        return r
+
+
+memoria_limitar_arenas()
+
 # V18.65: a fonte do tema (APP/fonts/*.woff2) fica no próprio servidor — o CSP só
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.45-DEMANDA-CATEGORIA"
+APP_VERSION = "20.46-MEMORIA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -55382,6 +55466,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "linx_clientes_loop": ("Clientes no Linx", False, 120),
     "saude_alertas_loop": ("Alertas de saúde", False, 20),
     "avisos_venda_loop": ("Avisos de venda (notificações)", False, 20),
+    "memoria_loop": ("Devolução de memória ao sistema", False, 30),  # V20.46
 }
 
 
@@ -55710,6 +55795,26 @@ def _saude_disco() -> list[dict[str, Any]]:
     return itens
 
 
+def _saude_memoria_noromak() -> dict[str, Any]:
+    """V20.46: quanto o próprio Noromak usa (RSS + swap) e quanto a devolução periódica soltou."""
+    g = "Servidor"
+    uso = memoria_processo()
+    if not uso:
+        return _saude_item("memoria_noromak", g, "Memória do Noromak", "info", "Medição disponível só no servidor Linux")
+    total = uso["rss_mb"] + uso["swap_mb"]
+    resumo = f"Usando {total:.0f} MB ({uso['swap_mb']:.0f} MB no swap)"
+    ult = _MEMORIA_ESTADO.get("ultimo")
+    if ult:
+        hora = datetime.fromtimestamp(ult["quando"], timezone.utc).astimezone(timezone(timedelta(hours=-3))).strftime("%H:%M")
+        resumo += f" · última devolução às {hora}: {ult['devolvido_mb']:.0f} MB"
+    detalhe = (f"Devolvidos {_MEMORIA_ESTADO['total_devolvido_mb']:.0f} MB em {_MEMORIA_ESTADO['vezes']} vez(es) desde que subiu. "
+               f"Limite de arenas do malloc: {'2 (ativo)' if _MEMORIA_ESTADO.get('arenas') else 'não aplicado'}.")
+    nivel = "atencao" if total > MEMORIA_ATENCAO_MB else "ok"
+    if nivel != "ok":
+        detalhe += " Perto do limite de 500 MB do serviço: o sistema joga o resto no swap e a bipagem e o Apollo ficam lentos."
+    return _saude_item("memoria_noromak", g, "Memória do Noromak", nivel, resumo, detalhe)
+
+
 def _saude_maquina() -> list[dict[str, Any]]:
     g = "Servidor"
     itens: list[dict[str, Any]] = []
@@ -55721,6 +55826,7 @@ def _saude_maquina() -> list[dict[str, Any]]:
                                  f"{mem['livre_mb']:.0f} MB livres de {mem['total_mb']:.0f} MB ({mem['livre_pct']:.0f}%)" + swap))
     else:
         itens.append(_saude_item("memoria", g, "Memória", "info", "Medição disponível só no servidor Linux"))
+    itens.append(_saude_memoria_noromak())   # V20.46
     pct = _saude_cpu_processo()
     carga = ""
     if hasattr(os, "getloadavg"):
@@ -56343,6 +56449,21 @@ def etiquetas_limpeza_loop(stop_event: threading.Event) -> None:
             break
 
 
+def memoria_loop(stop_event: threading.Event) -> None:
+    """V20.46: a cada 10 min devolve ao sistema a memória livre das arenas do malloc."""
+    if stop_event.wait(120):
+        return
+    while not stop_event.is_set():
+        r = memoria_devolver()
+        if r is None:   # fora do Linux / sem glibc: nada a fazer
+            return
+        if r["devolvido_mb"] >= 5:
+            print(f"[memoria] devolvidos {r['devolvido_mb']:.0f} MB ({r['antes_mb']:.0f} -> {r['depois_mb']:.0f} MB, "
+                  f"{r['duracao_s']:.2f} s)", flush=True)
+        if stop_event.wait(MEMORIA_DEVOLVER_SEGUNDOS):
+            break
+
+
 def manutencao_diaria_loop(stop_event: threading.Event) -> None:
     if stop_event.wait(300):
         return
@@ -56622,11 +56743,19 @@ def main() -> None:
         name="avisos-venda",
         daemon=True,
     )
+    # V20.46: devolve a memória livre das arenas do malloc a cada 10 min.
+    memoria_thread = threading.Thread(
+        target=_worker_protegido(memoria_loop),
+        args=(watcher_stop,),
+        name="memoria",
+        daemon=True,
+    )
     _ml_worker_state_update(started_at=now_iso(), last_error="")
     # V18.63: EXP_WORKERS=0 sobe só o HTTP — teste de boot e homologação. Uma cópia do
     # banco tem os tokens de produção e o refresh_token do ML é de uso único: um
     # worker rodando fora da produção derrubaria a conexão de verdade.
     if WORKERS_ENABLED:
+        memoria_thread.start()
         manutencao_thread.start()
         watcher_thread.start()
         new_order_thread.start()
