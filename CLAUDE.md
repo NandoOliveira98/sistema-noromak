@@ -1743,7 +1743,18 @@ páginas (erro não apaga; > `APOLLO_PECAS_MAX` 5000 = recusado, "escolha a cate
 `sem_categoria_lida` (> 0 com categoria = "lista incompleta" na tela), erro e uso. Filtro nunca lido começa a ler sozinho ao abrir;
 "↻ Puxar do Apollo" (`POST /api/compras/apollo/puxar`, gestor; 409 se já roda) relê em 2º plano; à noite o `linx_demanda_loop` relê
 lista+estoque dos filtros usados em 30 dias e a demanda deles. `GET /api/compras/apollo/filtros` (grupos e categorias, 1 h em
-memória). O estoque/lote divide o limite de **6/min** com o estoque automático dos anúncios. Teste: `TESTES/test_demanda_grupo_v2044.py`.
+memória). Teste: `TESTES/test_demanda_grupo_v2044.py` (classe `Revisao`).
+**revisar-antes-de-subir (09/11, "corrigir todos"):** só o gestor (não Compras/Consulta) marca o filtro em uso e dispara a 1ª
+leitura (`pode_iniciar`); grupo tem de existir em `pecas/grupos` e categoria é código (`apollo_filtro_validar`, até 10 de cada;
+também no puxar e ao salvar o fornecedor); filtro com erro há menos de 30 min não é relido sozinho (sem laço de 15 s). O estoque em
+lote passa pela **mesma conta de chamadas da V20.42** (`_APOLLO_LOTE_CHAMADAS`, deixando 1 vaga por minuto aos anúncios; 1 lote
+por minuto, espera a vaga ≤ 90 s), lê pela regra dela (`_apollo_lote_ler_itens`), código > 30 caracteres fica fora, 422 divide o
+lote, resposta sem `itens` não grava nada e código sem nenhuma casa lida não apaga a leitura anterior. Lista vazia ou < 90% do
+`total` não substitui a guardada. Marca à mão para outro fornecedor vence o grupo (sem compra dobrada). "Ainda sem leitura da
+demanda" é contado à parte (`nao_lidas`), não como "sem venda"; Linx ocupada no Puxar = erro, não "lido". À noite o estoque lido há
+menos de 20 h não é relido e a rodada da Linx para às 6h (`noite=True`, `_linx_noite_acabou`). Fornecedor com grupo tem as peças do
+Apollo também na demanda geral, no e-mail, na Ruptura por marca e na rodada da Linx (`_compras_regras_marca`,
+`_compras_codigos_dos_fornecedores`, `apollo_filtros_dos_fornecedores`); venda do e-commerce de peça do Apollo fora do Precificador conta.
 
 ### Linx Smart API (levantamento 21/09/2026)
 API oficial da Linx para o Linx DMS, na nuvem: gateway `https://auto-gwsmartapi.linx.com.br/<api>`,
