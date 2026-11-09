@@ -1174,6 +1174,17 @@ nada gravado daquela chamada. **O rodízio de 3/min virou reserva:** só roda se
 em 10 min; o mesmo erro vai ao log uma vez. A trava de queda (pedido concluído) solta na leitura do minuto seguinte.
 Tela: linha "Apollo relido a cada minuto" ou o aviso de lote fora no painel Estoque automático (`apollo_lote` no
 `GET /api/anuncios/estoque`). Teste: `TESTES/test_apollo_lote_v2042.py`.
+**revisar-antes-de-subir (09/11, "corrigir os 5"):** (1) peça com `tem_cadastro: false` em **todas** as casas pedidas = None
+(a porta `estoque` responde `ok: false` e o rodízio gravava None: SKU errado, Peça confirmada com dois códigos, peça errada
+no kit) — nunca 0, que pausaria o anúncio; sem cadastro só numa casa continua 0. (2) Código que voltou sem número (ou não
+voltou) entra no `apollo_lote_fora` e o rodízio cobre; o código da resposta casa pelo `normalize` e, sem isso, pelo
+`_exp_norm_codigo` (sem pontos); sem número não apaga uma leitura boa dos últimos 180 s; TikTok com algum código sem
+número não fica "em dia". (3) Tudo vai à porta pelo `normalize` (o SKU do TikTok tinha espaço); 422 divide a chamada ao meio
+até achar o código recusado, que fica fora do lote por 1 h (`ANUNCIO_APOLLO_LOTE_RECUSADO_S`) e vai pelo rodízio;
+`PortaErro.status` = código HTTP (o 404 não é mais achado no texto). (4) `lido_epoch` = a hora de **antes** da chamada
+(senão a trava de queda soltava cedo) e o lote nunca grava por cima de leitura mais nova (o rodízio leu depois), também no
+TikTok. (5) O lote roda numa thread (`anuncios_apollo_lote_fundo`, um por vez, `_APOLLO_LOTE_RODANDO`); a volta espera no
+máximo `ANUNCIO_APOLLO_LOTE_ESPERA_S` (15 s) e a filial que mudou depois entra na volta seguinte (`_APOLLO_LOTE_MUDANCAS`).
 
 ### Estúdio de Imagens (V20.17: servidor, tela e agente)
 `APP/imagens.html` (`/imagens`, menu Vendas e anúncios, módulo próprio **`imagens`** = `app_users.can_imagens`, mesma

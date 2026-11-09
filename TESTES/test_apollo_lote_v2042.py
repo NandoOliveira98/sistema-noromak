@@ -117,12 +117,16 @@ class LeituraEmLoteTeste(LoteBase):
         self.assertIsNone(r["disponivel"])
         self.assertEqual(r["respondeu"], 0)
 
-    def test_sem_cadastro_no_apollo_e_zero(self):
+    def test_sem_cadastro_so_nesta_casa_e_zero(self):
+        """A peca existe no Apollo (cadastrada em Bauru) mas nao em Araçatuba: Araçatuba = 0, como na porta estoque."""
         inserir(ficha="P1", modo="automatico")
+        inserir(conta="bauru", anuncio_id="MLB9", ficha="P1", modo="automatico")
         self.porta.estoque[("P1", 1)] = "sem_cadastro"
+        self.porta.estoque[("P1", 3)] = 5
         S.anuncios_apollo_lote(set())
         self.assertEqual(apollo("P1")["disponivel"], 0)
         self.assertEqual(apollo("P1")["respondeu"], 1)
+        self.assertEqual(apollo("P1", "bauru")["disponivel"], 5)
 
     def test_codigo_que_nao_voltou_e_nulo(self):
         inserir(anuncio_id="MLB1", ficha="P1", modo="automatico")
@@ -176,9 +180,230 @@ class LeituraEmLoteTeste(LoteBase):
     def test_porta_nao_liberada_espera_10_min(self):
         inserir(ficha="P1", modo="automatico")
         self.porta.erro = S.PortaErro("A porta do Apollo para esta etapa ainda não está liberada (404).")
+        self.porta.erro.status = 404
         S.anuncios_apollo_lote(set())
         S._APOLLO_LOTE_ESTADO["tentado_mono"] -= S.ANUNCIO_APOLLO_LOTE_S + 1
         S.anuncios_apollo_lote(set())
+        self.assertEqual(len(self.porta.chamadas), 1)
+
+
+def tiktok_sku(seller_sku="TK1"):
+    with S.DB_LOCK:
+        S.DB.execute("INSERT OR REPLACE INTO tiktok_sku_v1964(sku_id,product_id,titulo,seller_sku,status) "
+                     "VALUES('S1','PR1','Prod',?,'ACTIVATE')", (seller_sku,))
+        S.DB.commit()
+    S._tiktok_config_gravar("extensao_lida_epoch", str(int(time.time())), "teste")
+
+
+class RevisaoTeste(LoteBase):
+    """revisar-antes-de-subir da V20.42 (09/11): os 5 achados corrigidos."""
+
+    def test_1_peca_que_nao_existe_no_apollo_nao_vira_zero(self):
+        """A porta estoque responde ok:false (peca inexistente em todas as casas) e o rodizio gravava None.
+        No lote ela volta tem_cadastro:false em todas as casas pedidas: tem de ficar sem leitura, nunca 0."""
+        inserir(ficha="ERRADO1", modo="automatico")
+        self.porta.estoque[("ERRADO1", 1)] = "sem_cadastro"
+        S.anuncios_apollo_lote(set())
+        r = apollo("ERRADO1")
+        self.assertIsNone(r["disponivel"])
+        self.assertEqual(r["respondeu"], 0)
+
+    def test_1_peca_inexistente_nao_manda_zero_ao_ml(self):
+        inserir(ficha="ERRADO1", modo="automatico")
+        self.porta.estoque[("ERRADO1", 1)] = "sem_cadastro"
+        self.apollo["ERRADO1"] = RuntimeError("Peça não encontrada no Apollo.")
+        S.anuncio_estoque_config_definir("aracatuba", "automatico", "luis")
+        self.ml.item("MLB1", 7)
+        S.anuncios_estoque_volta({})
+        self.assertEqual(self.ml.escritas(), [])
+        self.assertEqual(self.ml.itens["MLB1"]["available_quantity"], 7)
+
+    def test_1_tiktok_peca_inexistente_sem_leitura(self):
+        tiktok_sku()
+        self.porta.estoque[("TK1", 3)] = "sem_cadastro"
+        S.anuncios_apollo_lote(set())
+        with S.DB_LOCK:
+            r = dict(S.DB.execute("SELECT * FROM tiktok_apollo_v1964 WHERE codigo='TK1'").fetchone())
+        self.assertIsNone(r["disponivel"])
+        self.assertEqual(r["respondeu"], 0)
+
+    def test_2_codigo_sem_numero_vai_para_o_rodizio(self):
+        inserir(anuncio_id="MLB1", ficha="P1", modo="automatico")
+        inserir(anuncio_id="MLB2", ficha="P2", modo="automatico")
+        self.porta.estoque.update({("P1", 1): 10, ("P2", 1): None})
+        self.apollo["P2"] = {1: 6}
+        self.assertTrue(S.anuncios_apollo_lote(set()))
+        self.assertTrue(S.apollo_lote_em_dia())
+        self.assertEqual(S.apollo_lote_fora("aracatuba"), {"P2"})
+        S._APOLLO_LOTE_ESTADO["tentado_mono"] = time.monotonic()  # a volta nao chama o lote de novo agora
+        S.anuncios_estoque_volta({})
+        self.assertEqual(self.apollo_chamadas, ["P2"])  # o rodizio leu so o P2
+        self.assertEqual(apollo("P2")["disponivel"], 6)
+
+    def test_2_lote_sem_numero_nao_apaga_a_leitura_do_rodizio(self):
+        inserir(ficha="P2", modo="automatico")
+        self.apollo["P2"] = {1: 6}
+        S.anuncios_apollo_ler("P2", "aracatuba")  # o rodizio acabou de ler
+        self.porta.estoque[("P2", 1)] = None
+        S.anuncios_apollo_lote(set())
+        self.assertEqual(apollo("P2")["disponivel"], 6)
+
+    def test_2_sem_numero_e_leitura_velha_fica_nulo(self):
+        inserir(ficha="P2", modo="automatico")
+        self.apollo["P2"] = {1: 6}
+        S.anuncios_apollo_ler("P2", "aracatuba")
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE anuncio_apollo_v2026 SET lido_epoch=lido_epoch-?",
+                         (S.ANUNCIO_APOLLO_LOTE_RESERVA_S + 5,))
+            S.DB.commit()
+        self.porta.estoque[("P2", 1)] = None
+        S.anuncios_apollo_lote(set())
+        self.assertIsNone(apollo("P2")["disponivel"])
+
+    def test_2_codigo_com_pontos_volta_sem_os_pontos(self):
+        inserir(ficha="6007.003.315.00.8", modo="automatico")
+        self.porta.estoque[("6007.003.315.00.8", 1)] = 9
+        original = self.porta.http
+
+        def sem_pontos(codigos, revendas):
+            d = original(codigos, revendas)
+            for i in d["itens"]:
+                i["codigo"] = i["codigo"].replace(".", "")
+            return d
+        with mock.patch.object(S, "_apollo_estoque_lote_http", side_effect=sem_pontos):
+            S.anuncios_apollo_lote(set())
+        self.assertEqual(apollo("6007.003.315.00.8")["disponivel"], 9)
+        self.assertEqual(S.apollo_lote_fora("aracatuba"), set())
+
+    def test_2_tiktok_sem_numero_nao_esta_em_dia(self):
+        tiktok_sku()
+        self.porta.estoque[("TK1", 3)] = None
+        S.anuncios_apollo_lote(set())
+        self.assertFalse(S.apollo_lote_em_dia(tiktok=True))  # o rodizio do TikTok continua
+
+    def test_3_codigo_recusado_nao_derruba_os_outros(self):
+        inserir(anuncio_id="MLB1", ficha="P1", modo="automatico")
+        inserir(anuncio_id="MLB2", ficha="RUIM", modo="automatico")
+        self.porta.estoque[("P1", 1)] = 10
+        original = self.porta.http
+
+        def recusa(codigos, revendas):
+            if "RUIM" in codigos:
+                self.porta.chamadas.append((list(codigos), list(revendas)))
+                e = S.PortaErro("A porta do Apollo respondeu HTTP 422: codigo invalido")
+                e.status = 422
+                raise e
+            return original(codigos, revendas)
+        with mock.patch.object(S, "_apollo_estoque_lote_http", side_effect=recusa):
+            self.assertTrue(S.anuncios_apollo_lote(set()))
+            self.assertEqual(apollo("P1")["disponivel"], 10)
+            self.assertEqual(S.apollo_lote_fora("aracatuba"), {"RUIM"})
+            n = len(self.porta.chamadas)
+            S._APOLLO_LOTE_ESTADO["tentado_mono"] = 0
+            S._APOLLO_LOTE_CHAMADAS.clear()
+            self.assertTrue(S.anuncios_apollo_lote(set()))
+            self.assertNotIn("RUIM", self.porta.chamadas[-1][0])  # o recusado nao vai de novo
+            self.assertEqual(len(self.porta.chamadas), n + 1)
+            self.assertEqual(S.apollo_lote_fora("aracatuba"), {"RUIM"})  # o rodizio continua cobrindo
+
+    def test_3_tiktok_vai_com_o_codigo_limpo(self):
+        tiktok_sku("tk 1")
+        S.anuncios_apollo_lote(set())
+        self.assertEqual(self.porta.chamadas[0][0], ["TK1"])
+
+    def test_3_404_so_pelo_codigo_http(self):
+        inserir(ficha="P1", modo="automatico")
+        self.porta.erro = S.PortaErro("A porta do Apollo respondeu HTTP 500: peca 4045 falhou")
+        S.anuncios_apollo_lote(set())
+        self.assertEqual(S._APOLLO_LOTE_ESTADO["fechada_ate"], 0.0)
+
+    def test_3_porta_marca_o_codigo_http_no_erro(self):
+        import urllib.error
+        import io
+        erro = urllib.error.HTTPError("http://x", 422, "x", {}, io.BytesIO(b"{}"))
+        with mock.patch.object(S.urllib.request, "urlopen", side_effect=erro):
+            with self.assertRaises(S.PortaErro) as cm:
+                S._exp_porta_resposta(S.urllib.request.Request("http://x"), False)
+        self.assertEqual(cm.exception.status, 422)
+
+    def test_4_hora_da_leitura_e_a_de_antes_da_chamada(self):
+        inserir(ficha="P1", modo="automatico")
+        original = self.porta.http
+        antes = {}
+
+        def lenta(codigos, revendas):
+            antes["t"] = time.time()
+            time.sleep(1.2)
+            return original(codigos, revendas)
+        with mock.patch.object(S, "_apollo_estoque_lote_http", side_effect=lenta):
+            S.anuncios_apollo_lote(set())
+        self.assertLessEqual(apollo("P1")["lido_epoch"], int(antes["t"]))
+
+    def test_4_nao_grava_por_cima_de_leitura_mais_nova(self):
+        inserir(ficha="P1", modo="automatico")
+        original = self.porta.http
+
+        def rodizio_no_meio(codigos, revendas):
+            d = original(codigos, revendas)
+            time.sleep(1.1)
+            self.apollo["P1"] = {1: 4}
+            S.anuncios_apollo_ler("P1", "aracatuba")  # o rodizio leu depois que a porta leu
+            return d
+        self.porta.estoque[("P1", 1)] = 5
+        with mock.patch.object(S, "_apollo_estoque_lote_http", side_effect=rodizio_no_meio):
+            S.anuncios_apollo_lote(set())
+        self.assertEqual(apollo("P1")["disponivel"], 4)
+
+    def test_5_porta_lenta_nao_prende_a_volta(self):
+        inserir(ficha="P1", modo="automatico")
+        self.porta.estoque[("P1", 1)] = 10
+        original = self.porta.http
+
+        def lenta(codigos, revendas):
+            time.sleep(1.5)
+            return original(codigos, revendas)
+        self.apollo["P1"] = S.CrmLimiteAtingido(10)  # o rodizio nao le nada nesta volta
+        with mock.patch.object(S, "_apollo_estoque_lote_http", side_effect=lenta), \
+                mock.patch.object(S, "ANUNCIO_APOLLO_LOTE_ESPERA_S", 0.2):
+            t0 = time.monotonic()
+            S.anuncios_estoque_volta({})
+            self.assertLess(time.monotonic() - t0, 1.2)
+            S._apollo_lote_esperar(5)
+        self.assertEqual(apollo("P1")["disponivel"], 10)
+        self.assertEqual(S._apollo_lote_mudancas_tirar(), {"aracatuba"})
+
+    def test_5_mudanca_do_lote_atrasado_chega_na_volta_seguinte(self):
+        inserir(ficha="P1", modo="automatico")
+        S.anuncio_estoque_config_definir("aracatuba", "automatico", "luis")
+        self.ml.item("MLB1", 3)
+        self.porta.estoque[("P1", 1)] = 10
+        original = self.porta.http
+
+        def lenta(codigos, revendas):
+            time.sleep(1.0)
+            return original(codigos, revendas)
+        self.apollo["P1"] = S.CrmLimiteAtingido(10)  # o rodizio nao le nada nesta volta
+        estado = {"versao": None, "recalculo": time.monotonic()}
+        with mock.patch.object(S, "_apollo_estoque_lote_http", side_effect=lenta), \
+                mock.patch.object(S, "ANUNCIO_APOLLO_LOTE_ESPERA_S", 0.1):
+            S.anuncios_estoque_volta(estado)
+            S._apollo_lote_esperar(5)
+            self.assertEqual(S.anuncios_estoque_volta(estado), ["aracatuba"])
+        self.assertEqual(self.ml.itens["MLB1"]["available_quantity"], 10)
+
+    def test_5_um_lote_por_vez(self):
+        inserir(ficha="P1", modo="automatico")
+        original = self.porta.http
+
+        def lenta(codigos, revendas):
+            time.sleep(1.0)
+            return original(codigos, revendas)
+        with mock.patch.object(S, "_apollo_estoque_lote_http", side_effect=lenta), \
+                mock.patch.object(S, "ANUNCIO_APOLLO_LOTE_ESPERA_S", 0.1):
+            S.anuncios_apollo_lote_fundo()
+            S._APOLLO_LOTE_ESTADO["tentado_mono"] = 0
+            S.anuncios_apollo_lote_fundo()
+            S._apollo_lote_esperar(5)
         self.assertEqual(len(self.porta.chamadas), 1)
 
 
