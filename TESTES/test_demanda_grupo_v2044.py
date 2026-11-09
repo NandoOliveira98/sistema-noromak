@@ -664,5 +664,106 @@ class RevisaoV2045(Base):
         self.assertIn("chaveFiltro()", html, "pedido mínimo/prazo do Todos pela categoria em código")
 
 
+class RevisaoV2046(Base):
+    """revisar-antes-de-subir da V20.45+V20.46 (09/11, "corrigir todos")."""
+
+    def setUp(self):
+        super().setUp()
+        porta = S._exp_porta_get
+
+        def com_categorias(rota, params, **kw):
+            if rota == "pecas/categorias":
+                self.chamadas.append((rota, dict(params)))
+                return {"ok": True, "categorias": [{"categoria": "111", "nome": "FILTROS", "pecas": 4}],
+                        "lidas": 4, "sem_categoria_lida": 0}
+            return porta(rota, params, **kw)
+        S._exp_porta_get = com_categorias
+        S.apollo_filtros(forcar=True)
+
+    def test_fornecedor_salvo_com_o_nome_da_categoria_guarda_o_codigo(self):
+        f = S.compras_salvar_fornecedor("WEGA", {"categorias": "FILTROS"}, "t")
+        self.assertEqual(f["categorias"], ["111"])
+        f = S.compras_salvar_fornecedor("WEGA2", {"categorias": "111 FILTROS"}, "t")
+        self.assertEqual(f["categorias"], ["111"], "o formato que a tela sugere é aceito")
+
+    def test_categoria_desconhecida_continua_recusada(self):
+        with self.assertRaises(ValueError):
+            S.compras_salvar_fornecedor("WEGA", {"categorias": "LUBRIFICANTES"}, "t")
+
+    def test_demanda_pelo_nome_usa_o_mesmo_filtro_do_codigo(self):
+        S.apollo_grupo_rodada("", "111", pausa=0)
+        d = S.compras_demanda_payload("", 30, "1", "", "FILTROS", pode_iniciar=False)
+        self.assertEqual({x["codigo"] for x in d["itens"]}, {"PSL55", "ARL4147"})
+
+    def test_fornecedor_antigo_com_nome_vira_o_filtro_do_codigo(self):
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO compras_fornecedores_v1800(nome,config,updated_at,updated_by) VALUES(?,?,?,?)",
+                         ("ANTIGO", json.dumps({"categorias": ["FILTROS"]}), S.now_iso(), "t"))
+            S.DB.commit()
+        self.assertIn("g=|c=111", S.apollo_filtros_dos_fornecedores())
+
+    def test_fornecedor_antigo_entra_na_noite_e_nas_outras_telas_pelo_codigo(self):
+        """2ª revisão: o fornecedor salvo com o nome não some da rodada da noite."""
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO compras_fornecedores_v1800(nome,config,updated_at,updated_by) VALUES(?,?,?,?)",
+                         ("ANTIGO", json.dumps({"categorias": ["FILTROS"]}), S.now_iso(), "t"))
+            S.DB.commit()
+        antigo = next(f for f in S.compras_fornecedores() if f["nome"] == "ANTIGO")
+        self.assertEqual(antigo["categorias"], ["111"])
+        self.assertIn("g=|c=111", [f["chave"] for f in S.apollo_filtros_em_uso(dias=0)])
+        S._linx_noite_acabou = lambda: False
+        S.apollo_grupos_noite()
+        self.assertTrue(any(p.get("categoria") == "111" for p in self.rotas("pecas")))
+        self.assertFalse(any(p.get("categoria") == "FILTROS" for p in self.rotas("pecas")))
+
+    def test_categoria_cujo_nome_comeca_com_numero(self):
+        filtros = {"ok": True, "categorias": [{"categoria": "4", "nome": "DIVERSOS"},
+                                              {"categoria": "200", "nome": "4 RODAS"}]}
+        self.assertEqual(S.apollo_categorias_codigo("4 RODAS", filtros), ["200"])
+        self.assertEqual(S.apollo_categorias_codigo("200 4 RODAS", filtros), ["200"])
+        self.assertEqual(S.apollo_categorias_codigo("4 RODAS", {"ok": False}), ["4 RODAS"],
+                         "sem a lista não adivinha (a validação recusa)")
+
+    def test_puxar_pelo_nome_le_pelo_codigo(self):
+        S.apollo_grupo_rodada("", S.apollo_filtro_validar("", "FILTROS"), pausa=0)
+        self.assertTrue(all(p.get("categoria") == "111" for p in self.rotas("pecas")))
+
+    def _perguntados(self):
+        return [c for p in self.rotas("demanda") for c in p["codigos"].split(",")]
+
+    def test_no_expediente_a_demanda_da_linx_e_limitada(self):
+        S._linx_noite_acabou = lambda: True   # dia
+        orig = S.APOLLO_DEMANDA_DIA_MAX
+        S.APOLLO_DEMANDA_DIA_MAX = 1
+        self.addCleanup(setattr, S, "APOLLO_DEMANDA_DIA_MAX", orig)
+        r = S.apollo_grupo_rodada("", "111", pausa=0)
+        self.assertEqual(len(set(self._perguntados())), 1)
+        self.assertEqual(r["demanda_adiada"], 3)
+
+    def _limite_1(self):
+        orig = S.APOLLO_DEMANDA_DIA_MAX
+        S.APOLLO_DEMANDA_DIA_MAX = 1
+        self.addCleanup(setattr, S, "APOLLO_DEMANDA_DIA_MAX", orig)
+
+    def test_o_puxar_do_gestor_pergunta_tudo_de_dia(self):
+        self._limite_1()
+        S._linx_noite_acabou = lambda: True   # dia
+        S.apollo_grupo_rodada("", "111", pausa=0, forcar=True)
+        self.assertEqual(len(set(self._perguntados())), 4)
+
+    def test_a_noite_pergunta_tudo(self):
+        self._limite_1()
+        S._linx_noite_acabou = lambda: False   # noite
+        r = S.apollo_grupo_rodada("", "111", pausa=0)
+        self.assertEqual(len(set(self._perguntados())), 4)
+        self.assertEqual(r["demanda_adiada"], 0)
+
+    def test_tela(self):
+        html = (S.APP_DIR / "compras.html").read_text(encoding="utf-8")
+        self.assertIn("compras_caminho_migrado_v2046", html, "a caminho antigo copiado uma vez só")
+        self.assertRegex(html, r"catch \(e\) \{\s*if \(meu !== seqDemanda\) return;",
+                         "erro de resposta antiga não cobre a tela certa")
+
+
 if __name__ == "__main__":
     unittest.main()

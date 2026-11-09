@@ -336,14 +336,27 @@ html[data-tema="escuro"] tr.off td{color:#7B8DA0!important}
   // revisão V20.45: "a caminho" é da PEÇA (vale em qualquer visão: fornecedor, categoria, grupo). Na 1ª vez junta o
   // que estava guardado por fornecedor (compras_caminho_v1800_<nome>), sem apagar.
   const CAMINHO = "compras_caminho_v2045";
+  // V20.46 (revisão): o que estava por fornecedor (compras_caminho_v1800_<nome>) é copiado UMA vez, de todos os
+  // fornecedores, e gravado; depois só a v2045 vale. Antes a cópia antiga era relida a cada carga: o "a caminho"
+  // apagado voltava sozinho, e na visão por categoria a antiga nem era lida (compra dobrada). As antigas ficam.
+  const CAMINHO_MIGRADO = "compras_caminho_migrado_v2046";
+  function migrarCaminhoAntigo() {
+    try {
+      if (localStorage.getItem(CAMINHO_MIGRADO)) return;
+      const geral = lerJson(CAMINHO) || {};
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i) || "";
+        if (!k.startsWith("compras_caminho_v1800_")) continue;
+        Object.entries(lerJson(k) || {}).forEach(([cod, v]) => { if (!(cod in geral) && Number(v)) geral[cod] = Number(v); });
+      }
+      gravarJson(CAMINHO, geral);
+      localStorage.setItem(CAMINHO_MIGRADO, "1");
+    } catch (_) {}
+  }
   function carregarCaminho() {
+    migrarCaminhoAntigo();
     state.caminho = new Map();
-    const geral = lerJson(CAMINHO) || {};
-    if (state.atual) {
-      const antigo = lerJson("compras_caminho_v1800_" + state.atual.nome) || {};
-      Object.entries(antigo).forEach(([k, v]) => { if (!(k in geral)) geral[k] = v; });
-    }
-    Object.entries(geral).forEach(([k, v]) => state.caminho.set(k, Number(v) || 0));
+    Object.entries(lerJson(CAMINHO) || {}).forEach(([k, v]) => state.caminho.set(k, Number(v) || 0));
   }
   function salvarCaminho(cod) {   // grava só a peça mexida (apagar também vale)
     const geral = lerJson(CAMINHO) || {};
@@ -424,7 +437,10 @@ html[data-tema="escuro"] tr.off td{color:#7B8DA0!important}
       msg(avisos.join(" "), avisos.length ? "erro" : "ok");
       mostrarGeral(d.geral);
       render();
-    } catch (e) { msg("Não foi possível carregar a demanda: " + e.message, "erro"); }
+    } catch (e) {
+      if (meu !== seqDemanda) return;   // V20.46 (revisão): erro de um pedido antigo não cobre a tela certa
+      msg("Não foi possível carregar a demanda: " + e.message, "erro");
+    }
   }
   // V20.44: situação da lista do grupo/categoria do Apollo (só o que vendeu entra na tela)
   let apolloTimer = null;
@@ -439,7 +455,7 @@ html[data-tema="escuro"] tr.off td{color:#7B8DA0!important}
     if (lendo) partes.push(`Lendo agora: ${esc(A.etapa || "começando")}… a tela se atualiza sozinha.`);
     else if (A.outra_rodando) partes.push("Outra leitura de grupo do Apollo está em andamento; esta tela confere de novo a cada 30 s.");
     else if (A.aguardando_lista) partes.push("Buscando a lista de grupos do Apollo…");
-    if (A.lido_em) partes.push(`${num(A.pecas)} peça(s) no Apollo (cópia de ${esc(br(A.copia_de))}); <b>${num(A.venderam)} venderam</b> e aparecem aqui${A.sem_venda ? `; ${num(A.sem_venda)} sem venda ficam fora (perguntadas de novo a cada 30 dias)` : ""}${A.nao_lidas ? `; <b>${num(A.nao_lidas)} ainda sem leitura da demanda</b> (entram quando lidas)` : ""}.`);
+    if (A.lido_em) partes.push(`${num(A.pecas)} peça(s) no Apollo (cópia de ${esc(br(A.copia_de))}); <b>${num(A.venderam)} venderam</b> e aparecem aqui${A.sem_venda ? `; ${num(A.sem_venda)} sem venda ficam fora (perguntadas de novo a cada 30 dias)` : ""}${A.nao_lidas ? `; <b>${num(A.nao_lidas)} ainda sem leitura da demanda</b> (entram quando lidas: de dia são lidas até 200 por vez e o resto à noite, ou clique em ↻ Puxar do Apollo)` : ""}.`);
     else if (!lendo) partes.push("Ainda não lida.");
     if (A.incompleta) partes.push(`<b>Lista incompleta:</b> o Apollo ainda não leu a categoria de ${num(A.sem_categoria_lida)} peça(s) (umas 10 mil por noite).`);
     if (A.erro) partes.push(`<span style="color:var(--bad)">Erro na última leitura: ${esc(A.erro)}</span>`);

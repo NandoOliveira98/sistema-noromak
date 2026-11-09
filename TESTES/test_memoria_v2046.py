@@ -104,6 +104,46 @@ class Memoria(unittest.TestCase):
         ids = [i["id"] for i in S._saude_maquina()]
         self.assertIn("memoria_noromak", ids)
 
+    def test_falha_passageira_nao_para_o_worker(self):
+        """revisão: uma leitura de /proc que falha não pode encerrar o worker para sempre."""
+        respostas = [None, {"devolvido_mb": 1.0, "antes_mb": 2.0, "depois_mb": 1.0, "duracao_s": 0.0}]
+        chamadas = []
+
+        def devolver():
+            chamadas.append(1)
+            return respostas.pop(0) if respostas else None
+
+        class Evento:
+            n = 0
+
+            def is_set(self):
+                return self.n >= 3
+
+            def wait(self, _s):
+                self.n += 1
+                return self.n >= 3
+
+        with unittest.mock.patch.object(S, "_memoria_libc", return_value=LibcFalsa()), \
+                unittest.mock.patch.object(S, "memoria_devolver", side_effect=devolver):
+            S.memoria_loop(Evento())
+        self.assertEqual(len(chamadas), 2, "depois do None tentou de novo no ciclo seguinte")
+
+    def test_sem_libc_o_worker_sai(self):
+        class Evento:
+            def is_set(self):
+                return False
+
+            def wait(self, _s):
+                return False
+        with unittest.mock.patch.object(S, "_memoria_libc", return_value=None):
+            S.memoria_loop(Evento())   # sai sem laço infinito
+
+    def test_duracao_sempre_aparece_no_painel(self):
+        S.memoria_devolver(LibcFalsa(), leitor({"rss_mb": 10.0, "swap_mb": 0.0}, {"rss_mb": 10.0, "swap_mb": 0.0}))
+        with unittest.mock.patch.object(S, "memoria_processo", return_value={"rss_mb": 10.0, "swap_mb": 0.0}):
+            item = S._saude_memoria_noromak()
+        self.assertIn("levou", item["detalhe"])
+
     def test_worker_no_painel_e_no_main(self):
         self.assertIn("memoria_loop", S.SAUDE_WORKERS_INFO)
         fonte = inspect.getsource(S.main)

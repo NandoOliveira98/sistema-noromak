@@ -95,7 +95,15 @@ Consequências práticas, não negociáveis:
   `mallopt(M_ARENA_MAX, 2)` (antes de qualquer thread); o worker `memoria_loop` chama
   `malloc_trim(0)` a cada 10 min e mede antes/depois (`_MEMORIA_ESTADO`, item "Memória do Noromak"
   no Painel de saúde, atenção acima de 400 MB — o systemd tem `MemoryMax` de 500 MB). Fora do
-  Linux não faz nada. Teste: `TESTES/test_memoria_v2046.py`.
+  Linux não faz nada. Teste: `TESTES/test_memoria_v2046.py`. **revisar-antes-de-subir (09/11, "corrigir todos"):**
+  falha passageira (leitura do `/proc`, exceção no trim) pula só aquela volta (antes o worker parava de vez); a duração
+  vai sempre ao Painel e ao log quando ≥ 0,5 s (o trim segura as arenas: acima de ~1 s, rever). Junto, achados da
+  V20.45: categoria sempre em **código** (`apollo_categorias_codigo`: "FILTROS"/"111 FILTROS" → "111") ao salvar o
+  fornecedor, na demanda, no Puxar, nos filtros dos fornecedores e na rodada da noite (antes o mesmo filtro tinha duas
+  chaves e o nome ia para a porta); de dia, sem o Puxar do gestor, a demanda da Linx de uma categoria pergunta no máximo
+  `APOLLO_DEMANDA_DIA_MAX` (200) peças e o resto vai à noite (`demanda_adiada`); na tela, o "a caminho" antigo por
+  fornecedor é copiado **uma vez** (`compras_caminho_migrado_v2046`) e o erro de um pedido antigo não cobre a demanda certa.
+  Testes: `RevisaoV2046` em `TESTES/test_demanda_grupo_v2044.py`.
 - Front-end: HTML/CSS/JS puro em `APP/`, sem build step. Arquivos monolíticos.
 - Segredos reais só em `/home/expedicao/.env` no servidor. Ver `.env.example`.
 
