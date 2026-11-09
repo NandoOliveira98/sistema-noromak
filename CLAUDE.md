@@ -1755,6 +1755,14 @@ demanda" é contado à parte (`nao_lidas`), não como "sem venda"; Linx ocupada 
 menos de 20 h não é relido e a rodada da Linx para às 6h (`noite=True`, `_linx_noite_acabou`). Fornecedor com grupo tem as peças do
 Apollo também na demanda geral, no e-mail, na Ruptura por marca e na rodada da Linx (`_compras_regras_marca`,
 `_compras_codigos_dos_fornecedores`, `apollo_filtros_dos_fornecedores`); venda do e-commerce de peça do Apollo fora do Precificador conta.
+**2ª revisão (09/11, "corrigir todos"):** a abertura da tela não chama a porta (`apollo_filtros(so_cache=True)`; a lista é lida pelo
+`/api/compras/apollo/filtros` com 10 s por chamada, falha guardada 5 min, uma leitura por vez); salvar fornecedor só confere o grupo
+quando ele mudou; grupo grande sem categoria é recusado já na validação; código recusado (422) fica fora por 1 h e as divisões têm teto
+(`APOLLO_ESTOQUE_MAX_DIVISOES`); casa sem resposta mantém o número que ela tinha; o modo grupo nas outras telas só vale depois da 1ª
+leitura (antes, as regras antigas) e a Marca do cadastro não conta com grupo; lista vazia sem lista anterior = 0 peças (não erro);
+nome do grupo normalizado dos dois lados (`_apollo_nome`); o iniciar pega a vez (`APOLLO_GRUPO_LOCK`) antes de responder; outra
+leitura rodando aparece na tela (`outra_rodando`, consulta a cada 30 s); a noite confere o fim da janela também no estoque e nas
+perguntas da Linx, e interrompida não conta como ok. Teste: classe `Revisao2`.
 
 ### Linx Smart API (levantamento 21/09/2026)
 API oficial da Linx para o Linx DMS, na nuvem: gateway `https://auto-gwsmartapi.linx.com.br/<api>`,

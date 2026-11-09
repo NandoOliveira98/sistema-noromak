@@ -331,6 +331,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     const lendo = A.rodando || A.iniciado;
     const partes = [`<b>Peças do Apollo — ${esc(filtro)}.</b>`];
     if (lendo) partes.push(`Lendo agora: ${esc(A.etapa || "começando")}… a tela se atualiza sozinha.`);
+    else if (A.outra_rodando) partes.push("Outra leitura de grupo do Apollo está em andamento; esta tela confere de novo a cada 30 s.");
     if (A.lido_em) partes.push(`${num(A.pecas)} peça(s) no Apollo (cópia de ${esc(br(A.copia_de))}); <b>${num(A.venderam)} venderam</b> e aparecem aqui${A.sem_venda ? `; ${num(A.sem_venda)} sem venda ficam fora (perguntadas de novo a cada 30 dias)` : ""}${A.nao_lidas ? `; <b>${num(A.nao_lidas)} ainda sem leitura da demanda</b> (entram quando lidas)` : ""}.`);
     else if (!lendo) partes.push("Ainda não lida.");
     if (A.incompleta) partes.push(`<b>Lista incompleta:</b> o Apollo ainda não leu a categoria de ${num(A.sem_categoria_lida)} peça(s) (umas 10 mil por noite).`);
@@ -346,7 +347,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
         apolloTimer = setTimeout(carregarDemanda, 8000);
       } catch (e) { msg("Não foi possível puxar do Apollo: " + e.message, "erro"); $("apolloBtn").disabled = false; }
     };
-    if (lendo) apolloTimer = setTimeout(function espera() { if (document.hidden) { apolloTimer = setTimeout(espera, 15000); return; } carregarDemanda(); }, 15000);
+    if (lendo || A.outra_rodando) apolloTimer = setTimeout(function espera() { if (document.hidden) { apolloTimer = setTimeout(espera, 15000); return; } carregarDemanda(); }, lendo ? 15000 : 30000);
   }
   async function carregarFiltrosApollo() {
     try {

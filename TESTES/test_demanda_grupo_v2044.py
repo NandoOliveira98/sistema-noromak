@@ -35,7 +35,8 @@ class Base(TesteNoromak):
         S.APOLLO_ESTOQUE_ESPERA_S = 0      # revisão: sem vaga na porta, não espera nos testes
         S.CHAVE_CRM = "chave-teste"
         S.LINX_API_USUARIO = ""
-        S._APOLLO_FILTROS_CACHE.update(em=0.0, dados=None)
+        S._APOLLO_FILTROS_CACHE.update(em=0.0, dados=None, falha_em=0.0, erro="")
+        S._APOLLO_ESTOQUE_RECUSADOS.clear()
         self.chamadas = []
         self.catalogo = [  # (codigo, descricao, grupo, categoria)
             ("PSL55", "FILTRO OLEO", "TECFIL", "111"),
@@ -46,16 +47,25 @@ class Base(TesteNoromak):
         self.vendas = {"PSL55": 4, "ARL4147": 2}   # demanda Linx do último mês fechado
         self.falha_pagina = None
         self.estoque_sem_resposta = set()
+        self.sem_revenda = set()           # 2ª revisão: (codigo, revenda) sem resposta
         self.por_pagina_forcado = None
+        self.grupos_falha = False          # 2ª revisão: pecas/grupos fora do ar
+        self.grupos_extra = []
+        self.bloquear = None               # 2ª revisão: Event que segura a leitura de pecas
 
-        def porta_get(rota, params):
+        def porta_get(rota, params, **kw):
             self.chamadas.append((rota, dict(params)))
             if rota == "pecas/grupos":
+                if self.grupos_falha:
+                    raise S.PortaErro("porta fora do ar")
                 return {"ok": True, "copia_de": "2026-11-09T02:54-03:00",
-                        "grupos": [{"grupo": None, "nome": "TECFIL", "pecas": 3}, {"grupo": None, "nome": "WEGA", "pecas": 1}]}
+                        "grupos": [{"grupo": None, "nome": "TECFIL", "pecas": 3}, {"grupo": None, "nome": "WEGA", "pecas": 1},
+                                   *self.grupos_extra]}
             if rota == "pecas/categorias":
                 return {"ok": True, "categorias": [], "lidas": 0, "sem_categoria_lida": 10}
             if rota == "pecas":
+                if self.bloquear is not None:
+                    self.bloquear.wait(10)
                 g = set((params.get("grupo") or "").split(",")) - {""}
                 c = set((params.get("categoria") or "").split(",")) - {""}
                 lista = [x for x in self.catalogo if (not g or x[2] in g) and (not c or x[3] in c)]
@@ -98,7 +108,7 @@ class Base(TesteNoromak):
             itens = []
             for cod in corpo["codigos"]:
                 for rev in corpo["revendas"]:
-                    sem = cod in self.estoque_sem_resposta
+                    sem = cod in self.estoque_sem_resposta or (cod, rev) in self.sem_revenda
                     itens.append({"codigo": cod, "revenda": rev, "disponivel": None if sem else 3.0 * rev,
                                   "tem_cadastro": self.estoque_tem_cadastro.get(cod, True),
                                   "erro": "casa sem resposta" if sem else None})
@@ -422,6 +432,133 @@ class Revisao(Base):
         itens = {x["codigo"]: x for x in self.payload()["itens"]}
         self.assertIn("PSL55", itens)
         self.assertEqual(itens["PSL55"]["vendido"], 3)
+
+
+class Revisao2(Base):
+    """2ª revisão (09/11, "corrigir todos" de novo): só sobre as correções."""
+
+    # 1: a abertura da tela não chama a porta; falha guardada
+    def test_payload_nao_chama_a_porta(self):
+        self.chamadas.clear()
+        S._APOLLO_FILTROS_CACHE.update(em=0.0, dados=None, falha_em=0.0, erro="")
+        S._APOLLO_ESTOQUE_RECUSADOS.clear()
+        d = self.payload()
+        self.assertEqual([r for r, _ in self.chamadas if r.startswith("pecas/")], [])
+        self.assertFalse(d["apollo"]["iniciado"])
+
+    def test_falha_da_lista_fica_guardada(self):
+        S._APOLLO_FILTROS_CACHE.update(em=0.0, dados=None, falha_em=0.0, erro="")
+        S._APOLLO_ESTOQUE_RECUSADOS.clear()
+        self.grupos_falha = True
+        self.chamadas.clear()
+        self.assertFalse(S.apollo_filtros()["ok"])
+        self.assertFalse(S.apollo_filtros()["ok"])
+        self.assertEqual(len(self.rotas("pecas/grupos")), 1)
+
+    # 2: salvar fornecedor sem mudar o grupo com a porta fora
+    def test_salvar_sem_mudar_o_grupo_com_a_porta_fora(self):
+        S._APOLLO_FILTROS_CACHE.update(em=0.0, dados=None, falha_em=0.0, erro="")
+        S._APOLLO_ESTOQUE_RECUSADOS.clear()
+        self.grupos_falha = True
+        S.compras_salvar_fornecedor("TECFIL", {"grupos": "TECFIL", "pedido_minimo": 500}, "t")
+        with self.assertRaises(ValueError):
+            S.compras_salvar_fornecedor("TECFIL", {"grupos": "WEGA", "pedido_minimo": 500}, "t")
+
+    # 3: código recusado é lembrado; divisões têm teto
+    def test_codigo_recusado_e_lembrado(self):
+        self.estoque_recusa = {"RUIM1"}
+        S.apollo_estoque_lote(["PSL55", "RUIM1"], pausa=0)
+        S._apollo_lote_zerar()
+        self.chamadas.clear()
+        S.apollo_estoque_lote(["RUIM1", "ARL4147"], pausa=0)
+        pedidos = {c for p in self.rotas("estoque/lote") for c in p["codigos"]}
+        self.assertNotIn("RUIM1", pedidos)
+        self.assertIn("ARL4147", pedidos)
+
+    def test_divisoes_tem_teto(self):
+        orig = S.APOLLO_ESTOQUE_MAX_DIVISOES
+        S.APOLLO_ESTOQUE_MAX_DIVISOES = 1
+        self.addCleanup(setattr, S, "APOLLO_ESTOQUE_MAX_DIVISOES", orig)
+        self.estoque_recusa = {"A1", "A2", "A3", "A4"}
+        r = S.apollo_estoque_lote(["A1", "A2", "A3", "A4"], pausa=0)
+        self.assertFalse(r["ok"])
+        self.assertLessEqual(len(self.rotas("estoque/lote")), 3)
+
+    # 4: casa sem resposta não apaga a leitura boa dela
+    def test_aracatuba_sem_resposta_mantem_a_leitura_anterior(self):
+        S.apollo_estoque_lote(["PSL55"], pausa=0)
+        S._apollo_lote_zerar()
+        self.sem_revenda = {("PSL55", 1)}
+        S.apollo_estoque_lote(["PSL55"], pausa=0)
+        e = S.compras_estoque_guardado(["PSL55"])["PSL55"]
+        self.assertTrue(e["stock_known"])
+        self.assertEqual(e["available"], 3.0)
+
+    # 5: fornecedor com grupo ainda não lido segue as regras antigas; grupo grande recusado
+    def test_grupo_nao_lido_usa_as_regras_antigas(self):
+        produtos = S._compras_produtos_precificador()
+        self.assertEqual(S._compras_regras_marca(produtos)("WG100", "FILTRO WEGA TECFIL"), ["TECFIL"])
+
+    def test_grupo_grande_demais_recusado_sem_categoria(self):
+        orig = S.APOLLO_PECAS_MAX
+        S.APOLLO_PECAS_MAX = 2
+        self.addCleanup(setattr, S, "APOLLO_PECAS_MAX", orig)
+        with self.assertRaises(ValueError):
+            S.apollo_filtro_validar("TECFIL", "")
+        S.apollo_filtro_validar("TECFIL", "111")
+
+    # 6: filtro que de verdade não tem peça não é erro
+    def test_lista_vazia_sem_lista_anterior_e_zero_pecas(self):
+        r = S.apollo_pecas_ler("", "15", pausa=0)
+        self.assertTrue(r["ok"], r)
+        info = S.apollo_filtro_info(S.apollo_filtro_chave("", "15"))
+        self.assertTrue(info["lido_em"])
+        self.assertEqual(info["erro"], "")
+
+    # 7: a Marca do cadastro não conta com grupo (igual à tela)
+    def test_marca_do_cadastro_nao_conta_com_grupo(self):
+        S.save_storage("precificador_online_v1", None, json.dumps({"products": [
+            {"sku": "OUTRO1", "produto": "PECA QUALQUER", "custo": 2.0}]}), False, actor="t", actor_role="admin")
+        S.save_storage("conf_produtos", None, json.dumps([{"SKU": "OUTRO1", "Marca": "TECFIL"}]), False,
+                       actor="t", actor_role="admin")
+        self.rodar()
+        produtos = S._compras_produtos_precificador()
+        self.assertEqual(S._compras_regras_marca(produtos)("OUTRO1", "PECA QUALQUER"), [])
+        self.assertNotIn("OUTRO1", S._compras_codigos_dos_fornecedores("TECFIL"))
+
+    # 8: nome do grupo comparado do mesmo jeito dos dois lados
+    def test_nome_com_espaco_duplo(self):
+        self.grupos_extra = [{"grupo": None, "nome": "AUTO  PECAS", "pecas": 5}]
+        S._APOLLO_FILTROS_CACHE.update(em=0.0, dados=None, falha_em=0.0, erro="")
+        S._APOLLO_ESTOQUE_RECUSADOS.clear()
+        S.apollo_filtro_validar("auto pecas", "")
+
+    # 9: o Puxar não perde a vez para a rodada da noite
+    def test_iniciar_ja_segura_a_vez(self):
+        import threading
+        self.bloquear = threading.Event()
+        self.assertTrue(S.apollo_grupo_iniciar("TECFIL", ""))
+        r = S.apollo_grupo_rodada("WEGA", "", pausa=0)
+        self.bloquear.set()
+        self.assertTrue(r.get("ja_rodando"))
+        self.assertTrue(S.APOLLO_GRUPO_LOCK.acquire(timeout=10))
+        S.APOLLO_GRUPO_LOCK.release()
+
+    # 10: outra leitura rodando: a tela sabe e continua esperando
+    def test_outra_leitura_rodando(self):
+        S.APOLLO_GRUPO_ESTADO.update(rodando=True, chave="g=WEGA|c=")
+        self.addCleanup(S.APOLLO_GRUPO_ESTADO.update, rodando=False)
+        d = self.payload()
+        self.assertTrue(d["apollo"]["outra_rodando"])
+
+    # 12: a noite para às 6h e não diz que leu tudo
+    def test_noite_interrompida_nao_e_ok(self):
+        S._linx_noite_acabou = lambda: True
+        r = S.linx_demanda_rodada(pausa=0, codigos=["PSL55"], noite=True)
+        self.assertFalse(r["ok"])
+        self.assertIn("noite", r["erro"])
+        r = S.apollo_estoque_lote(["PSL55"], pausa=0, noite=True)
+        self.assertEqual(self.rotas("estoque/lote"), [])
 
 
 if __name__ == "__main__":
