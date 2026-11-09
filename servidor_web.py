@@ -11150,9 +11150,15 @@ def ensure_tiktok_atendimento_schema() -> None:
         colunas = {r["name"] for r in DB.execute("PRAGMA table_info(tiktok_atendimento_v2033)")}
         for nome, tipo in (("comprometido", "TEXT NOT NULL DEFAULT ''"), ("comp_detalhe", "TEXT NOT NULL DEFAULT ''"),
                            ("comp_itens_json", "TEXT NOT NULL DEFAULT ''"),
-                           ("comp_tentativas", "INTEGER NOT NULL DEFAULT 0"), ("comp_proxima", "REAL NOT NULL DEFAULT 0")):
+                           ("comp_tentativas", "INTEGER NOT NULL DEFAULT 0"), ("comp_proxima", "REAL NOT NULL DEFAULT 0"),
+                           ("comp_passageiros", "INTEGER NOT NULL DEFAULT 0")):
             if nome not in colunas:
                 DB.execute(f"ALTER TABLE tiktok_atendimento_v2033 ADD COLUMN {nome} {tipo}")
+        # revisar-antes-de-subir (09/11): a thread do botão morre com o processo — o "comprometendo" que sobrou
+        # volta a ser tentado (sem isso a rotina o pulava para sempre e a extensão escondia o botão).
+        DB.execute("UPDATE tiktok_atendimento_v2033 SET comprometido='erro', comp_proxima=0, "
+                   "comp_detalhe='Comprometer interrompido por um reinício do Noromak: será tentado de novo.' "
+                   "WHERE comprometido='comprometendo'")
         DB.commit()
 
 
@@ -11572,16 +11578,57 @@ TIKTOK_COMP_MAX = 5
 TIKTOK_COMP_ESPERA = {"passageiro": 120, "incerto": 600, "erro": 1800, "parcial": 3600, "nao": 3600}
 
 
-def _tiktok_comp_registrar(pedido: str, estado: str, detalhe: str, itens: Any = None, espera: str = "") -> None:
+TIKTOK_COMP_PASSAGEIROS = 10   # 2ª revisão (09/11): 10 "ocupado"/limite seguidos = 1 tentativa
+TIKTOK_COMP_SIM = ("S", "SIM", "TRUE", "1")  # o Linx usa Comprometido:"S"; a porta, true (revisão 09/11)
+
+
+def _tiktok_comp_item_ok(valor: Any) -> bool:
+    return valor is True or (not isinstance(valor, bool) and str(valor).strip().upper() in TIKTOK_COMP_SIM)
+
+
+def _tiktok_comp_registrar(pedido: str, estado: str, detalhe: str, itens: Any = None, espera: str = "",
+                           conta: bool = True, passageiro: bool = False) -> None:
+    """`conta=False` = não gasta tentativa (interrompido, barrado). `passageiro` = limite por minuto/ocupado:
+    só cada TIKTOK_COMP_PASSAGEIROS seguidos gastam uma tentativa."""
     proxima = time.time() + TIKTOK_COMP_ESPERA[espera] if espera else 0.0
     with DB_LOCK:
+        if passageiro:
+            row = DB.execute("SELECT comp_passageiros FROM tiktok_atendimento_v2033 WHERE pedido=?",
+                             (str(pedido),)).fetchone()
+            seguidos = int((row["comp_passageiros"] if row else 0) or 0) + 1
+            conta = seguidos >= TIKTOK_COMP_PASSAGEIROS
+            seguidos = 0 if conta else seguidos
+        else:
+            seguidos = 0
         DB.execute("UPDATE tiktok_atendimento_v2033 SET comprometido=?, comp_detalhe=?, "
                    "comp_itens_json=CASE WHEN ?<>'' THEN ? ELSE comp_itens_json END, "
-                   "comp_tentativas=comp_tentativas+?, comp_proxima=?, atualizado_em=? WHERE pedido=?",
+                   "comp_tentativas=comp_tentativas+?, comp_proxima=?, comp_passageiros=?, atualizado_em=? WHERE pedido=?",
                    (estado, str(detalhe or "")[:500], json_dumps(itens) if itens is not None else "",
-                    json_dumps(itens) if itens is not None else "", 0 if estado == "comprometendo" else 1,
-                    proxima, now_iso(), str(pedido)))
+                    json_dumps(itens) if itens is not None else "",
+                    1 if conta and estado != "comprometendo" else 0, proxima, seguidos, now_iso(), str(pedido)))
         DB.commit()
+
+
+def _tiktok_comp_pode(pedido: str, na_fila: set[str] | None = None) -> str:
+    """revisar-antes-de-subir (09/11): o que impede comprometer agora ("" = pode). As mesmas barreiras do criar:
+    o pedido na fila (exclusão/conclusão do ADMIN valem), o TikTok ainda dizendo "a enviar" (venda cancelada não
+    reserva estoque), sem romaneio/caixa e sem a venda ter mudado depois do atendimento."""
+    pedido = str(pedido).strip()
+    with DB_LOCK:
+        if na_fila is None:
+            bruto, _, _ = get_storage("conf_pedidos")
+            na_fila = _tiktok_sc_pedidos_na_fila(_rows_from_storage_value(bruto))
+        tt = DB.execute("SELECT status, saiu_epoch FROM tiktok_sc_pedido_v2030 WHERE pedido=?", (pedido,)).fetchone()
+    if pedido not in na_fila:
+        return "o pedido não está mais na fila"
+    if not tt or str(tt["status"] or "") not in TIKTOK_SC_NA_FILA or float(tt["saiu_epoch"] or 0):
+        return "o TikTok não diz mais que o pedido está a enviar (cancelado ou enviado)"
+    if _tiktok_atendimento_ja_atendido(pedido):
+        return "o pedido já tem romaneio/caixa"
+    mudou = _tiktok_venda_mudou(pedido)
+    if mudou:
+        return mudou
+    return ""
 
 
 def tiktok_atendimento_comprometer(pedido: str) -> dict[str, Any]:
@@ -11590,23 +11637,40 @@ def tiktok_atendimento_comprometer(pedido: str) -> dict[str, Any]:
     atual = tiktok_atendimento_do_pedido(pedido) or {}
     contato = re.sub(r"\D", "", str(atual.get("atendimento") or ""))
     if str(atual.get("situacao") or "") not in TIKTOK_ATEND_FINAIS or not contato:
+        if atual.get("comprometido") == "comprometendo":  # revisão 09/11: nunca deixa preso
+            _tiktok_comp_registrar(pedido, "", "Sem atendimento criado para comprometer.", conta=False)
         return {"ok": False, "comprometido": "", "motivo": "sem atendimento criado"}
-    corpo = {"revenda": _exp_revenda(pedido), "operador": "noromak", "contato": int(contato)}
+    # revisão 09/11: o atendimento do TikTok é sempre de Bauru (o criar manda a mesma revenda). Pela fila,
+    # pedido que saiu dela caía na revenda 1 e o comprometer ia para Araçatuba.
+    corpo = {"revenda": SEPARACAO_REVENDA[TIKTOK_CASA], "operador": "noromak", "contato": int(contato)}
     with EXP_PORTA_LOCK:
+        # 2ª revisão (09/11): confere de novo já na vez — o romaneio/caixa pode ter saído enquanto esperava a porta.
+        impede = _tiktok_comp_pode(pedido)
+        if impede:
+            _tiktok_comp_registrar(pedido, "nao", "Não comprometido: " + impede + ".", espera="nao", conta=False)
+            return {"ok": False, "comprometido": "nao", "motivo": impede}
         try:
             r = _exp_porta("atendimento/comprometer", corpo, escrita=True)
         except PortaErro as exc:
-            # Idempotente: o incerto (resposta perdida) e o "ocupado" são tentados de novo sozinhos.
+            # Idempotente: o incerto (resposta perdida) e o "ocupado" são tentados de novo sozinhos. Limite por
+            # minuto (429) e "ocupado" (409) não gastam tentativa (revisão 09/11).
+            de_passagem = bool(exc.passageiro) or getattr(exc, "status", None) in (409, 429)
             estado = "incerto" if exc.incerto else "erro"
-            espera = "passageiro" if exc.passageiro else ("incerto" if exc.incerto else "erro")
-            _tiktok_comp_registrar(pedido, estado, "Comprometer: " + str(exc), espera=espera)
+            espera = "passageiro" if de_passagem else ("incerto" if exc.incerto else "erro")
+            _tiktok_comp_registrar(pedido, estado, "Comprometer: " + str(exc), espera=espera, passageiro=de_passagem)
             tiktok_log_event_se_mudou("atendimento", f"{pedido} comprometer", estado.upper(), str(exc)[:300])
             return {"ok": False, "comprometido": estado, "motivo": str(exc)}
-    _tiktok_guardar_amostra("porta atendimento/comprometer", r)
+    # revisão 09/11: a amostra guarda só os campos do contrato (e os nomes de todas as chaves), nunca dado pessoal
+    _tiktok_guardar_amostra("porta atendimento/comprometer", {
+        "chaves": sorted(str(k) for k in r), "ok": r.get("ok"), "situacao": r.get("situacao"),
+        "erro": str(r.get("erro") or "")[:300],
+        "itens": [{"chaves": sorted(str(k) for k in i), "codigo": i.get("codigo"),
+                   "comprometido": i.get("comprometido"), "motivo": str(i.get("motivo") or "")[:200]}
+                  for i in (r.get("itens") or [])[:20] if isinstance(i, dict)]})
     situacao = str(r.get("situacao") or "")
     itens = [i for i in (r.get("itens") or []) if isinstance(i, dict)]
     faltam = [f"{i.get('codigo') or i.get('item') or '?'}: {i.get('motivo') or 'não comprometeu'}"
-              for i in itens if i.get("comprometido") is not True]
+              for i in itens if not _tiktok_comp_item_ok(i.get("comprometido"))]
     if r.get("ok") is True and (situacao == "ja_comprometido" or (itens and not faltam)):
         estado, espera, detalhe = "sim", "", "Peças comprometidas no Apollo."
     elif r.get("ok") is True and faltam:
@@ -11626,16 +11690,18 @@ def tiktok_atendimento_comprometer(pedido: str) -> dict[str, Any]:
 
 
 def _tiktok_comp_candidatos() -> list[str]:
-    """Atendimentos criados cujas peças ainda não estão comprometidas, com a vez chegada, o pedido ainda na fila e
-    sem romaneio/caixa (com romaneio solto o atendimento já seguiu: comprometer não serve mais)."""
+    """Atendimentos criados cujas peças ainda não estão comprometidas, com a vez chegada e nada que impeça
+    (`_tiktok_comp_pode`: fila, situação no TikTok, romaneio/caixa, venda mudada)."""
     with DB_LOCK:
-        bruto, _, _ = get_storage("conf_pedidos")
         rows = DB.execute(
             "SELECT pedido FROM tiktok_atendimento_v2033 WHERE situacao IN ('criado','ja_existia') AND atendimento<>'' "
             "AND comprometido NOT IN ('sim','comprometendo') AND comp_tentativas<? AND comp_proxima<=? "
             "ORDER BY comp_proxima", (TIKTOK_COMP_MAX, time.time())).fetchall()
+        if not rows:  # 2ª revisão (09/11): nada a comprometer = não lê a fila (roda a cada 2 min)
+            return []
+        bruto, _, _ = get_storage("conf_pedidos")
     na_fila = _tiktok_sc_pedidos_na_fila(_rows_from_storage_value(bruto))
-    return [r["pedido"] for r in rows if r["pedido"] in na_fila and not _tiktok_atendimento_ja_atendido(r["pedido"])]
+    return [r["pedido"] for r in rows if r["pedido"] in na_fila and not _tiktok_comp_pode(r["pedido"], na_fila)]
 
 
 # Situações em que a rotina não mexe mais no pedido ("anterior" = atendido à mão; "fora_da_fila" = saiu sem atendimento).
@@ -11955,15 +12021,16 @@ def tiktok_atendimento_pedido(pedido: str) -> dict[str, Any]:
 
 
 def tiktok_atendimento_rodada(forcar: bool = False) -> dict[str, Any]:
-    if not tiktok_atendimento_ligado():
-        return {"ok": True, "ligado": False, "feitos": 0}
+    ligado = tiktok_atendimento_ligado()
     feitos = 0
     resultados = []
-    try:
-        _tiktok_marcar_fora_da_fila()
-    except Exception as exc:  # aviso no cartão: falhar aqui não impede o atendimento
-        tiktok_log_event_se_mudou("atendimento", "fora da fila", "ERRO", str(exc)[:300])
-    for numero in _tiktok_atendimento_candidatos():
+    if ligado:
+        try:
+            _tiktok_marcar_fora_da_fila()
+        except Exception as exc:  # aviso no cartão: falhar aqui não impede o atendimento
+            tiktok_log_event_se_mudou("atendimento", "fora da fila", "ERRO", str(exc)[:300])
+    # revisão 09/11: desligado não cria nada, mas o comprometer (abaixo) roda — só mexe em atendimento que já existe
+    for numero in (_tiktok_atendimento_candidatos() if ligado else []):
         if feitos >= TIKTOK_ATEND_POR_RODADA and not forcar:
             break
         try:
@@ -11986,7 +12053,7 @@ def tiktok_atendimento_rodada(forcar: bool = False) -> dict[str, Any]:
             r = {"ok": False, "comprometido": "erro", "motivo": str(exc)}
         feitos += 1
         resultados.append({"pedido": numero, "etapa": "comprometer", **r})
-    return {"ok": True, "ligado": True, "feitos": feitos, "resultados": resultados}
+    return {"ok": True, "ligado": ligado, "feitos": feitos, "resultados": resultados}
 
 
 def tiktok_atendimento_payload() -> dict[str, Any]:
@@ -12018,6 +12085,10 @@ def tiktok_atendimento_manual_iniciar(pedido: str, ator: str) -> dict[str, Any]:
     so_comprometer = str(atual.get("situacao") or "") in TIKTOK_ATEND_FINAIS
     if so_comprometer and str(atual.get("comprometido") or "") == "sim":
         raise ValueError(f"O atendimento {atual.get('atendimento') or ''} já foi criado e as peças estão comprometidas.")
+    if so_comprometer:
+        impede = _tiktok_comp_pode(pedido)  # revisão 09/11: as mesmas barreiras da rotina
+        if impede:
+            raise ValueError("Não dá para comprometer: " + impede + ".")
     if not _TIKTOK_ATEND_MANUAL_LOCK.acquire(blocking=False):
         return {"ok": False, "ocupado": True, "error": "Outro atendimento do TikTok está sendo criado. Aguarde e tente de novo."}
     try:
@@ -39966,8 +40037,13 @@ def _apollo_lote_ler_itens(dados: dict[str, Any], parte: list[str], revendas: li
         inexistente = all(it is not None and it.get("tem_cadastro") is False for it in achados.values())
         if inexistente and inexistentes is not None:
             inexistentes.add(norm)
+        # 3a revisao: o 0 de "sem cadastro nesta casa" so vale com OUTRA casa confirmando o cadastro. Nenhuma confirma
+        # e alguma nao respondeu (ex.: Ribeirao fora) = nao da para saber se a peca existe: None em todas, nunca 0
+        confirmada = any(it is not None and it.get("tem_cadastro") is True and not it.get("erro")
+                         for it in achados.values())
         for rev, it in achados.items():
-            saida[(norm, rev)] = (None if inexistente or it is None else _apollo_lote_valor(it), epoch)
+            saida[(norm, rev)] = (None if inexistente or it is None or not confirmada else _apollo_lote_valor(it),
+                                  epoch)
     return saida
 
 
@@ -40079,16 +40155,22 @@ def anuncios_apollo_lote(mudancas: set[str] | None = None) -> bool:
                       file=sys.stderr, flush=True)
                 continue
             completo, erro = False, str(exc)
+            if suspeito:  # 3a revisao: o pedaco da busca do recusado nao se perde na falha
+                fila.insert(0, (parte, suspeito))
             if status == 404:
                 with _APOLLO_LOTE_LOCK:
                     _APOLLO_LOTE_ESTADO["fechada_ate"] = time.monotonic() + ANUNCIO_APOLLO_LOTE_FECHADA_S
             break
         except Exception as exc:
             completo, erro = False, f"lote do Apollo: {exc}"
+            if suspeito:
+                fila.insert(0, (parte, suspeito))
             break
         if not isinstance(dados, dict) or dados.get("ok") is not True or not isinstance(dados.get("itens"), list):
             completo = False
             erro = str((dados or {}).get("erro") or "resposta sem itens") if isinstance(dados, dict) else "resposta inválida"
+            if suspeito:
+                fila.insert(0, (parte, suspeito))
             break
         lidos.update(_apollo_lote_ler_itens(dados, parte, revs, epoch, inexistentes))
     pendentes = [p for p, s in fila if s]  # 2a revisao (achado 1): a busca do recusado continua no proximo minuto
@@ -40185,13 +40267,16 @@ def _apollo_lote_gravar(lidos: dict[tuple[str, int], tuple[float | None, int]], 
             valor, epoch = lidos[chave]
             antes = DB.execute("SELECT respondeu, lido_epoch FROM tiktok_apollo_v1964 WHERE codigo=?",
                                (chave_tk,)).fetchone()
+            motivo = "" if valor is not None else ("Código não existe no Apollo" if normalize(cod) in inexistentes
+                                                   else "Bauru não respondeu no Apollo")
             if not deve_gravar(antes, valor, epoch):
+                if valor is None and antes is not None and not int(antes["respondeu"] or 0):
+                    # 3a revisao: sem numero de novo - a hora fica, mas o motivo (a tela do TikTok) acompanha
+                    DB.execute("UPDATE tiktok_apollo_v1964 SET erro=? WHERE codigo=?", (motivo, chave_tk))
                 continue
             DB.execute("""INSERT OR REPLACE INTO tiktok_apollo_v1964(codigo,disponivel,respondeu,erro,lido_em,lido_epoch)
                           VALUES(?,?,?,?,?,?)""",
-                       (chave_tk, valor, 1 if valor is not None else 0,
-                        "" if valor is not None else ("Código não existe no Apollo" if normalize(cod) in inexistentes
-                                                      else "Bauru não respondeu no Apollo"), quando, epoch))
+                       (chave_tk, valor, 1 if valor is not None else 0, motivo, quando, epoch))
         DB.commit()
 
 

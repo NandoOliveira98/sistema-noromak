@@ -528,6 +528,48 @@ class Revisao2Teste(LoteBase):
         self.assertTrue(S.apollo_lote_em_dia(tiktok=True))  # o rodizio do TikTok descansa
 
 
+class Revisao3Teste(LoteBase):
+    """3a revisao da V20.42 (09/11): falhas das proprias correcoes."""
+
+    def test_inexistente_com_uma_casa_sem_resposta_nao_vira_zero(self):
+        """Nenhuma casa confirma o cadastro e Ribeirao nao respondeu: nao da para saber; nunca 0."""
+        inserir(ficha="ERRADO1", modo="automatico")
+        self.porta.estoque.update({("ERRADO1", 1): "sem_cadastro", ("ERRADO1", 2): None,
+                                   ("ERRADO1", 3): "sem_cadastro"})
+        S.anuncios_apollo_lote(set())
+        self.assertIsNone(apollo("ERRADO1")["disponivel"])
+        self.assertIn("ERRADO1", S.apollo_lote_fora("aracatuba"))  # o rodizio confere
+
+    def test_sem_cadastro_aqui_mas_cadastrada_noutra_continua_zero_mesmo_com_casa_fora(self):
+        inserir(ficha="SOB", modo="automatico")
+        self.porta.estoque.update({("SOB", 1): "sem_cadastro", ("SOB", 2): None, ("SOB", 3): 5})
+        S.anuncios_apollo_lote(set())
+        self.assertEqual(apollo("SOB")["disponivel"], 0)
+
+    def test_suspeito_nao_some_quando_a_chamada_falha(self):
+        cods = muitos(40)
+        self.porta.recusados.add(cods[0])
+        S.anuncios_apollo_lote(set())
+        antes = sum(len(p) for p in S._APOLLO_LOTE_ESTADO["suspeitos"])
+        self.assertGreater(antes, 0)
+        proximo_minuto()
+        self.porta.erro = S.PortaErro("O Apollo não respondeu: timeout", passageiro=True)
+        S.anuncios_apollo_lote(set())
+        self.assertEqual(sum(len(p) for p in S._APOLLO_LOTE_ESTADO["suspeitos"]), antes)
+
+    def test_tiktok_motivo_muda_para_inexistente(self):
+        tiktok_sku()
+        self.porta.estoque[("TK1", 3)] = None
+        S.anuncios_apollo_lote(set())
+        proximo_minuto()
+        self.porta.inexistentes.add("TK1")
+        S.anuncios_apollo_lote(set())
+        with S.DB_LOCK:
+            r = dict(S.DB.execute("SELECT * FROM tiktok_apollo_v1964 WHERE codigo='TK1'").fetchone())
+        self.assertIsNone(r["disponivel"])
+        self.assertIn("não existe", r["erro"])
+
+
 class ReservaTeste(LoteBase):
     """O rodizio de 3/min so roda quando o lote nao esta em dia."""
 

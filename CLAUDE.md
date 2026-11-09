@@ -578,7 +578,16 @@ itens `comprometido: true` ou `ja_comprometido`); falha no comprometer nunca des
 só conta o TikTok com `comprometido='sim'` (sem isso o Apollo não reserva: desconta). O botão do painel (`POST
 /api/expedicao-apollo/tiktok-atendimento`) com o atendimento já criado e sem as peças comprometidas só compromete; extensão Linx
 Cliente **0.53**: faixa "Peças do atendimento N não comprometidas" com o botão "Comprometer peças". Teste:
-`TESTES/test_tiktok_comprometer_v2043.py`.
+`TESTES/test_tiktok_comprometer_v2043.py`. **revisar-antes-de-subir (09/11, "corrigir todos"):** revenda sempre a de Bauru
+(`SEPARACAO_REVENDA[TIKTOK_CASA]`, não pela fila: pedido fora dela caía em Araçatuba); rotina e botão com as mesmas barreiras
+(`_tiktok_comp_pode`: pedido na fila, TikTok ainda "a enviar" — venda cancelada não reserva —, sem romaneio/caixa, venda não
+mudou); 429/409 não gastam tentativa; o comprometer roda **mesmo com o automático desligado** (só mexe em atendimento que já
+existe; o criar continua desligado); "comprometendo" que sobrou de um reinício vira `erro` no boot (volta a ser tentado e o botão
+reaparece), e sem atendimento não fica preso; item `comprometido` aceita `true` ou `"S"`/`"SIM"`/`1` (o Linx usa "S"); a amostra
+guarda só os campos do contrato. 2ª revisão (só das correções): sem atendimento a comprometer a rotina não lê a fila; as barreiras são
+conferidas de novo já na vez da porta (`EXP_PORTA_LOCK`: o romaneio pode ter saído enquanto esperava); 429/409 seguidos contam 1
+tentativa a cada `TIKTOK_COMP_PASSAGEIROS` (10, `comp_passageiros`). Limite: romaneio solto direto no Linx (fora do painel) não fica em
+`linx_operacoes_v1860`, então a barreira não o vê.
 
 **V20.41 — TikTok igual aos outros na plataforma de anúncios** (dono, 07/11; decisões: estoque "plataforma, por anúncio",
 preço digitado + Apollo de Bauru, promoções do TikTok depois). **Estoque:** conta de estoque `tiktok` (`ESTOQUE_CONTA_TIKTOK` em
@@ -1190,7 +1199,10 @@ máximo `ANUNCIO_APOLLO_LOTE_ESPERA_S` (15 s) e a filial que mudou depois entra 
 só a busca pendente o lote conta como em dia e o aviso diz "procurando qual". O lote pede **sempre as três casas**
 (`APOLLO_LOTE_REVENDAS` = 1, 2, 3): "não existe no Apollo" não depende de quem tem Automático (peça só em Bauru ou só em
 Ribeirão anunciada em Araçatuba = 0). Sem número por cima de sem número não grava (a hora fica a da 1ª vez, o rodízio chega
-nele); peça que não existe em nenhuma casa não vai para o rodízio nem tira o TikTok de "em dia".
+nele); peça que não existe em nenhuma casa não vai para o rodízio nem tira o TikTok de "em dia". 3ª revisão: o 0 de "sem
+cadastro nesta casa" só vale com outra casa confirmando o cadastro — nenhuma confirma e alguma não respondeu (Ribeirão fora)
+= None em todas e vai para o rodízio, nunca 0; o pedaço da busca do recusado volta para a fila quando a chamada falha; no
+TikTok o motivo ("não existe no Apollo") é atualizado mesmo quando a hora fica.
 
 ### Estúdio de Imagens (V20.17: servidor, tela e agente)
 `APP/imagens.html` (`/imagens`, menu Vendas e anúncios, módulo próprio **`imagens`** = `app_users.can_imagens`, mesma
