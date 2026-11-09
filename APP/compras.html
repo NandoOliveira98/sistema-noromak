@@ -146,6 +146,9 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
   <section class="card" aria-label="Fornecedor">
     <div class="cfg">
       <label class="field"><span>Fornecedor / marca</span><select id="fornecedor"></select><small>reconhecido por regras</small></label>
+      <!-- V20.43: grupo (= fabricante) e categoria (= tipo de peça) do Apollo. Com um deles, valem só as peças do Apollo que venderam -->
+      <label class="field"><span>Grupo do Apollo</span><input id="filtroGrupo" list="listaGrupos" placeholder="vazio = regras do fornecedor" autocomplete="off"><datalist id="listaGrupos"></datalist><small>fabricante; vários por vírgula</small></label>
+      <label class="field"><span>Categoria</span><input id="filtroCategoria" list="listaCategorias" placeholder="ex.: 111,15" autocomplete="off"><datalist id="listaCategorias"></datalist><small>111 filtros · 15 óleos e graxas</small></label>
       <label class="field"><span>Pedido mínimo</span><input id="minimo" type="number" min="0" step="100"><small>pelo custo do Precificador</small></label>
       <label class="field"><span>Prazo de entrega</span><input id="prazo" type="number" min="0" step="1"><small>dias até chegar</small></label>
       <label class="field"><span>Cobertura desejada</span><input id="cobertura" type="number" min="0" step="1"><small>dias após chegar</small></label>
@@ -154,6 +157,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
       <label class="field"><span>Filial (Linx)</span><select id="filialLinx"><option value="1" selected>Araçatuba</option><option value="2">Ribeirão Preto</option><option value="3">Bauru</option><option value="todas">Todas</option></select><small>de onde vem a demanda</small></label>
       <label class="field"><span>Transferir acima de</span><input id="limiteTransf" type="number" min="0" step="10" placeholder="0"><small>R$ — só se compensar o frete</small></label>
     </div>
+    <div id="avisoApollo" class="aviso hidden" style="margin:12px 0 0"></div>
     <div class="cfg-actions">
       <button id="editarBtn" class="btn" type="button"><i class=nk-i-pencil></i> Editar fornecedor</button>
       <button id="novoBtn" class="btn pri" type="button">＋ Novo fornecedor</button>
@@ -165,6 +169,8 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
       <label class="f">Pedido mínimo<input id="edMinimo" type="number" min="0" step="100"></label>
       <label class="f">Prazo (dias)<input id="edPrazo" type="number" min="0" step="1"></label>
       <label class="f">Cobertura (dias)<input id="edCobertura" type="number" min="0" step="1"></label>
+      <label class="f">Grupo do Apollo<input id="edGrupos" list="listaGrupos" placeholder="Ex.: TECFIL"><small>abre a tela já com este grupo</small></label>
+      <label class="f">Categoria do Apollo<input id="edCategorias" list="listaCategorias" placeholder="Ex.: 111,15"><small>com grupo ou categoria, valem só as peças do Apollo</small></label>
       <label class="f" style="grid-column:1/-1">Lista de códigos (opcional)<textarea id="edCodigos" placeholder="Códigos Apollo, um por linha ou separados por vírgula"></textarea><small>Peças com a Marca preenchida no cadastro de produtos também entram.</small></label>
       <div class="acoes">
         <button id="edExcluir" class="btn del" type="button">Excluir fornecedor</button>
@@ -285,6 +291,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     mostrarMarca();
     if (!state.atual) return;
     $("minimo").value = state.atual.pedido_minimo; $("prazo").value = state.atual.prazo; $("cobertura").value = state.atual.cobertura;
+    $("filtroGrupo").value = (state.atual.grupos || []).join(", "); $("filtroCategoria").value = (state.atual.categorias || []).join(", ");
     state.edits.clear(); state.off.clear(); carregarCaminho();
     await carregarDemanda();
   }
@@ -293,11 +300,12 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     if (!state.atual) return;
     msg("Carregando vendas e peças do fornecedor…");
     try {
-      state.dados = await api(`/api/compras/demanda?fornecedor=${encodeURIComponent(state.atual.nome)}&dias=${$("periodo").value}&filial=${encodeURIComponent($("filialLinx").value)}`);
+      state.dados = await api(`/api/compras/demanda?fornecedor=${encodeURIComponent(state.atual.nome)}&dias=${$("periodo").value}&filial=${encodeURIComponent($("filialLinx").value)}&grupos=${encodeURIComponent($("filtroGrupo").value)}&categorias=${encodeURIComponent($("filtroCategoria").value)}`);
       $("conteudo").classList.remove("hidden");
       const d = state.dados;
       const avisos = [];
-      if (!d.itens.length) avisos.push("Nenhuma peça da lista do Precificador bate com as regras deste fornecedor. Revise em ✎ Editar fornecedor.");
+      avisoApollo(d.apollo);
+      if (!d.itens.length && !d.apollo) avisos.push("Nenhuma peça da lista do Precificador bate com as regras deste fornecedor. Revise em ✎ Editar fornecedor.");
       if (d.sem_custo) avisos.push(`${d.sem_custo} peça(s) sem nenhum custo (sem estoque no Apollo e sem histórico): digite o custo na coluna "Custo un." para elas somarem no pedido.`);
       if (d.vendas_desde && d.vendas_desde > isoDiasAtras(Number($("periodo").value))) avisos.push(`O histórico de vendas começa em ${br(d.vendas_desde)}; períodos mais longos ainda estão incompletos.`);
       avisoLinx(d);
@@ -306,11 +314,45 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
       state.estoque = new Map(); state.estoqueT = new Map();
       d.itens.forEach(x => { if (x.estoque) { state.estoque.set(x.codigo, x.estoque); state.estoqueT.set(x.codigo, Date.parse(x.estoque.consultado_em) || 0); } });
       const semLeitura = d.itens.filter(x => (x.vendido > 0 || (x.linx_total || 0) > 0) && !x.estoque).length;
-      if (semLeitura) avisos.push(`${semLeitura} peça(s) que venderam ainda sem estoque lido: use "Atualizar só esta marca" ou "Gerar demanda geral".`);
+      if (semLeitura) avisos.push(d.apollo ? `${semLeitura} peça(s) que venderam ainda sem estoque lido: use "↻ Puxar do Apollo".` : `${semLeitura} peça(s) que venderam ainda sem estoque lido: use "Atualizar só esta marca" ou "Gerar demanda geral".`);
       msg(avisos.join(" "), avisos.length ? "erro" : "ok");
       mostrarGeral(d.geral);
       render();
     } catch (e) { msg("Não foi possível carregar a demanda: " + e.message, "erro"); }
+  }
+  // V20.43: situação da lista do grupo/categoria do Apollo (só o que vendeu entra na tela)
+  let apolloTimer = null;
+  function avisoApollo(A) {
+    const el = $("avisoApollo");
+    clearTimeout(apolloTimer);
+    if (!A) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+    el.classList.remove("hidden");
+    const filtro = [A.grupos.length ? `grupo ${A.grupos.join(", ")}` : "", A.categorias.length ? `categoria ${A.categorias.join(", ")}` : ""].filter(Boolean).join(" + ");
+    const lendo = A.rodando || A.iniciado;
+    const partes = [`<b>Peças do Apollo — ${esc(filtro)}.</b>`];
+    if (lendo) partes.push(`Lendo agora: ${esc(A.etapa || "começando")}… a tela se atualiza sozinha.`);
+    if (A.lido_em) partes.push(`${num(A.pecas)} peça(s) no Apollo (cópia de ${esc(br(A.copia_de))}); <b>${num(A.venderam)} venderam</b> e aparecem aqui${A.sem_venda ? `; ${num(A.sem_venda)} sem venda ficam fora (perguntadas de novo a cada 30 dias)` : ""}.`);
+    else if (!lendo) partes.push("Ainda não lida.");
+    if (A.incompleta) partes.push(`<b>Lista incompleta:</b> o Apollo ainda não leu a categoria de ${num(A.sem_categoria_lida)} peça(s) (umas 10 mil por noite).`);
+    if (A.erro) partes.push(`<span style="color:var(--bad)">Erro na última leitura: ${esc(A.erro)}</span>`);
+    partes.push(`<button class="btn" type="button" id="apolloBtn"${A.rodando ? " disabled" : ""}>↻ Puxar do Apollo</button>`);
+    el.innerHTML = partes.join(" ");
+    $("apolloBtn").onclick = async () => {
+      $("apolloBtn").disabled = true;
+      try {
+        await api("/api/compras/apollo/puxar", { method: "POST", body: JSON.stringify({ grupos: $("filtroGrupo").value, categorias: $("filtroCategoria").value }) });
+        msg("Lendo as peças, a demanda (só o que vendeu ou ainda não foi lido) e o estoque das que venderam, em segundo plano…");
+        apolloTimer = setTimeout(carregarDemanda, 8000);
+      } catch (e) { msg("Não foi possível puxar do Apollo: " + e.message, "erro"); $("apolloBtn").disabled = false; }
+    };
+    if (lendo) apolloTimer = setTimeout(function espera() { if (document.hidden) { apolloTimer = setTimeout(espera, 15000); return; } carregarDemanda(); }, 15000);
+  }
+  async function carregarFiltrosApollo() {
+    try {
+      const d = await api("/api/compras/apollo/filtros");
+      $("listaGrupos").innerHTML = (d.grupos || []).map(g => `<option value="${esc(g.nome)}">${num(g.pecas)} peça(s)</option>`).join("");
+      $("listaCategorias").innerHTML = (d.categorias || []).map(c => `<option value="${esc(c.categoria)}">${esc(c.nome || "")} ${num(c.pecas)} peça(s)</option>`).join("");
+    } catch (_) {}
   }
   // V18.91: o que a Linx trouxe para este fornecedor
   function avisoLinx(d) {
@@ -334,6 +376,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     const b = $("linxBtn");
     if (b) b.onclick = async () => {
       b.disabled = true;
+      if (d.apollo) { b.disabled = false; const a = $("apolloBtn"); if (a) a.click(); return; }   // V20.43: com grupo, vale o Puxar do Apollo
       try { await api("/api/compras/linx/atualizar", { method: "POST", body: JSON.stringify({ fornecedor: state.atual.nome }) });
         msg("Buscando a demanda na Linx (as três filiais de uma vez; pode levar alguns minutos)…"); setTimeout(carregarDemanda, 30000); }
       catch (e) { msg("Não foi possível buscar na Linx: " + e.message, "erro"); b.disabled = false; }
@@ -540,7 +583,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
       return `<tr class="${off ? "off" : ""}">
         <td><input type="checkbox" data-inc="${esc(x.codigo)}" ${off ? "" : "checked"} aria-label="Incluir ${esc(x.codigo)}"></td>
         <td>${esc(x.codigo)}</td>
-        <td class="desc"><b>${esc(x.descricao)}</b>${x.custo == null ? '<span class="tag semcusto">sem custo — digite ao lado</span>' : ""}</td>
+        <td class="desc"><b>${esc(x.descricao)}</b>${x.cancelado_fabrica ? '<span class="tag semcusto">cancelado na fábrica</span>' : ""}${x.custo == null ? '<span class="tag semcusto">sem custo — digite ao lado</span>' : ""}</td>
         <td>${x.curva ? `<span class="curva ${esc(x.curva)}">${esc(x.curva)}</span>` : "—"}</td>
         <td class="n" title="ML ${x.vendido_ml} · Shopee ${x.vendido_shopee}">${num(x.vendido)}</td>
         <td class="n" title="${x.linx_canais ? `${x.linx_mes_atual_linx != null ? "Meses fechados + este mês" : "Meses fechados"}: Balcão ${num(x.linx_canais.balcao)} · Oficina ${num(x.linx_canais.oficina)} · Telemarketing ${num(x.linx_canais.telemark)} · ${x.linx_mes_atual_linx != null ? `Linx deste mês até ${br(x.linx_mes_atual_ate)} ${num(x.linx_mes_atual_linx)} · ` : ""}${x.linx_desde ? `E-commerce desde ${br(x.linx_desde)} (a Linx ainda não trouxe esses meses)` : "Este mês (e-commerce)"} ${num(x.linx_mes_atual_ecom || 0)}` : "Sem histórico da Linx para esta peça"}">${x.linx_total == null ? "—" : num(x.linx_total)}</td>
@@ -586,10 +629,11 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
 
   // ---- Editor de fornecedor ----
   function abrirEditor(novo) {
-    const f = novo ? { nome: "", pedido_minimo: 0, prazo: 7, cobertura: 30, prefixos: [], palavras: [], codigos: [] } : state.atual;
+    const f = novo ? { nome: "", pedido_minimo: 0, prazo: 7, cobertura: 30, prefixos: [], palavras: [], codigos: [], grupos: [], categorias: [] } : state.atual;
     $("edNome").value = f.nome; $("edNome").disabled = !novo;
     $("edMinimo").value = f.pedido_minimo; $("edPrazo").value = f.prazo; $("edCobertura").value = f.cobertura;
     $("edPrefixos").value = (f.prefixos || []).join("\n"); $("edPalavras").value = (f.palavras || []).join("\n"); $("edCodigos").value = (f.codigos || []).join("\n");
+    $("edGrupos").value = (f.grupos || []).join(", "); $("edCategorias").value = (f.categorias || []).join(", ");
     $("edExcluir").classList.toggle("hidden", novo);
     $("editor").classList.remove("hidden"); (novo ? $("edNome") : $("edMinimo")).focus();
   }
@@ -598,7 +642,8 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
       const nome = $("edNome").value.trim();
       const d = await api("/api/compras/fornecedores", { method: "POST", body: JSON.stringify({
         nome, pedido_minimo: $("edMinimo").value, prazo: $("edPrazo").value, cobertura: $("edCobertura").value,
-        prefixos: $("edPrefixos").value, palavras: $("edPalavras").value, codigos: $("edCodigos").value }) });
+        prefixos: $("edPrefixos").value, palavras: $("edPalavras").value, codigos: $("edCodigos").value,
+        grupos: $("edGrupos").value, categorias: $("edCategorias").value }) });
       $("editor").classList.add("hidden");
       await carregarFornecedores(d.fornecedor.nome);
     } catch (e) { msg("Não foi possível salvar: " + e.message, "erro"); }
@@ -612,6 +657,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
   }
 
   $("fornecedor").addEventListener("change", e => selecionarFornecedor(e.target.value));
+  ["filtroGrupo", "filtroCategoria"].forEach(id => $(id).addEventListener("change", () => { state.edits.clear(); state.off.clear(); carregarDemanda(); }));
   $("periodo").addEventListener("change", () => { state.edits.clear(); carregarDemanda(); });
   // V20.00: filial da demanda da Linx (padrão Araçatuba), lembrada no navegador
   try { const f = localStorage.getItem("nk_compras_filial_v2000"); if (f && [...$("filialLinx").options].some(o => o.value === f)) $("filialLinx").value = f; } catch (e) {}
@@ -776,6 +822,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     api("/api/compras/comprador", { method: "POST", body: JSON.stringify({ limite_transferencia: Number($("limiteTransf").value) || 0 }) }).catch(() => {});
   });
 
+  carregarFiltrosApollo();
   carregarFornecedores().catch(e => msg("Não foi possível carregar os fornecedores: " + e.message, "erro"));
 })();
 </script>

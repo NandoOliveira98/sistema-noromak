@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.41-TIKTOK-ANUNCIOS"
+APP_VERSION = "20.43-DEMANDA-GRUPO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -1862,7 +1862,7 @@ COMPRAS_API_LIVRES = ("/api/auth/", "/api/health", "/api/tarefas", "/api/compras
 # com Admin/Supervisor: estes POSTs voltam 403 para o perfil Compras.
 COMPRAS_POST_SO_GESTOR = {
     "/api/compras/comprador", "/api/compras/geral/email", "/api/compras/marca", "/api/compras/fornecedores",
-    "/api/compras/enviar-comprador", "/api/compras/linx/atualizar",
+    "/api/compras/enviar-comprador", "/api/compras/linx/atualizar", "/api/compras/apollo/puxar",
 }
 SOMENTE_LEITURA_ERRO = {"ok": False, "code": "SOMENTE_LEITURA",
                         "error": "Perfil Consulta: somente leitura. Peça a um Admin para fazer esta alteração."}
@@ -2738,6 +2738,7 @@ def init_db() -> None:
     ensure_promo_convite_schema()  # V18.89
     ensure_shopee_anuncios_schema()  # V18.90
     ensure_linx_demanda_schema()  # V18.91
+    ensure_apollo_pecas_schema()  # V20.43
     ensure_avisos_venda_schema()  # V18.93
     ensure_ml_casas_schema()  # V18.94
     ensure_vendas_conta_schema()  # V18.98
@@ -33791,6 +33792,9 @@ def compras_fornecedor_config(body: dict[str, Any]) -> dict[str, Any]:
         "prefixos": _compras_normalizar_lista(body.get("prefixos")),
         "palavras": _compras_normalizar_lista(body.get("palavras")),
         "codigos": _compras_normalizar_lista(body.get("codigos")),
+        # V20.43: grupo (fabricante) e categoria do Apollo que a tela abre com este fornecedor
+        "grupos": apollo_filtro_lista(body.get("grupos")),
+        "categorias": apollo_filtro_lista(body.get("categorias")),
     }
 
 
@@ -33812,8 +33816,9 @@ def compras_salvar_fornecedor(nome: str, body: dict[str, Any], usuario: str) -> 
     if not nome:
         raise ValueError("Informe o nome do fornecedor/marca.")
     cfg = compras_fornecedor_config(body)
-    if not (cfg["prefixos"] or cfg["palavras"] or cfg["codigos"]):
-        raise ValueError("Informe ao menos uma regra: começo do código, palavra na descrição ou lista de códigos.")
+    if not (cfg["prefixos"] or cfg["palavras"] or cfg["codigos"] or cfg["grupos"] or cfg["categorias"]):
+        raise ValueError("Informe ao menos uma regra: grupo/categoria do Apollo, começo do código, "
+                         "palavra na descrição ou lista de códigos.")
     with DB_LOCK:
         DB.execute(
             "INSERT INTO compras_fornecedores_v1800(nome,config,updated_at,updated_by) VALUES(?,?,?,?) "
@@ -44573,7 +44578,8 @@ def _compras_codigos_dos_fornecedores(nome: str = "") -> list[str]:
 
 
 def linx_demanda_rodada(stop_event: threading.Event | None = None, *, fornecedor: str = "",
-                        forcar: bool = False, pausa: float | None = None) -> dict[str, Any]:
+                        forcar: bool = False, pausa: float | None = None,
+                        codigos: list[str] | None = None) -> dict[str, Any]:
     """Atualiza os códigos ainda não buscados hoje (no botão: todos os do fornecedor).
     V20.00: demanda pela porta, em lote; compra em aberto pela Smart API só se configurada.
     `pausa` = espera entre as perguntas de pendentes e entre as consultas da Smart API."""
@@ -44598,7 +44604,16 @@ def linx_demanda_rodada(stop_event: threading.Event | None = None, *, fornecedor
             _LINX_DEMANDA_ESTADO["ultimo"] = resultado
             return resultado
         hoje = datetime.now(BR_TZ).date().isoformat()
-        codigos = [c for c in _compras_codigos_dos_fornecedores(fornecedor) if c and "," not in c]
+        if codigos is None:
+            codigos = _compras_codigos_dos_fornecedores(fornecedor)
+            if not fornecedor:
+                # V20.43: à noite, também as peças dos grupos do Apollo usados nos últimos 30 dias
+                # (menos as lidas sem venda há menos de 30 dias).
+                try:
+                    codigos = list(dict.fromkeys([*codigos, *apollo_codigos_em_uso()]))
+                except Exception as exc:
+                    print(f"[linx-demanda] grupos do Apollo: {exc}", file=sys.stderr, flush=True)
+        codigos = [c for c in dict.fromkeys(str(x or "").strip() for x in codigos) if c and "," not in c]
         with DB_LOCK:
             feitos = {str(r["codigo"]) for r in DB.execute(
                 "SELECT codigo FROM linx_demanda_item_v1891 WHERE buscado_dia=? AND ok=1", (hoje,)).fetchall()}
@@ -44703,6 +44718,10 @@ def linx_demanda_loop(stop_event: threading.Event) -> None:
     while not stop_event.is_set():
         hora = datetime.now(BR_TZ).hour
         if hora >= LINX_DEMANDA_HORAS[0] or hora < LINX_DEMANDA_HORAS[1]:
+            try:
+                apollo_grupos_noite(stop_event)   # V20.43: lista e estoque dos grupos em uso
+            except Exception as exc:
+                print(f"[linx-demanda] grupos do Apollo: {exc}", file=sys.stderr, flush=True)
             try:
                 linx_demanda_rodada(stop_event)
             except Exception as exc:
@@ -44838,7 +44857,8 @@ def linx_demanda_por_codigo(codigos: list[str], dias: int, hoje: date | None = N
     return out, resumo
 
 
-def compras_demanda_payload(fornecedor: str, dias: int, filial: str = "1") -> dict[str, Any]:
+def compras_demanda_payload(fornecedor: str, dias: int, filial: str = "1", grupos: Any = "",
+                            categorias: Any = "") -> dict[str, Any]:
     nome = str(fornecedor or "").strip().upper()
     cfg = next((f for f in compras_fornecedores() if f["nome"] == nome), None)
     if not cfg:
@@ -44876,16 +44896,51 @@ def compras_demanda_payload(fornecedor: str, dias: int, filial: str = "1") -> di
     custos_registrar_auto([(c, p["custo"]) for c, p in produtos.items() if p["custo"]], "Precificador")
     reservas = _compras_custos_reserva(produtos)
     custos_ctx = _financeiro_custos_aracatuba()   # V19.78: só Araçatuba, nunca a planilha antiga
+    # V20.43: com grupo/categoria do Apollo valem só as peças do Apollo + a lista de códigos do
+    # fornecedor + as marcadas à mão para ele (dono, 09/11); e só as que VENDERAM (Linx em 12
+    # meses ou e-commerce): "puxar apenas o que vendeu, para não sobrecarregar".
+    chave = apollo_filtro_chave(grupos, categorias)
+    apollo: dict[str, Any] | None = None
+    candidatos: list[tuple[str, str]] = []
+    if chave:
+        apollo_filtro_marcar_uso(grupos, categorias)
+        info = apollo_filtro_info(chave) or {}
+        pecas = apollo_pecas_do_filtro(chave)
+        desc_apollo = {x["codigo"]: x["descricao"] for x in pecas}
+        cancelado = {x["codigo"] for x in pecas if x["cancelado"]}
+        base = [x["codigo"] for x in pecas]
+        base += [c for c in cfg["codigos"] if c not in desc_apollo]
+        base += [c for c, f in manual.items() if f == nome and c not in desc_apollo]
+        base = list(dict.fromkeys(base))
+        ecom = {c for c, v in vendas.items() if int(v.get("ml", 0) + v.get("shopee", 0)) > 0}
+        venderam = apollo_codigos_que_venderam(base, ecom)
+        candidatos = [(c, (produtos.get(c) or {}).get("descricao") or desc_apollo.get(c, "")) for c in base
+                      if c in venderam]
+        iniciado = False
+        if not info.get("lido_em") and not APOLLO_GRUPO_ESTADO.get("rodando") and CHAVE_CRM:
+            iniciado = apollo_grupo_iniciar(grupos, categorias)   # 1ª vez deste filtro: lê sozinho
+        apollo = {"chave": chave, "grupos": apollo_filtro_lista(grupos), "categorias": apollo_filtro_lista(categorias),
+                  "lido_em": info.get("lido_em") or "", "total": info.get("total"), "pecas": len(pecas),
+                  "venderam": len(candidatos), "sem_venda": len(base) - len(candidatos),
+                  "sem_categoria_lida": info.get("sem_categoria_lida"), "copia_de": info.get("copia_de") or "",
+                  "estoque_em": info.get("estoque_em") or "", "erro": info.get("erro") or "",
+                  "erro_em": info.get("erro_em") or "", "iniciado": iniciado,
+                  "rodando": bool(APOLLO_GRUPO_ESTADO.get("rodando")) and APOLLO_GRUPO_ESTADO.get("chave") == chave,
+                  "etapa": APOLLO_GRUPO_ESTADO.get("etapa") or "",
+                  "incompleta": bool(apollo_filtro_lista(categorias)) and bool(info.get("sem_categoria_lida"))}
+    else:
+        cancelado = set()
+        candidatos = [(c, p["descricao"]) for c, p in produtos.items() if do_fornecedor(c, p["descricao"])]
     itens = []
-    for codigo, p in produtos.items():
-        if not do_fornecedor(codigo, p["descricao"]):
-            continue
+    for codigo, descricao in candidatos:
+        p = produtos.get(codigo) or {"descricao": descricao, "curva": ""}
         v = vendas.get(codigo, {})
         custo, origem, data_custo = compras_custo_aracatuba(codigo, custos_ctx)
         if origem in ("manual", "ultimo", "venda"):
             data_custo = (reservas.get(codigo, {}).get({"manual": "data_manual", "ultimo": "data_auto",
                                                          "venda": "data_venda"}[origem]) or "")
-        itens.append({"codigo": codigo, "descricao": p["descricao"], "curva": p["curva"], "custo": custo,
+        itens.append({"codigo": codigo, "descricao": descricao or p["descricao"], "curva": p.get("curva") or "",
+                      "custo": custo, "cancelado_fabrica": codigo in cancelado,
                       "custo_origem": origem, "custo_data": data_custo,
                       "vendido": int(v.get("ml", 0) + v.get("shopee", 0)),
                       "vendido_ml": int(v.get("ml", 0)), "vendido_shopee": int(v.get("shopee", 0))})
@@ -44916,12 +44971,464 @@ def compras_demanda_payload(fornecedor: str, dias: int, filial: str = "1") -> di
         "geral": compras_geral_info(),
         "linx": linx_resumo,
         "fornecedor": cfg,
+        "apollo": apollo,
         "dias": dias,
         "vendas_desde": primeiro or "",
         "itens": itens,
         "sem_custo": sum(1 for x in itens if x["custo"] is None),
         "anuncios_sem_codigo": len(sem_codigo),
     }
+
+
+# ---------------------------------------------------------------------------
+# V20.43: Demanda de Compra por GRUPO do Apollo (dono, 09/11; portas do Guilherme de 09/11).
+# No Apollo o GRUPO é o fabricante (TECFIL, WEGA), a MARCA é NOROMAK em tudo (não separa nada,
+# fica fora) e a CATEGORIA é o tipo de peça (111 = filtros, 15 = óleos e graxas). A tela tem
+# DOIS filtros: o Fornecedor (como já era: pedido mínimo, prazo, cobertura, regras) e o Grupo
+# + Categoria do Apollo. Com grupo/categoria escolhido valem SÓ as peças do Apollo (+ a lista
+# de códigos do fornecedor e as marcadas à mão para ele); começo de código e palavra na
+# descrição ficam fora (dono, 09/11: palavra puxava peça de outro fabricante). Assim entra a
+# peça que só vende no balcão e nunca foi anunciada.
+# Portas (só leitura, mesma chave): GET pecas/grupos, pecas/categorias e
+# pecas?grupo=&categoria=&pagina=&por_pagina=500 (60/min, lê a cópia da madrugada, sem Apollo);
+# POST estoque/lote {codigos ≤ 500, revendas} (Disponível lido AGORA, 6/min, limite separado
+# dos 20/min). Filtro com `categoria` e `sem_categoria_lida` > 0 = lista INCOMPLETA (a categoria
+# é lida ~10 mil peças por noite): a tela avisa. Grupo grande demais (> APOLLO_PECAS_MAX, ex.:
+# AGRALE com 63 mil) é recusado: a demanda é lida a ~40 códigos/min.
+# A lista de cada filtro fica em apollo_peca_v2043 (substituída inteira só quando todas as
+# páginas vieram; erro não apaga a anterior). Estoque do lote vai para compras_estoque_v1912,
+# no mesmo formato da demanda geral. Os filtros usados nos últimos 30 dias são relidos à noite.
+# ---------------------------------------------------------------------------
+APOLLO_PECAS_POR_PAGINA = 500
+APOLLO_PECAS_MAX = 5000
+APOLLO_PECAS_PAUSA = 1.1               # s entre páginas (porta: 60/min)
+APOLLO_PECAS_VALIDADE_S = 20 * 3600    # lista mais velha que isso é relida
+APOLLO_PECAS_USO_DIAS = 30             # filtro usado há até isso é relido à noite
+APOLLO_FILTROS_CACHE_S = 3600
+APOLLO_ESTOQUE_LOTE = 500
+APOLLO_ESTOQUE_PAUSA = 10.5            # s entre lotes (porta: 6/min)
+APOLLO_ESTOQUE_REVENDAS = [1, 2, 3]    # Araçatuba, Ribeirão, Bauru (a tela sugere transferência)
+APOLLO_GRUPO_LOCK = threading.Lock()   # uma leitura de grupo por vez
+APOLLO_GRUPO_ESTADO: dict[str, Any] = {"rodando": False}
+_APOLLO_FILTROS_CACHE: dict[str, Any] = {"em": 0.0, "dados": None}
+
+
+def ensure_apollo_pecas_schema() -> None:
+    """Criada no init_db (como a da demanda Linx)."""
+    with DB_LOCK:
+        DB.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS apollo_peca_filtro_v2043 (
+            chave TEXT PRIMARY KEY,
+            grupos TEXT NOT NULL DEFAULT '',
+            categorias TEXT NOT NULL DEFAULT '',
+            lido_em TEXT NOT NULL DEFAULT '',
+            total INTEGER,
+            sem_categoria_lida INTEGER,
+            copia_de TEXT NOT NULL DEFAULT '',
+            erro TEXT NOT NULL DEFAULT '',
+            erro_em TEXT NOT NULL DEFAULT '',
+            estoque_em TEXT NOT NULL DEFAULT '',
+            usado_em TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS apollo_peca_v2043 (
+            chave TEXT NOT NULL,
+            codigo TEXT NOT NULL,
+            descricao TEXT NOT NULL DEFAULT '',
+            grupo TEXT NOT NULL DEFAULT '',
+            categoria TEXT NOT NULL DEFAULT '',
+            nome_categoria TEXT NOT NULL DEFAULT '',
+            cancelado INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (chave, codigo)
+        );
+        """
+        )
+
+
+def apollo_filtro_lista(valor: Any) -> list[str]:
+    """'TECFIL, wega' / lista → ['TECFIL', 'WEGA'] (sem repetir, até 50, cada um até 60)."""
+    if isinstance(valor, (list, tuple)):
+        partes = [str(x or "") for x in valor]
+    else:
+        partes = re.split(r"[\n,;]+", str(valor or ""))
+    out: list[str] = []
+    for p in partes:
+        t = re.sub(r"\s+", " ", p).strip().upper()[:60]
+        if t and t not in out:
+            out.append(t)
+    return out[:50]
+
+
+def apollo_filtro_chave(grupos: Any, categorias: Any) -> str:
+    g, c = sorted(apollo_filtro_lista(grupos)), sorted(apollo_filtro_lista(categorias))
+    if not g and not c:
+        return ""
+    return f"g={','.join(g)}|c={','.join(c)}"
+
+
+def _apollo_cancelado(valor: Any) -> bool:
+    return str(valor if valor is not None else "").strip().lower() in ("1", "true", "s", "sim", "y", "yes")
+
+
+def apollo_filtros(forcar: bool = False) -> dict[str, Any]:
+    """Grupos (fabricantes) e categorias da porta, guardados 1 h na memória. Falha = o último bom + erro."""
+    agora = time.time()
+    cache = _APOLLO_FILTROS_CACHE
+    if not forcar and cache["dados"] and agora - cache["em"] < APOLLO_FILTROS_CACHE_S:
+        return cache["dados"]
+    try:
+        g = _exp_porta_get("pecas/grupos", {"operador": "noromak-demanda"})
+        c = _exp_porta_get("pecas/categorias", {"operador": "noromak-demanda"})
+        if g.get("ok") is False or c.get("ok") is False:
+            raise PortaErro(str(g.get("erro") or c.get("erro") or "a porta recusou"))
+        grupos = [{"grupo": x.get("grupo"), "nome": str(x.get("nome") or x.get("grupo") or "").strip(),
+                   "pecas": x.get("pecas")} for x in g.get("grupos") or [] if isinstance(x, dict)]
+        cats = [{"categoria": x.get("categoria"), "nome": x.get("nome"), "pecas": x.get("pecas")}
+                for x in c.get("categorias") or [] if isinstance(x, dict)]
+        dados = {"ok": True, "grupos": [x for x in grupos if x["nome"]], "categorias": cats,
+                 "sem_categoria_lida": c.get("sem_categoria_lida"), "copia_de": g.get("copia_de") or "",
+                 "lido_em": now_iso(), "erro": ""}
+        cache.update(em=agora, dados=dados)
+        return dados
+    except PortaErro as exc:
+        if cache["dados"]:
+            return {**cache["dados"], "erro": str(exc)[:300]}
+        return {"ok": False, "grupos": [], "categorias": [], "sem_categoria_lida": None, "copia_de": "",
+                "lido_em": "", "erro": str(exc)[:300]}
+
+
+def apollo_filtro_info(chave: str) -> dict[str, Any] | None:
+    with DB_LOCK:
+        r = DB.execute("SELECT * FROM apollo_peca_filtro_v2043 WHERE chave=?", (chave,)).fetchone()
+    return dict(r) if r else None
+
+
+def apollo_pecas_do_filtro(chave: str) -> list[dict[str, Any]]:
+    with DB_LOCK:
+        return [dict(r) for r in DB.execute(
+            "SELECT codigo, descricao, grupo, categoria, nome_categoria, cancelado FROM apollo_peca_v2043 "
+            "WHERE chave=? ORDER BY codigo", (chave,)).fetchall()]
+
+
+def _apollo_filtro_gravar(chave: str, grupos: list[str], categorias: list[str], **campos: Any) -> None:
+    """Chamar com o DB_LOCK."""
+    DB.execute("INSERT INTO apollo_peca_filtro_v2043(chave,grupos,categorias) VALUES(?,?,?) "
+               "ON CONFLICT(chave) DO NOTHING", (chave, ",".join(grupos), ",".join(categorias)))
+    if campos:
+        DB.execute(f"UPDATE apollo_peca_filtro_v2043 SET {', '.join(f'{k}=?' for k in campos)} WHERE chave=?",
+                   (*campos.values(), chave))
+
+
+def apollo_filtro_marcar_uso(grupos: Any, categorias: Any) -> str:
+    chave = apollo_filtro_chave(grupos, categorias)
+    if chave:
+        with DB_LOCK:
+            _apollo_filtro_gravar(chave, sorted(apollo_filtro_lista(grupos)), sorted(apollo_filtro_lista(categorias)),
+                                  usado_em=now_iso())
+            DB.commit()
+    return chave
+
+
+def apollo_pecas_ler(grupos: Any, categorias: Any, *, pausa: float | None = None,
+                     stop_event: threading.Event | None = None) -> dict[str, Any]:
+    """Lê todas as páginas do filtro na porta e troca a lista guardada. Qualquer falha = a lista
+    anterior fica como estava (com o erro gravado)."""
+    g, c = sorted(apollo_filtro_lista(grupos)), sorted(apollo_filtro_lista(categorias))
+    chave = apollo_filtro_chave(g, c)
+    if not chave:
+        raise ValueError("Escolha o grupo ou a categoria do Apollo.")
+    pausa = APOLLO_PECAS_PAUSA if pausa is None else pausa
+    itens: dict[str, dict[str, Any]] = {}
+    total = sem_cat = None
+    copia = ""
+    try:
+        pagina = 1
+        for _ in range(APOLLO_PECAS_MAX // APOLLO_PECAS_POR_PAGINA + 3):
+            params: dict[str, Any] = {"pagina": pagina, "por_pagina": APOLLO_PECAS_POR_PAGINA,
+                                      "operador": "noromak-demanda"}
+            if g:
+                params["grupo"] = ",".join(g)
+            if c:
+                params["categoria"] = ",".join(c)
+            resp = _exp_porta_get("pecas", params)
+            if resp.get("ok") is False:
+                raise PortaErro(str(resp.get("erro") or resp.get("detail") or "a porta recusou"))
+            if pagina == 1:
+                total = resp.get("total")
+                sem_cat = resp.get("sem_categoria_lida")
+                copia = str(resp.get("copia_de") or "")
+                if isinstance(total, (int, float)) and total > APOLLO_PECAS_MAX:
+                    raise PortaErro(f"{int(total)} peças nesse filtro (máximo {APOLLO_PECAS_MAX}): "
+                                    "escolha também a categoria ou um grupo menor.")
+            for x in resp.get("itens") or []:
+                if not isinstance(x, dict):
+                    continue
+                cod = str(x.get("codigo") or "").strip()
+                if not cod or "," in cod:
+                    continue
+                itens[cod] = {"codigo": cod, "descricao": str(x.get("descricao") or "").strip()[:200],
+                              "grupo": str(x.get("nome_grupo") or x.get("grupo") or "").strip()[:80],
+                              "categoria": str(x.get("categoria") if x.get("categoria") is not None else "").strip()[:20],
+                              "nome_categoria": str(x.get("nome_categoria") or "").strip()[:80],
+                              "cancelado": 1 if _apollo_cancelado(x.get("cancelado_fabrica")) else 0}
+            if len(itens) > APOLLO_PECAS_MAX:
+                raise PortaErro(f"mais de {APOLLO_PECAS_MAX} peças nesse filtro: escolha também a categoria.")
+            proxima = resp.get("proxima_pagina")
+            if not proxima:
+                break
+            try:
+                proxima = int(proxima)
+            except (TypeError, ValueError):
+                raise PortaErro("a porta mandou uma página seguinte inválida")
+            if proxima <= pagina:
+                raise PortaErro("a porta mandou uma página seguinte inválida")
+            pagina = proxima
+            if stop_event is not None and stop_event.is_set():
+                raise PortaErro("leitura interrompida")
+            if pausa > 0:
+                if stop_event is not None:
+                    if stop_event.wait(pausa):
+                        raise PortaErro("leitura interrompida")
+                else:
+                    time.sleep(pausa)
+        else:
+            raise PortaErro("páginas demais na resposta da porta")
+    except PortaErro as exc:
+        with DB_LOCK:
+            _apollo_filtro_gravar(chave, g, c, erro=str(exc)[:300], erro_em=now_iso())
+            DB.commit()
+        return {"ok": False, "chave": chave, "erro": str(exc)[:300]}
+    with DB_LOCK:
+        DB.execute("DELETE FROM apollo_peca_v2043 WHERE chave=?", (chave,))
+        DB.executemany("INSERT INTO apollo_peca_v2043(chave,codigo,descricao,grupo,categoria,nome_categoria,cancelado) "
+                       "VALUES(?,?,?,?,?,?,?)",
+                       [(chave, x["codigo"], x["descricao"], x["grupo"], x["categoria"], x["nome_categoria"],
+                         x["cancelado"]) for x in itens.values()])
+        _apollo_filtro_gravar(chave, g, c, lido_em=now_iso(),
+                              total=int(total) if isinstance(total, (int, float)) else len(itens),
+                              sem_categoria_lida=int(sem_cat) if isinstance(sem_cat, (int, float)) else None,
+                              copia_de=copia, erro="", erro_em="")
+        DB.commit()
+    return {"ok": True, "chave": chave, "pecas": len(itens), "sem_categoria_lida": sem_cat}
+
+
+def apollo_estoque_lote(codigos: list[str], *, pausa: float | None = None,
+                        stop_event: threading.Event | None = None) -> dict[str, Any]:
+    """Disponível de cada código pela porta estoque/lote (≤ 500 por chamada, 6/min), gravado em
+    compras_estoque_v1912 no formato da demanda geral. Casa sem resposta/erro = estoque desconhecido,
+    nunca zero; falha da porta = nada gravado daquele lote."""
+    pausa = APOLLO_ESTOQUE_PAUSA if pausa is None else pausa
+    codigos = [c for c in dict.fromkeys(str(x or "").strip() for x in codigos) if c]
+    lidos = sem = 0
+    erro = ""
+    for i in range(0, len(codigos), APOLLO_ESTOQUE_LOTE):
+        if i:
+            if stop_event is not None:
+                if stop_event.wait(pausa):
+                    break
+            elif pausa > 0:
+                time.sleep(pausa)
+        lote = codigos[i:i + APOLLO_ESTOQUE_LOTE]
+        try:
+            resp = _exp_porta("estoque/lote", {"codigos": lote, "revendas": APOLLO_ESTOQUE_REVENDAS,
+                                               "operador": "noromak-demanda"})
+            if resp.get("ok") is False:
+                raise PortaErro(str(resp.get("erro") or resp.get("detail") or "a porta recusou"))
+        except PortaErro as exc:
+            erro = str(exc)[:300]
+            break
+        por_codigo: dict[str, list[dict[str, Any]]] = {}
+        for x in resp.get("itens") or []:
+            if isinstance(x, dict) and str(x.get("codigo") or "").strip():
+                por_codigo.setdefault(str(x["codigo"]).strip(), []).append(x)
+        quando = now_iso()
+        linhas = []
+        for cod in lote:
+            estoques, faltam = [], []
+            for x in por_codigo.get(cod, []):
+                try:
+                    rev = int(x.get("revenda"))
+                except (TypeError, ValueError):
+                    continue
+                disp = x.get("disponivel")
+                if x.get("erro") or disp is None:
+                    faltam.append(rev)
+                    continue
+                try:
+                    estoques.append({"revenda": rev, "disponivel": float(disp)})
+                except (TypeError, ValueError):
+                    faltam.append(rev)
+            vistos = {e["revenda"] for e in estoques} | set(faltam)
+            faltam += [r for r in APOLLO_ESTOQUE_REVENDAS if r not in vistos]
+            res = _compras_resultado_estoque({"estoques": estoques, "casas_sem_resposta": faltam})
+            res["origem"] = "estoque_lote"
+            if not res.get("stock_known"):
+                sem += 1
+            linhas.append((cod, quando, json.dumps(res, ensure_ascii=False)))
+        with DB_LOCK:
+            _compras_geral_schema()
+            DB.executemany("INSERT INTO compras_estoque_v1912(codigo,consultado_em,resultado_json) VALUES(?,?,?) "
+                           "ON CONFLICT(codigo) DO UPDATE SET consultado_em=excluded.consultado_em, "
+                           "resultado_json=excluded.resultado_json", linhas)
+            DB.commit()
+        lidos += len(lote)
+    return {"ok": not erro, "codigos": len(codigos), "lidos": lidos, "sem_resposta": sem, "erro": erro}
+
+
+APOLLO_SEM_VENDA_REVER_DIAS = 30      # peça sem venda só é perguntada de novo depois disso
+
+
+def _apollo_em_partes(codigos: list[str]) -> list[list[str]]:
+    return [codigos[i:i + 500] for i in range(0, len(codigos), 500)]
+
+
+def apollo_codigos_que_venderam(codigos: list[str], ecommerce: set[str] | None = None) -> set[str]:
+    """Peças com venda na demanda lida (qualquer filial, meses fechados ou o mês em andamento)
+    ou no e-commerce. Sem leitura = não vendeu (ainda)."""
+    codigos = [c for c in dict.fromkeys(codigos) if c]
+    out: set[str] = set()
+    with DB_LOCK:
+        for parte in _apollo_em_partes(codigos):
+            out.update(str(r["codigo"]) for r in DB.execute(
+                f"SELECT DISTINCT codigo FROM linx_demanda_filial_v2000 WHERE total > 0 AND codigo IN "
+                f"({','.join('?' * len(parte))})", parte).fetchall())
+    if ecommerce is None:
+        try:
+            vendas, _ = compras_vendas_por_codigo(COMPRAS_GERAL_DIAS, _compras_produtos_precificador())
+            ecommerce = {c for c, v in vendas.items() if int(v.get("ml", 0) + v.get("shopee", 0)) > 0}
+        except Exception:
+            ecommerce = set()
+    out.update(c for c in codigos if c in ecommerce)
+    return out
+
+
+def apollo_codigos_a_perguntar(codigos: list[str]) -> list[str]:
+    """Tira as peças lidas SEM venda há menos de APOLLO_SEM_VENDA_REVER_DIAS (a porta da demanda é lenta)."""
+    codigos = [c for c in dict.fromkeys(codigos) if c]
+    limite = (datetime.now(timezone.utc) - timedelta(days=APOLLO_SEM_VENDA_REVER_DIAS)).isoformat()
+    lidos_sem_venda: set[str] = set()
+    with DB_LOCK:
+        for parte in _apollo_em_partes(codigos):
+            marcas = ",".join("?" * len(parte))
+            lidos = {str(r["codigo"]) for r in DB.execute(
+                f"SELECT codigo FROM linx_demanda_item_v1891 WHERE ok=1 AND buscado_em >= ? AND codigo IN ({marcas})",
+                (limite, *parte)).fetchall()}
+            com_venda = {str(r["codigo"]) for r in DB.execute(
+                f"SELECT DISTINCT codigo FROM linx_demanda_filial_v2000 WHERE total > 0 AND codigo IN ({marcas})",
+                parte).fetchall()}
+            lidos_sem_venda |= lidos - com_venda
+    return [c for c in codigos if c not in lidos_sem_venda]
+
+
+def _apollo_grupo_estado(**campos: Any) -> None:
+    APOLLO_GRUPO_ESTADO.update(campos)
+
+
+def apollo_grupo_rodada(grupos: Any, categorias: Any, *, forcar: bool = False,
+                        stop_event: threading.Event | None = None, pausa: float | None = None,
+                        demanda: bool = True) -> dict[str, Any]:
+    """Lista de peças do filtro (se velha ou `forcar`) → demanda pela porta (sem as já lidas sem venda)
+    → estoque em lote só das que venderam."""
+    if not APOLLO_GRUPO_LOCK.acquire(blocking=False):
+        return {"ok": True, "ja_rodando": True}
+    chave = apollo_filtro_chave(grupos, categorias)
+    try:
+        _apollo_grupo_estado(rodando=True, chave=chave, etapa="Lendo as peças no Apollo", inicio=now_iso(),
+                             fim="", erro="")
+        if not CHAVE_CRM:
+            resultado = {"ok": False, "chave": chave, "erro": "porta sem chave (CHAVE_CRM) no servidor"}
+            _apollo_grupo_estado(ultimo=resultado, erro=resultado["erro"])
+            return resultado
+        info = apollo_filtro_info(chave) or {}
+        velho = True
+        if info.get("lido_em"):
+            try:
+                velho = (datetime.now(timezone.utc) - datetime.fromisoformat(info["lido_em"])).total_seconds() \
+                    > APOLLO_PECAS_VALIDADE_S
+            except (TypeError, ValueError):
+                velho = True
+        lista = {"ok": True, "pulado": "lista recente"}
+        if forcar or velho:
+            lista = apollo_pecas_ler(grupos, categorias, pausa=pausa, stop_event=stop_event)
+        codigos = [x["codigo"] for x in apollo_pecas_do_filtro(chave)]
+        if not lista.get("ok") and not codigos:
+            _apollo_grupo_estado(ultimo=lista, erro=lista.get("erro", ""))
+            return lista
+        # V20.43 (dono, 09/11: "puxar apenas o que vendeu, para não sobrecarregar"): a demanda só é
+        # perguntada para quem não está como "sem venda" lido há menos de 30 dias, e o estoque só
+        # é lido de quem vendeu (Linx em 12 meses ou e-commerce).
+        perguntar = apollo_codigos_a_perguntar(codigos)
+        dem: dict[str, Any] = {"pulado": "sem demanda"}
+        if demanda and perguntar and not (stop_event is not None and stop_event.is_set()):
+            _apollo_grupo_estado(etapa=f"Lendo a demanda de {len(perguntar)} peças (~40 por minuto)")
+            dem = linx_demanda_rodada(stop_event, codigos=perguntar, forcar=forcar, pausa=pausa)
+        vendeu = sorted(apollo_codigos_que_venderam(codigos))
+        estoque: dict[str, Any] = {"ok": True, "codigos": 0, "lidos": 0, "sem_resposta": 0, "erro": ""}
+        if vendeu and not (stop_event is not None and stop_event.is_set()):
+            _apollo_grupo_estado(etapa=f"Lendo o estoque de {len(vendeu)} peças que venderam")
+            estoque = apollo_estoque_lote(vendeu, pausa=pausa, stop_event=stop_event)
+            if estoque.get("ok"):
+                with DB_LOCK:
+                    _apollo_filtro_gravar(chave, sorted(apollo_filtro_lista(grupos)),
+                                          sorted(apollo_filtro_lista(categorias)), estoque_em=now_iso())
+                    DB.commit()
+        resultado = {"ok": bool(lista.get("ok")) and bool(estoque.get("ok")), "chave": chave, "pecas": len(codigos),
+                     "perguntadas": len(perguntar), "venderam": len(vendeu),
+                     "lista": lista, "estoque": estoque, "demanda": dem, "em": now_iso()}
+        _apollo_grupo_estado(ultimo=resultado,
+                             erro=str(lista.get("erro") or estoque.get("erro") or dem.get("erro") or ""))
+        return resultado
+    finally:
+        _apollo_grupo_estado(rodando=False, fim=now_iso(), etapa="")
+        APOLLO_GRUPO_LOCK.release()
+
+
+def apollo_grupo_iniciar(grupos: Any, categorias: Any, *, forcar: bool = False) -> bool:
+    """Roda a leitura do filtro numa thread. False = já tem uma rodando."""
+    if not apollo_filtro_chave(grupos, categorias):
+        raise ValueError("Escolha o grupo ou a categoria do Apollo.")
+    if APOLLO_GRUPO_ESTADO.get("rodando") or APOLLO_GRUPO_LOCK.locked():
+        return False
+    _apollo_grupo_estado(rodando=True, chave=apollo_filtro_chave(grupos, categorias),
+                         etapa="Começando", inicio=now_iso(), fim="")
+
+    def rodar() -> None:
+        try:
+            apollo_grupo_rodada(grupos, categorias, forcar=forcar)
+        except Exception as exc:
+            _apollo_grupo_estado(rodando=False, erro=str(exc)[:300], fim=now_iso())
+            print(f"[demanda-grupo] falhou: {exc}", file=sys.stderr, flush=True)
+
+    threading.Thread(target=rodar, name="demanda-grupo", daemon=True).start()
+    return True
+
+
+def apollo_filtros_em_uso(dias: int = APOLLO_PECAS_USO_DIAS) -> list[dict[str, Any]]:
+    limite = (datetime.now(timezone.utc) - timedelta(days=dias)).isoformat()
+    with DB_LOCK:
+        return [dict(r) for r in DB.execute(
+            "SELECT * FROM apollo_peca_filtro_v2043 WHERE usado_em >= ? ORDER BY usado_em DESC", (limite,)).fetchall()]
+
+
+def apollo_codigos_em_uso() -> list[str]:
+    """Peças dos filtros usados nos últimos 30 dias que a demanda da noite pergunta (sem as lidas sem venda)."""
+    chaves = [f["chave"] for f in apollo_filtros_em_uso()]
+    out: list[str] = []
+    for ch in chaves:
+        out.extend(x["codigo"] for x in apollo_pecas_do_filtro(ch))
+    return apollo_codigos_a_perguntar(list(dict.fromkeys(out)))
+
+
+def apollo_grupos_noite(stop_event: threading.Event | None = None) -> int:
+    """Relê a lista e o estoque dos filtros em uso (a demanda vai na rodada da noite). Devolve quantos."""
+    feitos = 0
+    for f in apollo_filtros_em_uso():
+        if stop_event is not None and stop_event.is_set():
+            break
+        r = apollo_grupo_rodada(f["grupos"], f["categorias"], stop_event=stop_event, demanda=False)
+        if not r.get("ja_rodando"):
+            feitos += 1
+    return feitos
 
 
 # ---------------------------------------------------------------------------
@@ -48210,11 +48717,20 @@ class AppHandler(BaseHTTPRequestHandler):
                 fornecedor = str((query.get("fornecedor") or [""])[0] or "")
                 dias = int(str((query.get("dias") or ["60"])[0] or "60"))
                 filial = str((query.get("filial") or ["1"])[0] or "1")   # V20.00: filial da demanda Linx
-                self.send_json(compras_demanda_payload(fornecedor, dias, filial))
+                grupos = str((query.get("grupos") or [""])[0] or "")     # V20.43: grupo/categoria do Apollo
+                categorias = str((query.get("categorias") or [""])[0] or "")
+                self.send_json(compras_demanda_payload(fornecedor, dias, filial, grupos, categorias))
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/compras/apollo/filtros":
+            # V20.43: grupos (fabricantes) e categorias do Apollo para os filtros da tela. Só lê.
+            if self.auth(admin_only=True, compras_ok=True) is None:
+                return
+            self.send_json({**apollo_filtros(), "andamento": {k: v for k, v in APOLLO_GRUPO_ESTADO.items()
+                                                               if k != "ultimo"}})
             return
         if path == "/api/compras/geral":
             # V19.12: situação da demanda geral (última geração, andamento, e-mail). Leve.
@@ -49897,6 +50413,23 @@ class AppHandler(BaseHTTPRequestHandler):
                     return
                 threading.Thread(target=lambda: linx_demanda_rodada(fornecedor=nome, forcar=True),
                                  name="linx-demanda-manual", daemon=True).start()
+                self.send_json({"ok": True, "iniciado": True})
+            return
+        if path == "/api/compras/apollo/puxar":
+            # V20.43: relê agora as peças do grupo/categoria do Apollo, a demanda (só o que vendeu
+            # ou ainda não foi lido) e o estoque das que venderam. Em segundo plano; só lê.
+            ctx = self.auth(admin_only=True, compras_ok=True)
+            if ctx is not None:
+                body = self.read_json() or {}
+                try:
+                    iniciado = apollo_grupo_iniciar(body.get("grupos"), body.get("categorias"), forcar=True)
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                    return
+                if not iniciado:
+                    self.send_json({"ok": False, "error": "Já tem uma leitura de grupo rodando. Aguarde terminar.",
+                                    "andamento": {k: v for k, v in APOLLO_GRUPO_ESTADO.items() if k != "ultimo"}}, 409)
+                    return
                 self.send_json({"ok": True, "iniciado": True})
             return
         if path == "/api/compras/enviar-comprador":

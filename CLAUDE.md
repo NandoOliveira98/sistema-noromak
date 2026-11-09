@@ -1691,6 +1691,21 @@ fechados e mês em andamento lidos num `DB_LOCK` só (o e-commerce fora dele); a
 mês (até 15), achadas na resposta crua (chave `parcial`/`ate`/`DemandaEcommerce` ou mês corrente) — a resposta inteira
 cortada em 6.000 caracteres ficava só com os meses fechados.
 
+**V20.43 — demanda por GRUPO do Apollo** (dono, 09/11; portas do Guilherme de 09/11). No Apollo **grupo = fabricante**
+(TECFIL, WEGA), **marca = NOROMAK em tudo** (fica fora) e **categoria = tipo** (111 filtros, 15 óleos/graxas). A tela tem **dois
+filtros**: o Fornecedor (como já era) e **Grupo + Categoria** (`filtroGrupo`/`filtroCategoria`, vários por vírgula; o fornecedor
+guarda `grupos`/`categorias` e a tela abre com eles). Com grupo/categoria valem **só as peças do Apollo** + a lista de códigos do
+fornecedor + as marcadas à mão para ele (começo de código/palavra ficam fora). **Só o que vendeu** (dono: "para não sobrecarregar"):
+a tela mostra só quem tem venda na demanda lida (Linx, qualquer filial) ou no e-commerce; peça lida **sem venda** não é perguntada de
+novo por `APOLLO_SEM_VENDA_REVER_DIAS` (30); o estoque (`POST estoque/lote`, ≤ 500 por chamada, revendas 1/2/3, gravado em
+`compras_estoque_v1912` no formato da geral; sem resposta = desconhecido, nunca zero) só é lido de quem vendeu. Lista do filtro:
+`GET pecas?grupo=&categoria=&pagina=&por_pagina=500` (cópia da madrugada, 60/min) em `apollo_peca_v2043`, trocada só com todas as
+páginas (erro não apaga; > `APOLLO_PECAS_MAX` 5000 = recusado, "escolha a categoria"); `apollo_peca_filtro_v2043` guarda leitura,
+`sem_categoria_lida` (> 0 com categoria = "lista incompleta" na tela), erro e uso. Filtro nunca lido começa a ler sozinho ao abrir;
+"↻ Puxar do Apollo" (`POST /api/compras/apollo/puxar`, gestor; 409 se já roda) relê em 2º plano; à noite o `linx_demanda_loop` relê
+lista+estoque dos filtros usados em 30 dias e a demanda deles. `GET /api/compras/apollo/filtros` (grupos e categorias, 1 h em
+memória). O estoque/lote divide o limite de **6/min** com o estoque automático dos anúncios. Teste: `TESTES/test_demanda_grupo_v2043.py`.
+
 ### Linx Smart API (levantamento 21/09/2026)
 API oficial da Linx para o Linx DMS, na nuvem: gateway `https://auto-gwsmartapi.linx.com.br/<api>`,
 chave em `Ocp-Apim-Subscription-Key` + token de `POST /api-seguranca/token`. Assinadas: Segurança,
