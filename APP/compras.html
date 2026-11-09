@@ -106,12 +106,54 @@ td.outra{color:#5F7186}td.outra.tem{color:#1F57A5;font-weight:700}
 <!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
 <script src="/expedicao/nk-ui.js?v=19.13"></script>
 <script defer src="/expedicao/nk-menu.js?v=20.23" data-shell></script>
+<style id="escuro-auto-v1883">
+/* V18.83 — GERADO por FERRAMENTAS_WINDOWS/gerar_modo_escuro.py a partir das cores fixas desta tela.
+   Não editar aqui (é refeito); ajuste à mão no <style id="escuro-v1883">. */
+html[data-tema="escuro"] .top a{background-color:#18222D!important;color:#C0CCD9!important}
+html[data-tema="escuro"] .aviso{background-color:#1B2632!important;border:1px solid #5C4923!important;color:#EDC482!important}
+html[data-tema="escuro"] .msg.ok{background-color:#1B2632!important;border:1px solid #2A553E!important;color:#87E8BC!important}
+html[data-tema="escuro"] .msg.erro{background-color:#1A2430!important;border:1px solid #5C2723!important;color:#EC8983!important}
+html[data-tema="escuro"] .card{background-color:#18222D!important}
+html[data-tema="escuro"] .field select,html[data-tema="escuro"] .field input{background-color:#18222D!important}
+html[data-tema="escuro"] label.f select,html[data-tema="escuro"] label.f input,html[data-tema="escuro"] label.f textarea{background-color:#18222D!important}
+html[data-tema="escuro"] .btn{background-color:#18222D!important}
+html[data-tema="escuro"] .btn.acc{color:#C4D0DB!important}
+html[data-tema="escuro"] .btn.del{border-color:#5C2723!important}
+html[data-tema="escuro"] .kpi{background-color:#18222D!important}
+html[data-tema="escuro"] .kpi b{color:#C1CFDA!important}
+html[data-tema="escuro"] .tools{background-color:#18222D!important}
+html[data-tema="escuro"] .panel{background-color:#18222D!important}
+html[data-tema="escuro"] .curva{background-color:#1A2430!important}
+html[data-tema="escuro"] .curva.A{background-color:#1C2633!important;color:#87B0E8!important}
+html[data-tema="escuro"] .cob.nd{background-color:#1A2430!important}
+html[data-tema="escuro"] .cam{border:1px dashed #2E3F51!important}
+html[data-tema="escuro"] .tag.edit{background-color:#1A2430!important}
+html[data-tema="escuro"] .tag.reserva{background-color:#1A2430!important}
+html[data-tema="escuro"] td.casaA{background-color:#1A2430!important;border-left:2px solid #23405C!important}
+html[data-tema="escuro"] td.casaB{border-right:2px solid #23405C!important}
+html[data-tema="escuro"] td.outra.tem{color:#87B0E8!important}
+html[data-tema="escuro"] .tr-tag{background-color:#1B2532!important;color:#AD93DC!important}
+html[data-tema="escuro"] .casa-block{background-color:#18222D!important}
+html[data-tema="escuro"] .casa-head{background-color:#1B2532!important;color:#AD93DC!important}
+html[data-tema="escuro"] .casa-block th{background-color:#1A2430!important}
+html[data-tema="escuro"] .custo-in{background-color:#1A2430!important;border:1px dashed #5C4A23!important}
+html[data-tema="escuro"] .formula{background-color:#18222D!important}
+</style>
 <style id="escuro-v1883">
 /* V18.83 — modo escuro desta tela (cores fixas do código; as variáveis vêm do nk-ui.css). */
 html[data-tema="escuro"] :is(.card,.kpi,.panel,.btn:not(.pri)){background-color:#17212E!important;border-color:#2B3949!important}
 html[data-tema="escuro"] .btn:not(.pri){color:#A9C8F0!important}
 html[data-tema="escuro"] .aviso{background-color:#33250C!important;border-color:#5C4317!important;color:#F0B357!important}
 html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;color:#A8B6C6!important}
+/* V20.45: tabelas, campos e transferências legíveis no escuro (antes: células brancas e texto apagado) */
+html[data-tema="escuro"] td{color:#D5DEE8;border-bottom-color:#243243!important}
+html[data-tema="escuro"] .casa-block :is(table,tbody,tr,td){background-color:#18222D!important;color:#D5DEE8!important}
+html[data-tema="escuro"] td.casaA{background-color:#1F2F42!important;color:#E6EDF5!important}
+html[data-tema="escuro"] td.casaA.zero{color:#F08A84!important}
+html[data-tema="escuro"] :is(.field select,.field input,label.f select,label.f input,label.f textarea,.tools input,.send-group input,.cam,.custo-in){color:#E6EDF5!important;border-color:#2E3F51!important}
+html[data-tema="escuro"] .rel-titulo{color:#8FB8EE!important}
+html[data-tema="escuro"] .tr-no{color:#6F8296!important}
+html[data-tema="escuro"] tr.off td{color:#7B8DA0!important}
 </style>
 </head>
 <body>
@@ -145,10 +187,11 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
 
   <section class="card" aria-label="Fornecedor">
     <div class="cfg">
-      <label class="field"><span>Fornecedor / marca</span><select id="fornecedor"></select><small>reconhecido por regras</small></label>
-      <!-- V20.44: grupo (= fabricante) e categoria (= tipo de peça) do Apollo. Com um deles, valem só as peças do Apollo que venderam -->
-      <label class="field"><span>Grupo do Apollo</span><input id="filtroGrupo" list="listaGrupos" placeholder="vazio = regras do fornecedor" autocomplete="off"><datalist id="listaGrupos"></datalist><small>fabricante; vários por vírgula</small></label>
-      <label class="field"><span>Categoria</span><input id="filtroCategoria" list="listaCategorias" placeholder="ex.: 111,15" autocomplete="off"><datalist id="listaCategorias"></datalist><small>111 filtros · 15 óleos e graxas</small></label>
+      <!-- V20.45 (dono, 09/11): a CATEGORIA do Apollo (Manutenção de Itens do Estoque: 111 FILTROS, 15 LUBRIFICANTES/ADITIV)
+           é o filtro principal; o grupo (= fabricante) e o fornecedor são opcionais. Só entram as peças do Apollo que venderam. -->
+      <label class="field"><span>Categoria do Apollo</span><input id="filtroCategoria" list="listaCategorias" placeholder="ex.: 111 FILTROS" autocomplete="off"><datalist id="listaCategorias"></datalist><small>111 filtros · 15 lubrificantes; vários por vírgula</small></label>
+      <label class="field"><span>Grupo (fabricante)</span><input id="filtroGrupo" list="listaGrupos" placeholder="opcional, ex.: WEGA FILTROS" autocomplete="off"><datalist id="listaGrupos"></datalist><small>opcional; vários por vírgula</small></label>
+      <label class="field"><span>Fornecedor</span><select id="fornecedor"></select><small>Todos = qualquer fornecedor; um deles dá pedido mínimo e prazo</small></label>
       <label class="field"><span>Pedido mínimo</span><input id="minimo" type="number" min="0" step="100"><small>pelo custo do Precificador</small></label>
       <label class="field"><span>Prazo de entrega</span><input id="prazo" type="number" min="0" step="1"><small>dias até chegar</small></label>
       <label class="field"><span>Cobertura desejada</span><input id="cobertura" type="number" min="0" step="1"><small>dias após chegar</small></label>
@@ -182,7 +225,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
 
   <div id="conteudo" class="hidden">
     <section class="kpis">
-      <div class="kpi"><small>Peças do fornecedor</small><b id="kItens">0</b><span id="kItensSub"></span></div>
+      <div class="kpi"><small id="kItensT">Peças do fornecedor</small><b id="kItens">0</b><span id="kItensSub"></span></div>
       <div class="kpi"><small>Itens a comprar</small><b id="kComprar">0</b><span id="kComprarSub"></span></div>
       <div class="kpi"><small>Unidades</small><b id="kUn">0</b><span>no pedido</span></div>
       <div class="kpi alert"><small>Zerando antes de chegar</small><b id="kRisco">0</b><span>cobertura menor que o prazo</span></div>
@@ -269,38 +312,75 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
   }
 
   // ---- "A caminho" fica guardado neste navegador, por fornecedor ----
-  const chaveCaminho = () => "compras_caminho_v1800_" + (state.atual?.nome || "");
+  // V20.45: o que está escolhido (fornecedor, ou a categoria/grupo do Apollo) dá nome à tela, à planilha e ao "a caminho"
+  const CATEGORIAS_CONHECIDAS = [{ categoria: "111", nome: "FILTROS" }, { categoria: "15", nome: "LUBRIFICANTES/ADITIV" }];
+  let categoriasApollo = CATEGORIAS_CONHECIDAS.slice();
+  function categoriaCodigos() {   // "111 FILTROS, lubrificantes" -> "111,15"
+    return $("filtroCategoria").value.split(/[,;]+/).map(t => t.trim()).filter(Boolean).map(t => {
+      const m = t.match(/^(\d{1,6})\b/); if (m) return m[1];
+      const k = categoriasApollo.find(c => String(c.nome || "").toUpperCase() === t.toUpperCase() || String(c.nome || "").toUpperCase().startsWith(t.toUpperCase()));
+      return k ? String(k.categoria) : t;
+    }).join(",");
+  }
+  const filtroTxt = () => [$("filtroCategoria").value.trim() && "Categoria " + $("filtroCategoria").value.trim(), $("filtroGrupo").value.trim()].filter(Boolean).join(" · ");
+  const rotulo = () => state.atual?.nome || filtroTxt() || "demanda";
+  const FILTRO_SALVO = "nk_compras_filtro_v2045";
+  function lerJson(k) { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch (_) { return null; } }
+  function gravarJson(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} }
+  const chaveCaminho = () => "compras_caminho_v1800_" + rotulo();
   function carregarCaminho() { state.caminho = new Map(); try { Object.entries(JSON.parse(localStorage.getItem(chaveCaminho()) || "{}")).forEach(([k, v]) => state.caminho.set(k, Number(v) || 0)); } catch (_) {} }
   function salvarCaminho() { try { localStorage.setItem(chaveCaminho(), JSON.stringify(Object.fromEntries(state.caminho))); } catch (_) {} }
 
   async function carregarFornecedores(selecionar) {
     const d = await api("/api/compras/fornecedores");
     state.fornecedores = d.fornecedores || [];
-    $("fornecedor").innerHTML = state.fornecedores.map(f => `<option>${esc(f.nome)}</option>`).join("");
+    $("fornecedor").innerHTML = '<option value="">Todos</option>' + state.fornecedores.map(f => `<option>${esc(f.nome)}</option>`).join("");
     const tem = state.fornecedores.length > 0;
-    $("semFornecedor").classList.toggle("hidden", tem);
-    $("editarBtn").disabled = !tem;
-    if (!tem) { $("conteudo").classList.add("hidden"); return; }
-    const nome = selecionar && state.fornecedores.some(f => f.nome === selecionar) ? selecionar : state.fornecedores[0].nome;
+    $("semFornecedor").classList.add("hidden");   // V20.45: sem fornecedor também dá (pela categoria)
+    // V20.45: abre com o que foi usado por último neste navegador (categoria/grupo/fornecedor)
+    const salvo = selecionar === undefined ? lerJson(FILTRO_SALVO) : null;
+    if (salvo && (salvo.categoria || salvo.grupo || salvo.fornecedor)) {
+      const nomeS = state.fornecedores.some(f => f.nome === salvo.fornecedor) ? salvo.fornecedor : "";
+      $("fornecedor").value = nomeS;
+      await selecionarFornecedor(nomeS, { categoria: salvo.categoria || "", grupo: salvo.grupo || "" });
+      return;
+    }
+    const nome = selecionar && state.fornecedores.some(f => f.nome === selecionar) ? selecionar : (tem ? state.fornecedores[0].nome : "");
     $("fornecedor").value = nome;
     await selecionarFornecedor(nome);
   }
 
-  async function selecionarFornecedor(nome) {
+  async function selecionarFornecedor(nome, filtro) {
     state.atual = state.fornecedores.find(f => f.nome === nome) || null;
     mostrarMarca();
-    if (!state.atual) return;
-    $("minimo").value = state.atual.pedido_minimo; $("prazo").value = state.atual.prazo; $("cobertura").value = state.atual.cobertura;
-    $("filtroGrupo").value = (state.atual.grupos || []).join(", "); $("filtroCategoria").value = (state.atual.categorias || []).join(", ");
+    $("editarBtn").disabled = !state.atual;
+    if (filtro) { $("filtroCategoria").value = filtro.categoria; $("filtroGrupo").value = filtro.grupo; }
+    if (state.atual) {
+      $("minimo").value = state.atual.pedido_minimo; $("prazo").value = state.atual.prazo; $("cobertura").value = state.atual.cobertura;
+      // o fornecedor que tem categoria/grupo guardado abre com eles (sem apagar o que já está escolhido)
+      if (!filtro && ((state.atual.grupos || []).length || (state.atual.categorias || []).length)) {
+        $("filtroGrupo").value = (state.atual.grupos || []).join(", "); $("filtroCategoria").value = (state.atual.categorias || []).join(", ");
+      }
+    } else {
+      const c = lerJson("nk_compras_cfg_v2045_" + filtroTxt()) || {};   // sem fornecedor: o último digitado para este filtro
+      $("minimo").value = c.minimo ?? 0; $("prazo").value = c.prazo ?? 7; $("cobertura").value = c.cobertura ?? 30;
+    }
     state.edits.clear(); state.off.clear(); carregarCaminho();
     await carregarDemanda();
   }
 
   async function carregarDemanda() {
-    if (!state.atual) return;
-    msg("Carregando vendas e peças do fornecedor…");
+    if (!state.atual && !filtroTxt()) {
+      $("conteudo").classList.add("hidden"); avisoApollo(null);
+      msg("Escolha a categoria do Apollo (ex.: 111 FILTROS) ou um fornecedor.", "ok");
+      return;
+    }
+    gravarJson(FILTRO_SALVO, { categoria: $("filtroCategoria").value, grupo: $("filtroGrupo").value, fornecedor: state.atual?.nome || "" });
+    msg("Carregando vendas e peças…");
     try {
-      state.dados = await api(`/api/compras/demanda?fornecedor=${encodeURIComponent(state.atual.nome)}&dias=${$("periodo").value}&filial=${encodeURIComponent($("filialLinx").value)}&grupos=${encodeURIComponent($("filtroGrupo").value)}&categorias=${encodeURIComponent($("filtroCategoria").value)}`);
+      state.dados = await api(`/api/compras/demanda?fornecedor=${encodeURIComponent(state.atual?.nome || "")}&dias=${$("periodo").value}&filial=${encodeURIComponent($("filialLinx").value)}&grupos=${encodeURIComponent($("filtroGrupo").value)}&categorias=${encodeURIComponent(categoriaCodigos())}`);
+      $("kItensT").textContent = state.dados.apollo ? "Peças que venderam" : "Peças do fornecedor";
+      $("estoqueBtn").classList.toggle("hidden", !!state.dados.apollo || !state.atual);
       $("conteudo").classList.remove("hidden");
       const d = state.dados;
       const avisos = [];
@@ -343,7 +423,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     if ($("apolloBtn")) $("apolloBtn").onclick = async () => {
       $("apolloBtn").disabled = true;
       try {
-        await api("/api/compras/apollo/puxar", { method: "POST", body: JSON.stringify({ grupos: $("filtroGrupo").value, categorias: $("filtroCategoria").value }) });
+        await api("/api/compras/apollo/puxar", { method: "POST", body: JSON.stringify({ grupos: $("filtroGrupo").value, categorias: categoriaCodigos() }) });
         msg("Lendo as peças, a demanda (só o que vendeu ou ainda não foi lido) e o estoque das que venderam, em segundo plano…");
         apolloTimer = setTimeout(carregarDemanda, 8000);
       } catch (e) { msg("Não foi possível puxar do Apollo: " + e.message, "erro"); $("apolloBtn").disabled = false; }
@@ -355,7 +435,10 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     try {
       const d = await api("/api/compras/apollo/filtros");
       $("listaGrupos").innerHTML = (d.grupos || []).map(g => `<option value="${esc(g.nome)}">${num(g.pecas)} peça(s)</option>`).join("");
-      $("listaCategorias").innerHTML = (d.categorias || []).map(c => `<option value="${esc(c.categoria)}">${esc(c.nome || "")} ${num(c.pecas)} peça(s)</option>`).join("");
+      // V20.45: enquanto o Apollo não leu as categorias, ficam as duas conhecidas (111 FILTROS, 15 LUBRIFICANTES/ADITIV)
+      const lidas = (d.categorias || []).filter(c => c.categoria != null);
+      categoriasApollo = lidas.length ? lidas.map(c => ({ ...c, nome: c.nome || (CATEGORIAS_CONHECIDAS.find(k => k.categoria === String(c.categoria)) || {}).nome || "" })) : CATEGORIAS_CONHECIDAS.slice();
+      $("listaCategorias").innerHTML = categoriasApollo.map(c => `<option value="${esc(String(c.categoria) + (c.nome ? " " + c.nome : ""))}">${c.pecas != null ? num(c.pecas) + " peça(s)" : "categoria do Apollo"}</option>`).join("");
     } catch (_) {}
   }
   // V18.91: o que a Linx trouxe para este fornecedor
@@ -560,7 +643,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     $("kValor").textContent = brl(total);
     $("kValorSub").textContent = total >= c.minimo ? "atinge o pedido mínimo" : `faltam ${brl(c.minimo - total)} para o mínimo`;
     $("kRisco").textContent = num(itens.filter(x => x.cobHoje !== null && x.cobHoje < c.prazo).length);
-    $("metaTitulo").textContent = `Pedido mínimo ${state.atual.nome}: ${brl(c.minimo)}`;
+    $("metaTitulo").textContent = `Pedido mínimo ${rotulo()}: ${brl(c.minimo)}`;
     const st = $("metaStatus");
     st.textContent = total >= c.minimo ? `✓ ${brl(total)} — mínimo atingido` : `⚠ ${brl(total)} — faltam ${brl(c.minimo - total)}`;
     st.style.color = total >= c.minimo ? "var(--ok)" : "var(--warn)";
@@ -653,7 +736,10 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     } catch (e) { msg("Não foi possível salvar: " + e.message, "erro"); }
   }
   async function salvarConfigRapida() {
-    if (!state.atual) return;
+    if (!state.atual) {   // V20.45: sem fornecedor, fica neste navegador para este filtro
+      gravarJson("nk_compras_cfg_v2045_" + filtroTxt(), { minimo: Number($("minimo").value) || 0, prazo: Number($("prazo").value) || 0, cobertura: Number($("cobertura").value) || 0 });
+      return;
+    }
     try {
       const d = await api("/api/compras/fornecedores", { method: "POST", body: JSON.stringify({ ...state.atual, pedido_minimo: $("minimo").value, prazo: $("prazo").value, cobertura: $("cobertura").value }) });
       const i = state.fornecedores.findIndex(f => f.nome === d.fornecedor.nome); if (i >= 0) state.fornecedores[i] = { ...state.fornecedores[i], ...d.fornecedor }; state.atual = state.fornecedores[i];
@@ -742,15 +828,15 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
     ws["!cols"] = [14, 46, 7, 9, 11, 9, 10, 18, 12, 9, 13, 14, 30].map(w => ({ wch: w }));
-    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, ("Pedido " + state.atual.nome).slice(0, 31));
-    return { wb, nome: `pedido_compra_${state.atual.nome.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.xlsx` };
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, ("Pedido " + rotulo()).replace(/[\\/?*\[\]:]/g, " ").slice(0, 31));
+    return { wb, nome: `pedido_compra_${rotulo().toLowerCase().replace(/[^a-z0-9]+/g, "_")}.xlsx` };
   }
   // V18.18: baixa a planilha DESENHADA montada no servidor (mesma do e-mail).
   // Se o servidor falhar, cai no XLSX simples do navegador (SheetJS).
   $("exportar").addEventListener("click", async () => {
     if (!state.dados) return;
     const pedido = montarPedidoCompra();
-    const nome = `pedido_compra_${(state.atual?.nome || "fornecedor").toLowerCase().replace(/[^a-z0-9]+/g, "_")}.xlsx`;
+    const nome = `pedido_compra_${rotulo().toLowerCase().replace(/[^a-z0-9]+/g, "_")}.xlsx`;
     try {
       const r = await fetch("/expedicao/api/compras/planilha", { method: "POST", credentials: "same-origin", cache: "no-store",
         headers: { "Content-Type": "application/json" }, body: JSON.stringify(pedido) });
@@ -780,7 +866,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
       }));
     });
     return {
-      fornecedor: state.atual ? state.atual.nome : "",
+      fornecedor: rotulo(),
       minimo: c.minimo, periodo_dias: c.periodo,
       total: Math.round(total * 100) / 100,
       atingiu_minimo: total >= c.minimo,

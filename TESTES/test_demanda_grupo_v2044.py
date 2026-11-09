@@ -622,5 +622,29 @@ class Revisao3(Base):
         self.assertIn("PSL55", S.compras_estoque_guardado(["PSL55"]))
 
 
+class CategoriaPrincipal(Base):
+    """V20.45 (dono, 09/11): a categoria do Apollo é o filtro principal; o fornecedor é opcional."""
+
+    def test_sem_fornecedor_com_categoria(self):
+        self.rodar()
+        S.apollo_grupo_rodada("", "111", pausa=0)
+        d = S.compras_demanda_payload("", 30, "1", "", "111", pode_iniciar=True)
+        self.assertEqual(d["fornecedor"]["nome"], "")
+        self.assertEqual(d["fornecedor"]["prazo"], 7)
+        self.assertEqual({x["codigo"] for x in d["itens"]}, {"PSL55", "ARL4147"})
+
+    def test_sem_fornecedor_e_sem_filtro_e_recusado(self):
+        with self.assertRaises(ValueError):
+            S.compras_demanda_payload("", 30, "1", "", "")
+
+    def test_sem_fornecedor_a_marca_a_mao_nao_tira_a_peca(self):
+        S.compras_salvar_fornecedor("WEGA", {"grupos": "WEGA"}, "t")
+        S.compras_marca_manual_salvar("PSL55", "WEGA", "t")
+        S.apollo_grupo_rodada("", "111", pausa=0)
+        self.rodar()
+        d = S.compras_demanda_payload("", 30, "1", "", "111", pode_iniciar=True)
+        self.assertIn("PSL55", {x["codigo"] for x in d["itens"]})
+
+
 if __name__ == "__main__":
     unittest.main()

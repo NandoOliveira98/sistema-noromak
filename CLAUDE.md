@@ -1786,6 +1786,15 @@ confere de novo (`aguardando_lista`, sem erro falso); quem chega com a lista sen
 volta vazio é erro, e lista vazia não liga o modo grupo nas outras telas; o número antigo de uma casa sem resposta vale só 24 h e
 guarda a data dele (`lido_em`/`antigo` em cada casa); código recusado (422) deixa a leitura incompleta (o `estoque_em` não é renovado)
 e o teto de divisões desiste só daquele lote. Teste: classe `Revisao3`.
+**V20.45 — categoria primeiro, fornecedor opcional, modo escuro** (dono, 09/11, com os prints do Apollo: a categoria da Manutenção de
+Itens do Estoque, 111 FILTROS e 15 LUBRIFICANTES/ADITIV, é o filtro principal). Ordem na tela: **Categoria do Apollo** (aceita "111
+FILTROS" ou só "111"; `categoriaCodigos()` traduz o nome; enquanto o Apollo não leu as categorias, a lista sugere as duas conhecidas),
+**Grupo (fabricante)** opcional e **Fornecedor** opcional com a opção **Todos** (dono: "se deixar AGRALE não vai ter lubrificante").
+Com Todos, o payload aceita `fornecedor` vazio desde que haja categoria/grupo (pedido mínimo 0, prazo 7, cobertura 30; o digitado fica
+no navegador por filtro, `nk_compras_cfg_v2045_*`) e a marca à mão não tira peça. O último filtro usado abre de novo
+(`nk_compras_filtro_v2045`). Modo escuro: a tela nunca tinha recebido o bloco `escuro-auto-v1883` (gerado agora) e ganhou ajustes à mão
+(células e tabelas de transferência). Prévia: `FERRAMENTAS_WINDOWS/previa_local/previa_demanda.py` (porta 8162, portas simuladas).
+Teste: classe `CategoriaPrincipal`.
 
 ### Linx Smart API (levantamento 21/09/2026)
 API oficial da Linx para o Linx DMS, na nuvem: gateway `https://auto-gwsmartapi.linx.com.br/<api>`,

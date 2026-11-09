@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.44-DEMANDA-GRUPO"
+APP_VERSION = "20.45-DEMANDA-CATEGORIA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -45489,11 +45489,15 @@ def linx_demanda_por_codigo(codigos: list[str], dias: int, hoje: date | None = N
 def compras_demanda_payload(fornecedor: str, dias: int, filial: str = "1", grupos: Any = "",
                             categorias: Any = "", *, pode_iniciar: bool = False) -> dict[str, Any]:
     """V20.44: `pode_iniciar` = quem pediu é gestor (Admin/Supervisor): só ele marca o filtro como em uso e
-    dispara a 1ª leitura (revisão, achado 2)."""
+    dispara a 1ª leitura (revisão, achado 2).
+    V20.45 (dono, 09/11): a CATEGORIA do Apollo é o filtro principal; com categoria/grupo o fornecedor é opcional
+    (sem ele: pedido mínimo 0, prazo 7, cobertura 30, sem lista de códigos)."""
     nome = str(fornecedor or "").strip().upper()
     cfg = next((f for f in compras_fornecedores() if f["nome"] == nome), None)
     if not cfg:
-        raise ValueError("Fornecedor não cadastrado.")
+        if nome or not apollo_filtro_chave(grupos, categorias):
+            raise ValueError("Fornecedor não cadastrado." if nome else "Escolha a categoria, o grupo ou um fornecedor.")
+        cfg = {"nome": "", **compras_fornecedor_config({})}
     filial = str(filial or "1").strip().lower()
     if filial not in LINX_DEMANDA_FILIAIS:
         raise ValueError("Filial inválida (1, 2, 3 ou todas).")
@@ -45557,7 +45561,7 @@ def compras_demanda_payload(fornecedor: str, dias: int, filial: str = "1", grupo
             base += [c for c in cfg["codigos"] if c not in desc_apollo]
             base += [c for c, f in manual.items() if f == nome and c not in desc_apollo]
         # revisão (achado 5): a marca escolhida à mão para OUTRO fornecedor vence o grupo (sem compra dobrada)
-        base = [c for c in dict.fromkeys(base) if manual.get(c, nome) == nome]
+        base = [c for c in dict.fromkeys(base) if not nome or manual.get(c, nome) == nome]
         ecom = {c for c, v in vendas.items() if int(v.get("ml", 0) + v.get("shopee", 0)) > 0}
         venderam = apollo_codigos_que_venderam(base, ecom)
         lidas = apollo_codigos_lidos(base)
