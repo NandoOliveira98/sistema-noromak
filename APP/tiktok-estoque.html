@@ -133,7 +133,7 @@ function desenhar(){
     ?(D.conectado?"":'<div class="alerta">A fonte é a API, mas o TikTok Shop não está conectado. Conecte em Integrações → TikTok Shop · Bauru.</div>')
     :'<div class="alerta">Fonte: extensão do Seller Center. O envio e a leitura dos anúncios são feitos por ela (aba do Seller Center aberta no Edge). Para usar a API, mude a fonte em Integrações → TikTok Shop · Bauru.</div>';
   document.querySelectorAll("#modos button").forEach(b=>b.classList.toggle("on",b.dataset.m===modo));
-  $("notaModo").textContent=NOTA[modo]+` O Apollo é lido em rodízio, até ${D.apollo_por_minuto} consultas por minuto, estoque baixo primeiro.`;
+  $("notaModo").textContent=NOTA[modo]+` O Apollo é lido em lote, todos os códigos a cada minuto; se o lote falhar, em rodízio, até ${D.apollo_por_minuto} consultas por minuto, estoque baixo primeiro.`;
   $("btnEnviar").disabled=modo==="simulacao"||!r.enviar;
   const cont={};(D.itens||[]).forEach(i=>{ABAS.forEach(([k])=>{const a=ABA;ABA=k;if(grupo(i))cont[k]=(cont[k]||0)+1;ABA=a;});});
   $("kpis").innerHTML=ABAS.map(([k,t,cl,ic])=>`<button type="button" class="nk-kpi${k===ABA?" on":""}" aria-pressed="${k===ABA}" onclick="ABA='${k}';desenhar()"><span class="nk-kpi-ic ${cl}"><i class="${ic}"></i></span><span><b>${cont[k]||0}</b><small>${t}</small></span></button>`).join("");

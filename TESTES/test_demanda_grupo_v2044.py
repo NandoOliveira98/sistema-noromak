@@ -1,4 +1,4 @@
-"""V20.43 — Demanda de Compra por GRUPO/CATEGORIA do Apollo (dono, 09/11).
+"""V20.44 — Demanda de Compra por GRUPO/CATEGORIA do Apollo (dono, 09/11).
 
 Portas do NoromakWeb (simuladas aqui): pecas/grupos, pecas/categorias, pecas?grupo=&categoria=
 (paginada) e estoque/lote. O que importa prender:

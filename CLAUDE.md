@@ -567,6 +567,18 @@ situação desconhecida do Painel de saúde é só da extensão.
 2ª revisão (só das correções): pacote com unidade a enviar vem primeiro (`_tiktok_api_pacote_aberto_primeiro`, pelo
 `package_id` dos line_items; coluna e etiqueta do parcialmente enviado nunca são do pacote já despachado); o preço pela API
 também tira as unidades já enviadas (senão o atendimento ia sempre a revisar); trocar a fonte espera no máximo 20 s pela trava.
+**V20.43 — peças do atendimento comprometidas** (dono, 09/11: "o atendimento balcão precisa cair comprometido"). O
+`atendimento/criar` só abre o atendimento; a porta nova do Guilherme `atendimento/comprometer {revenda, operador, contato}`
+(idempotente; `ja_comprometido` sem chamar o Apollo; cada item com `comprometido`/`motivo`; `?ensaio=1`) é chamada logo depois
+do criar (`tiktok_atendimento_comprometer`) e, se não comprometeu tudo, de novo **só ela** nas voltas seguintes
+(`_tiktok_comp_candidatos`: pedido na fila, sem romaneio/caixa, até `TIKTOK_COMP_MAX` = 5, espera por situação em
+`TIKTOK_COMP_ESPERA`), na mesma vaga de um pedido por volta. Colunas `comprometido` (sim/parcial/nao/erro/incerto/comprometendo),
+`comp_detalhe`, `comp_itens_json`, `comp_tentativas`, `comp_proxima` em `tiktok_atendimento_v2033`. "sim" só com prova (todos os
+itens `comprometido: true` ou `ja_comprometido`); falha no comprometer nunca desfaz o atendimento. `_anuncio_pedidos_com_atendimento`
+só conta o TikTok com `comprometido='sim'` (sem isso o Apollo não reserva: desconta). O botão do painel (`POST
+/api/expedicao-apollo/tiktok-atendimento`) com o atendimento já criado e sem as peças comprometidas só compromete; extensão Linx
+Cliente **0.53**: faixa "Peças do atendimento N não comprometidas" com o botão "Comprometer peças". Teste:
+`TESTES/test_tiktok_comprometer_v2043.py`.
 
 **V20.41 — TikTok igual aos outros na plataforma de anúncios** (dono, 07/11; decisões: estoque "plataforma, por anúncio",
 preço digitado + Apollo de Bauru, promoções do TikTok depois). **Estoque:** conta de estoque `tiktok` (`ESTOQUE_CONTA_TIKTOK` em
@@ -1092,7 +1104,7 @@ Prévia: o ML simulado aceita o PUT e o MLB1129555578 tem depósito do vendedor 
 Teste: `TESTES/test_anuncios_estoque_v2026.py`.
 **Revisão final (05/11, "pode corrigir todos"):** (1) chave **por conta** `apollo_desconta_atendimento` em `anuncio_estoque_config_v2026`
 (padrão 0 = desconta todo pendente). O Disponível do Apollo = Contábil − Negociação − Fulfillment; se a Negociação já inclui o atendimento
-que a integração abre para cada venda, descontar a fila tira a venda duas vezes — **ligar só depois de o Guilherme confirmar**. Ligada,
+que a integração abre para cada venda, descontar a fila tira a venda duas vezes — **ligar só depois de o Guilherme confirmar** (V20.42: confirmado em 09/11 — o atendimento aberto entra na Negociação, 8 de 9 medidos; ligar depois de comparar os dois números por alguns dias). Ligada,
 desconta só os pedidos sem atendimento: com atendimento = linha do `faturamento_v1943` com `atendimento` preenchido ou situação
 `feito`/`pronto_caixa`; pedido que o Faturamento não conhece desconta (o lado seguro). Mudar = perfil Admin (sem OWNER), auditado
 (`anuncios.estoque_desconta_atendimento`) e no registro; `POST /api/anuncios/estoque/config {conta, apollo_desconta_atendimento}`. Cada
@@ -1146,6 +1158,33 @@ continua em 0893270212 mesmo confirmado, e "Peça" numa peça comum (sem selo, s
 confirmação (`confirmar_produto`, lista os kits). A busca de peças guarda os candidatos 60 s (`_anuncio_produtos_candidatos`,
 refeita quando muda Precificador, `conf_produtos`, ficha ou leitura do Apollo). Prévia: MLB8000000007 com esse SKU; `PREVIA_PORTA` sobe uma 2ª
 cópia. Teste: `TESTES/test_anuncios_kit_ficha_v2028.py`.
+
+**V20.42 — Apollo relido em lote** (Guilherme, 09/11: a Linx não tem "o que mudou desde" nem aviso; pedido em
+`PEDIDO_PORTA_ESTOQUE_MUDANCAS.md`). `POST /api/v1/expedicao/estoque/lote {codigos (até 500, código até 30), revendas,
+operador}` devolve `itens[{codigo, revenda, disponivel, tem_cadastro, erro}]`, lido na hora, o mesmo número da porta
+`estoque`; limite de **6/min separado** dos 20/min. `anuncios_apollo_lote` (no começo de cada volta do
+`anuncios_estoque_loop`, no máximo 1 por `ANUNCIO_APOLLO_LOTE_S` = 60 s, até `ANUNCIO_APOLLO_LOTE_POR_MINUTO` = 5
+chamadas): todos os códigos em Automático das duas filiais (Shopee/Magalu = Araçatuba, TikTok = Bauru) **e** os do TikTok
+pela extensão (`_tiktok_extensao_le_apollo`, mesmo sem anúncio em Automático), grava nas mesmas linhas do rodízio
+(`anuncio_apollo_v2026`, `tiktok_apollo_v1964`) e marca a filial que mudou. `disponivel`/`tem_cadastro` null ou `erro`
+= None (nunca zero); `tem_cadastro: false` = 0; código pedido que não voltou = None; `ok` diferente de true ou erro =
+nada gravado daquela chamada. **O rodízio de 3/min virou reserva:** só roda sem lote completo nos últimos
+`ANUNCIO_APOLLO_LOTE_RESERVA_S` (180 s) (`apollo_lote_em_dia`), e com o lote em dia só cobre o código maior que 30
+(`apollo_lote_fora`); o mesmo no `tiktok_estoque_loop` (`apollo_lote_em_dia(tiktok=True)`). Porta 404 = tenta de novo
+em 10 min; o mesmo erro vai ao log uma vez. A trava de queda (pedido concluído) solta na leitura do minuto seguinte.
+Tela: linha "Apollo relido a cada minuto" ou o aviso de lote fora no painel Estoque automático (`apollo_lote` no
+`GET /api/anuncios/estoque`). Teste: `TESTES/test_apollo_lote_v2042.py`.
+**revisar-antes-de-subir (09/11, "corrigir os 5"):** (1) peça com `tem_cadastro: false` em **todas** as casas pedidas = None
+(a porta `estoque` responde `ok: false` e o rodízio gravava None: SKU errado, Peça confirmada com dois códigos, peça errada
+no kit) — nunca 0, que pausaria o anúncio; sem cadastro só numa casa continua 0. (2) Código que voltou sem número (ou não
+voltou) entra no `apollo_lote_fora` e o rodízio cobre; o código da resposta casa pelo `normalize` e, sem isso, pelo
+`_exp_norm_codigo` (sem pontos); sem número não apaga uma leitura boa dos últimos 180 s; TikTok com algum código sem
+número não fica "em dia". (3) Tudo vai à porta pelo `normalize` (o SKU do TikTok tinha espaço); 422 divide a chamada ao meio
+até achar o código recusado, que fica fora do lote por 1 h (`ANUNCIO_APOLLO_LOTE_RECUSADO_S`) e vai pelo rodízio;
+`PortaErro.status` = código HTTP (o 404 não é mais achado no texto). (4) `lido_epoch` = a hora de **antes** da chamada
+(senão a trava de queda soltava cedo) e o lote nunca grava por cima de leitura mais nova (o rodízio leu depois), também no
+TikTok. (5) O lote roda numa thread (`anuncios_apollo_lote_fundo`, um por vez, `_APOLLO_LOTE_RODANDO`); a volta espera no
+máximo `ANUNCIO_APOLLO_LOTE_ESPERA_S` (15 s) e a filial que mudou depois entra na volta seguinte (`_APOLLO_LOTE_MUDANCAS`).
 
 ### Estúdio de Imagens (V20.17: servidor, tela e agente)
 `APP/imagens.html` (`/imagens`, menu Vendas e anúncios, módulo próprio **`imagens`** = `app_users.can_imagens`, mesma
@@ -1691,7 +1730,7 @@ fechados e mês em andamento lidos num `DB_LOCK` só (o e-commerce fora dele); a
 mês (até 15), achadas na resposta crua (chave `parcial`/`ate`/`DemandaEcommerce` ou mês corrente) — a resposta inteira
 cortada em 6.000 caracteres ficava só com os meses fechados.
 
-**V20.43 — demanda por GRUPO do Apollo** (dono, 09/11; portas do Guilherme de 09/11). No Apollo **grupo = fabricante**
+**V20.44 — demanda por GRUPO do Apollo** (dono, 09/11; portas do Guilherme de 09/11). No Apollo **grupo = fabricante**
 (TECFIL, WEGA), **marca = NOROMAK em tudo** (fica fora) e **categoria = tipo** (111 filtros, 15 óleos/graxas). A tela tem **dois
 filtros**: o Fornecedor (como já era) e **Grupo + Categoria** (`filtroGrupo`/`filtroCategoria`, vários por vírgula; o fornecedor
 guarda `grupos`/`categorias` e a tela abre com eles). Com grupo/categoria valem **só as peças do Apollo** + a lista de códigos do
@@ -1699,12 +1738,12 @@ fornecedor + as marcadas à mão para ele (começo de código/palavra ficam fora
 a tela mostra só quem tem venda na demanda lida (Linx, qualquer filial) ou no e-commerce; peça lida **sem venda** não é perguntada de
 novo por `APOLLO_SEM_VENDA_REVER_DIAS` (30); o estoque (`POST estoque/lote`, ≤ 500 por chamada, revendas 1/2/3, gravado em
 `compras_estoque_v1912` no formato da geral; sem resposta = desconhecido, nunca zero) só é lido de quem vendeu. Lista do filtro:
-`GET pecas?grupo=&categoria=&pagina=&por_pagina=500` (cópia da madrugada, 60/min) em `apollo_peca_v2043`, trocada só com todas as
-páginas (erro não apaga; > `APOLLO_PECAS_MAX` 5000 = recusado, "escolha a categoria"); `apollo_peca_filtro_v2043` guarda leitura,
+`GET pecas?grupo=&categoria=&pagina=&por_pagina=500` (cópia da madrugada, 60/min) em `apollo_peca_v2044`, trocada só com todas as
+páginas (erro não apaga; > `APOLLO_PECAS_MAX` 5000 = recusado, "escolha a categoria"); `apollo_peca_filtro_v2044` guarda leitura,
 `sem_categoria_lida` (> 0 com categoria = "lista incompleta" na tela), erro e uso. Filtro nunca lido começa a ler sozinho ao abrir;
 "↻ Puxar do Apollo" (`POST /api/compras/apollo/puxar`, gestor; 409 se já roda) relê em 2º plano; à noite o `linx_demanda_loop` relê
 lista+estoque dos filtros usados em 30 dias e a demanda deles. `GET /api/compras/apollo/filtros` (grupos e categorias, 1 h em
-memória). O estoque/lote divide o limite de **6/min** com o estoque automático dos anúncios. Teste: `TESTES/test_demanda_grupo_v2043.py`.
+memória). O estoque/lote divide o limite de **6/min** com o estoque automático dos anúncios. Teste: `TESTES/test_demanda_grupo_v2044.py`.
 
 ### Linx Smart API (levantamento 21/09/2026)
 API oficial da Linx para o Linx DMS, na nuvem: gateway `https://auto-gwsmartapi.linx.com.br/<api>`,

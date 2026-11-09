@@ -146,7 +146,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
   <section class="card" aria-label="Fornecedor">
     <div class="cfg">
       <label class="field"><span>Fornecedor / marca</span><select id="fornecedor"></select><small>reconhecido por regras</small></label>
-      <!-- V20.43: grupo (= fabricante) e categoria (= tipo de peça) do Apollo. Com um deles, valem só as peças do Apollo que venderam -->
+      <!-- V20.44: grupo (= fabricante) e categoria (= tipo de peça) do Apollo. Com um deles, valem só as peças do Apollo que venderam -->
       <label class="field"><span>Grupo do Apollo</span><input id="filtroGrupo" list="listaGrupos" placeholder="vazio = regras do fornecedor" autocomplete="off"><datalist id="listaGrupos"></datalist><small>fabricante; vários por vírgula</small></label>
       <label class="field"><span>Categoria</span><input id="filtroCategoria" list="listaCategorias" placeholder="ex.: 111,15" autocomplete="off"><datalist id="listaCategorias"></datalist><small>111 filtros · 15 óleos e graxas</small></label>
       <label class="field"><span>Pedido mínimo</span><input id="minimo" type="number" min="0" step="100"><small>pelo custo do Precificador</small></label>
@@ -320,7 +320,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
       render();
     } catch (e) { msg("Não foi possível carregar a demanda: " + e.message, "erro"); }
   }
-  // V20.43: situação da lista do grupo/categoria do Apollo (só o que vendeu entra na tela)
+  // V20.44: situação da lista do grupo/categoria do Apollo (só o que vendeu entra na tela)
   let apolloTimer = null;
   function avisoApollo(A) {
     const el = $("avisoApollo");
@@ -376,7 +376,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     const b = $("linxBtn");
     if (b) b.onclick = async () => {
       b.disabled = true;
-      if (d.apollo) { b.disabled = false; const a = $("apolloBtn"); if (a) a.click(); return; }   // V20.43: com grupo, vale o Puxar do Apollo
+      if (d.apollo) { b.disabled = false; const a = $("apolloBtn"); if (a) a.click(); return; }   // V20.44: com grupo, vale o Puxar do Apollo
       try { await api("/api/compras/linx/atualizar", { method: "POST", body: JSON.stringify({ fornecedor: state.atual.nome }) });
         msg("Buscando a demanda na Linx (as três filiais de uma vez; pode levar alguns minutos)…"); setTimeout(carregarDemanda, 30000); }
       catch (e) { msg("Não foi possível buscar na Linx: " + e.message, "erro"); b.disabled = false; }
