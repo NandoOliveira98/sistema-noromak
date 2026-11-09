@@ -646,5 +646,23 @@ class CategoriaPrincipal(Base):
         self.assertIn("PSL55", {x["codigo"] for x in d["itens"]})
 
 
+class RevisaoV2045(Base):
+    """revisar-antes-de-subir da V20.45 (09/11, "corrija")."""
+
+    def test_categoria_grande_pede_o_grupo(self):
+        orig = S.APOLLO_PECAS_MAX
+        S.APOLLO_PECAS_MAX = 2
+        self.addCleanup(setattr, S, "APOLLO_PECAS_MAX", orig)
+        r = S.apollo_pecas_ler("", "111", pausa=0)
+        self.assertFalse(r["ok"])
+        self.assertIn("grupo (fabricante)", r["erro"])
+
+    def test_tela(self):
+        html = (S.APP_DIR / "compras.html").read_text(encoding="utf-8")
+        self.assertIn("compras_caminho_v2045", html, "a caminho guardado por peça, em qualquer visão")
+        self.assertIn("seqDemanda", html, "resposta antiga da demanda é ignorada")
+        self.assertIn("chaveFiltro()", html, "pedido mínimo/prazo do Todos pela categoria em código")
+
+
 if __name__ == "__main__":
     unittest.main()

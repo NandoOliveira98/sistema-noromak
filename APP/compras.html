@@ -318,8 +318,12 @@ html[data-tema="escuro"] tr.off td{color:#7B8DA0!important}
   function categoriaCodigos() {   // "111 FILTROS, lubrificantes" -> "111,15"
     return $("filtroCategoria").value.split(/[,;]+/).map(t => t.trim()).filter(Boolean).map(t => {
       const m = t.match(/^(\d{1,6})\b/); if (m) return m[1];
-      const k = categoriasApollo.find(c => String(c.nome || "").toUpperCase() === t.toUpperCase() || String(c.nome || "").toUpperCase().startsWith(t.toUpperCase()));
-      return k ? String(k.categoria) : t;
+      // revisão V20.45: nome exato primeiro; começo de nome só quando há um candidato só
+      const T = t.toUpperCase(), nomeDe = c => String(c.nome || "").toUpperCase();
+      const exato = categoriasApollo.find(c => nomeDe(c) === T);
+      if (exato) return String(exato.categoria);
+      const comeco = categoriasApollo.filter(c => nomeDe(c).startsWith(T));
+      return comeco.length === 1 ? String(comeco[0].categoria) : t;
     }).join(",");
   }
   const filtroTxt = () => [$("filtroCategoria").value.trim() && "Categoria " + $("filtroCategoria").value.trim(), $("filtroGrupo").value.trim()].filter(Boolean).join(" · ");
@@ -327,9 +331,25 @@ html[data-tema="escuro"] tr.off td{color:#7B8DA0!important}
   const FILTRO_SALVO = "nk_compras_filtro_v2045";
   function lerJson(k) { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch (_) { return null; } }
   function gravarJson(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} }
-  const chaveCaminho = () => "compras_caminho_v1800_" + rotulo();
-  function carregarCaminho() { state.caminho = new Map(); try { Object.entries(JSON.parse(localStorage.getItem(chaveCaminho()) || "{}")).forEach(([k, v]) => state.caminho.set(k, Number(v) || 0)); } catch (_) {} }
-  function salvarCaminho() { try { localStorage.setItem(chaveCaminho(), JSON.stringify(Object.fromEntries(state.caminho))); } catch (_) {} }
+  // revisão V20.45: filtro em código ("111 FILTROS" e "111" são o mesmo) para guardar pedido mínimo/prazo do Todos
+  const chaveFiltro = () => "c=" + categoriaCodigos() + "|g=" + $("filtroGrupo").value.split(/[,;]+/).map(t => t.trim().toUpperCase().replace(/\s+/g, " ")).filter(Boolean).sort().join(",");
+  // revisão V20.45: "a caminho" é da PEÇA (vale em qualquer visão: fornecedor, categoria, grupo). Na 1ª vez junta o
+  // que estava guardado por fornecedor (compras_caminho_v1800_<nome>), sem apagar.
+  const CAMINHO = "compras_caminho_v2045";
+  function carregarCaminho() {
+    state.caminho = new Map();
+    const geral = lerJson(CAMINHO) || {};
+    if (state.atual) {
+      const antigo = lerJson("compras_caminho_v1800_" + state.atual.nome) || {};
+      Object.entries(antigo).forEach(([k, v]) => { if (!(k in geral)) geral[k] = v; });
+    }
+    Object.entries(geral).forEach(([k, v]) => state.caminho.set(k, Number(v) || 0));
+  }
+  function salvarCaminho(cod) {   // grava só a peça mexida (apagar também vale)
+    const geral = lerJson(CAMINHO) || {};
+    if (state.caminho.has(cod)) geral[cod] = state.caminho.get(cod); else delete geral[cod];
+    gravarJson(CAMINHO, geral);
+  }
 
   async function carregarFornecedores(selecionar) {
     const d = await api("/api/compras/fornecedores");
@@ -339,7 +359,8 @@ html[data-tema="escuro"] tr.off td{color:#7B8DA0!important}
     $("semFornecedor").classList.add("hidden");   // V20.45: sem fornecedor também dá (pela categoria)
     // V20.45: abre com o que foi usado por último neste navegador (categoria/grupo/fornecedor)
     const salvo = selecionar === undefined ? lerJson(FILTRO_SALVO) : null;
-    if (salvo && (salvo.categoria || salvo.grupo || salvo.fornecedor)) {
+    // revisão V20.45: fornecedor salvo que foi excluído (e sem categoria/grupo) abre como antes, no 1º fornecedor
+    if (salvo && (salvo.categoria || salvo.grupo || state.fornecedores.some(f => f.nome === salvo.fornecedor))) {
       const nomeS = state.fornecedores.some(f => f.nome === salvo.fornecedor) ? salvo.fornecedor : "";
       $("fornecedor").value = nomeS;
       await selecionarFornecedor(nomeS, { categoria: salvo.categoria || "", grupo: salvo.grupo || "" });
@@ -357,19 +378,22 @@ html[data-tema="escuro"] tr.off td{color:#7B8DA0!important}
     if (filtro) { $("filtroCategoria").value = filtro.categoria; $("filtroGrupo").value = filtro.grupo; }
     if (state.atual) {
       $("minimo").value = state.atual.pedido_minimo; $("prazo").value = state.atual.prazo; $("cobertura").value = state.atual.cobertura;
-      // o fornecedor que tem categoria/grupo guardado abre com eles (sem apagar o que já está escolhido)
-      if (!filtro && ((state.atual.grupos || []).length || (state.atual.categorias || []).length)) {
+      // revisão V20.45: escolher um fornecedor usa a categoria/grupo DELE; sem nenhum guardado, os campos ficam
+      // vazios e valem as regras dele (antes a categoria que estava na tela ficava e trazia peça de outro fabricante)
+      if (!filtro) {
         $("filtroGrupo").value = (state.atual.grupos || []).join(", "); $("filtroCategoria").value = (state.atual.categorias || []).join(", ");
       }
     } else {
-      const c = lerJson("nk_compras_cfg_v2045_" + filtroTxt()) || {};   // sem fornecedor: o último digitado para este filtro
+      const c = lerJson("nk_compras_cfg_v2045_" + chaveFiltro()) || {};   // sem fornecedor: o último digitado para este filtro
       $("minimo").value = c.minimo ?? 0; $("prazo").value = c.prazo ?? 7; $("cobertura").value = c.cobertura ?? 30;
     }
     state.edits.clear(); state.off.clear(); carregarCaminho();
     await carregarDemanda();
   }
 
+  let seqDemanda = 0;   // revisão V20.45: só a resposta do último pedido vale (as outras chegam fora de ordem)
   async function carregarDemanda() {
+    const meu = ++seqDemanda;
     if (!state.atual && !filtroTxt()) {
       $("conteudo").classList.add("hidden"); avisoApollo(null);
       msg("Escolha a categoria do Apollo (ex.: 111 FILTROS) ou um fornecedor.", "ok");
@@ -378,7 +402,9 @@ html[data-tema="escuro"] tr.off td{color:#7B8DA0!important}
     gravarJson(FILTRO_SALVO, { categoria: $("filtroCategoria").value, grupo: $("filtroGrupo").value, fornecedor: state.atual?.nome || "" });
     msg("Carregando vendas e peças…");
     try {
-      state.dados = await api(`/api/compras/demanda?fornecedor=${encodeURIComponent(state.atual?.nome || "")}&dias=${$("periodo").value}&filial=${encodeURIComponent($("filialLinx").value)}&grupos=${encodeURIComponent($("filtroGrupo").value)}&categorias=${encodeURIComponent(categoriaCodigos())}`);
+      const resposta = await api(`/api/compras/demanda?fornecedor=${encodeURIComponent(state.atual?.nome || "")}&dias=${$("periodo").value}&filial=${encodeURIComponent($("filialLinx").value)}&grupos=${encodeURIComponent($("filtroGrupo").value)}&categorias=${encodeURIComponent(categoriaCodigos())}`);
+      if (meu !== seqDemanda) return;
+      state.dados = resposta;
       $("kItensT").textContent = state.dados.apollo ? "Peças que venderam" : "Peças do fornecedor";
       $("estoqueBtn").classList.toggle("hidden", !!state.dados.apollo || !state.atual);
       $("conteudo").classList.remove("hidden");
@@ -737,7 +763,7 @@ html[data-tema="escuro"] tr.off td{color:#7B8DA0!important}
   }
   async function salvarConfigRapida() {
     if (!state.atual) {   // V20.45: sem fornecedor, fica neste navegador para este filtro
-      gravarJson("nk_compras_cfg_v2045_" + filtroTxt(), { minimo: Number($("minimo").value) || 0, prazo: Number($("prazo").value) || 0, cobertura: Number($("cobertura").value) || 0 });
+      gravarJson("nk_compras_cfg_v2045_" + chaveFiltro(), { minimo: Number($("minimo").value) || 0, prazo: Number($("prazo").value) || 0, cobertura: Number($("cobertura").value) || 0 });
       return;
     }
     try {
@@ -747,7 +773,14 @@ html[data-tema="escuro"] tr.off td{color:#7B8DA0!important}
   }
 
   $("fornecedor").addEventListener("change", e => selecionarFornecedor(e.target.value));
-  ["filtroGrupo", "filtroCategoria"].forEach(id => $(id).addEventListener("change", () => { state.edits.clear(); state.off.clear(); carregarDemanda(); }));
+  ["filtroGrupo", "filtroCategoria"].forEach(id => $(id).addEventListener("change", () => {
+    state.edits.clear(); state.off.clear();
+    if (!state.atual) {   // revisão V20.45: o pedido mínimo/prazo guardado para este filtro
+      const c = lerJson("nk_compras_cfg_v2045_" + chaveFiltro()) || {};
+      $("minimo").value = c.minimo ?? 0; $("prazo").value = c.prazo ?? 7; $("cobertura").value = c.cobertura ?? 30;
+    }
+    carregarDemanda();
+  }));
   $("periodo").addEventListener("change", () => { state.edits.clear(); carregarDemanda(); });
   // V20.00: filial da demanda da Linx (padrão Araçatuba), lembrada no navegador
   try { const f = localStorage.getItem("nk_compras_filial_v2000"); if (f && [...$("filialLinx").options].some(o => o.value === f)) $("filialLinx").value = f; } catch (e) {}
@@ -803,7 +836,7 @@ html[data-tema="escuro"] tr.off td{color:#7B8DA0!important}
     const inc = e.target.closest("[data-inc]"), q = e.target.closest("[data-qtd]"), cam = e.target.closest("[data-cam]");
     if (inc) { inc.checked ? state.off.delete(inc.dataset.inc) : state.off.add(inc.dataset.inc); }
     if (q) state.edits.set(q.dataset.qtd, Math.max(0, Math.floor(Number(q.value) || 0)));
-    if (cam) { const v = Math.max(0, Math.floor(Number(cam.value) || 0)); v ? state.caminho.set(cam.dataset.cam, v) : state.caminho.delete(cam.dataset.cam); salvarCaminho(); state.edits.delete(cam.dataset.cam); }
+    if (cam) { const v = Math.max(0, Math.floor(Number(cam.value) || 0)); v ? state.caminho.set(cam.dataset.cam, v) : state.caminho.delete(cam.dataset.cam); salvarCaminho(cam.dataset.cam); state.edits.delete(cam.dataset.cam); }
     render();
   });
   // Monta a planilha do pedido (mesma do botão e do anexo do e-mail).

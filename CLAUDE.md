@@ -1795,6 +1795,12 @@ no navegador por filtro, `nk_compras_cfg_v2045_*`) e a marca à mão não tira p
 (`nk_compras_filtro_v2045`). Modo escuro: a tela nunca tinha recebido o bloco `escuro-auto-v1883` (gerado agora) e ganhou ajustes à mão
 (células e tabelas de transferência). Prévia: `FERRAMENTAS_WINDOWS/previa_local/previa_demanda.py` (porta 8162, portas simuladas).
 Teste: classe `CategoriaPrincipal`.
+**revisar-antes-de-subir da V20.45 (09/11, "corrija"):** o "a caminho" digitado é da **peça** (`compras_caminho_v2045`, vale em qualquer
+visão; na 1ª vez junta o antigo por fornecedor, sem apagar; apagar grava); escolher um fornecedor usa a categoria/grupo dele (sem nenhum,
+limpa e valem as regras); pedido mínimo/prazo do Todos guardados pela categoria em código (`chaveFiltro()`) e relidos ao trocar o
+filtro; nome de categoria: exato primeiro, começo de nome só com um candidato; só a resposta da última recarga vale (`seqDemanda`);
+categoria acima de `APOLLO_PECAS_MAX` pede "o grupo (fabricante)" (o limite de 5.000 vale rever quando o Apollo terminar de ler as
+categorias, ~12/11). Teste: classe `RevisaoV2045`.
 
 ### Linx Smart API (levantamento 21/09/2026)
 API oficial da Linx para o Linx DMS, na nuvem: gateway `https://auto-gwsmartapi.linx.com.br/<api>`,

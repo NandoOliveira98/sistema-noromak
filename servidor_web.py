@@ -45885,8 +45885,10 @@ def apollo_pecas_ler(grupos: Any, categorias: Any, *, pausa: float | None = None
                 sem_cat = resp.get("sem_categoria_lida")
                 copia = str(resp.get("copia_de") or "")
                 if isinstance(total, (int, float)) and total > APOLLO_PECAS_MAX:
-                    raise PortaErro(f"{int(total)} peças nesse filtro (máximo {APOLLO_PECAS_MAX}): "
-                                    "escolha também a categoria ou um grupo menor.")
+                    # revisão V20.45 (achado 3): com a categoria já escolhida, o que falta é o grupo (fabricante)
+                    raise PortaErro(f"{int(total)} peças nesse filtro (máximo {APOLLO_PECAS_MAX}): " + (
+                        "escolha também o grupo (fabricante)." if c and not g else
+                        "escolha também a categoria ou um grupo menor."))
             for x in resp.get("itens") or []:
                 if not isinstance(x, dict):
                     continue
@@ -45899,7 +45901,8 @@ def apollo_pecas_ler(grupos: Any, categorias: Any, *, pausa: float | None = None
                               "nome_categoria": str(x.get("nome_categoria") or "").strip()[:80],
                               "cancelado": 1 if _apollo_cancelado(x.get("cancelado_fabrica")) else 0}
             if len(itens) > APOLLO_PECAS_MAX:
-                raise PortaErro(f"mais de {APOLLO_PECAS_MAX} peças nesse filtro: escolha também a categoria.")
+                raise PortaErro(f"mais de {APOLLO_PECAS_MAX} peças nesse filtro: escolha também " + (
+                    "o grupo (fabricante)." if c and not g else "a categoria."))
             proxima = resp.get("proxima_pagina")
             if not proxima:
                 break
