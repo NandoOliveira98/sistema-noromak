@@ -149,6 +149,140 @@ class Comprometer(Base):
         self.assertEqual(linha["comprometido"], "sim")
 
 
+class RevisaoAntesDeSubir(Base):
+    """Achados do revisar-antes-de-subir da V20.43 (09/11)."""
+
+    vez_chegou = Comprometer.vez_chegou
+
+    def deixar_parcial(self, pedido):
+        self.receber(_sc(pedido))
+        porta = Porta(buscar="encontrado")
+        porta.comprometer = _comp(ok=False, situacao="recusado", erro="x")
+        self.rodar(porta)
+        self.vez_chegou(pedido)
+
+    def botao(self, pedido, porta):
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S.threading, "Thread") as t:
+            t.side_effect = lambda target, **k: mock.Mock(start=target)
+            return S.tiktok_atendimento_manual_iniciar(pedido, "luis")
+
+    def test_revenda_e_sempre_a_de_bauru_mesmo_fora_da_fila(self):
+        self.deixar_parcial("591001")
+        with mock.patch.object(S, "_exp_revenda", return_value=1):
+            p = Porta(buscar="encontrado")
+            self.rodar(p)
+        self.assertEqual(p.corpo("atendimento/comprometer")["revenda"], 3)
+
+    def test_botao_recusa_pedido_fora_da_fila_ou_com_romaneio(self):
+        self.deixar_parcial("591002")
+        with mock.patch.object(S, "_tiktok_atendimento_ja_atendido", return_value=True):
+            with self.assertRaises(ValueError):
+                self.botao("591002", Porta(buscar="encontrado"))
+        self.excluir_admin("591002", "TIKTOK")
+        p = Porta(buscar="encontrado")
+        with self.assertRaises(ValueError):
+            self.botao("591002", p)
+        self.assertEqual(p.rotas(), [])
+
+    def test_venda_cancelada_nao_e_comprometida(self):
+        self.deixar_parcial("591003")
+        with S.DB_LOCK:  # o TikTok confirmou o cancelamento (pedido ficou na fila com peça bipada)
+            S.DB.execute("UPDATE tiktok_sc_pedido_v2030 SET status='CANCELLED' WHERE pedido='591003'")
+            S.DB.commit()
+        p = Porta(buscar="encontrado")
+        self.rodar(p)
+        self.assertNotIn("atendimento/comprometer", p.rotas())
+        with self.assertRaises(ValueError):
+            self.botao("591003", Porta(buscar="encontrado"))
+
+    def test_limite_por_minuto_e_ocupado_nao_gastam_tentativa(self):
+        self.receber(_sc("591004"))
+        porta = Porta(buscar="encontrado")
+        porta.comprometer = S.PortaErro("Muitas chamadas", passageiro=True)
+        self.rodar(porta)
+        for _ in range(8):
+            self.vez_chegou("591004")
+            p = Porta(buscar="encontrado")
+            p.comprometer = porta.comprometer
+            self.rodar(p)
+        e = self.estado("591004")
+        self.assertEqual(e["comp_tentativas"], 0)
+        ocupado = S.PortaErro("Este cliente/atendimento já está sendo mexido agora.")
+        ocupado.status = 409
+        self.vez_chegou("591004")
+        p = Porta(buscar="encontrado")
+        p.comprometer = ocupado
+        self.rodar(p)
+        self.assertEqual(self.estado("591004")["comp_tentativas"], 1, "2ª revisão: 10 seguidos = 1 tentativa (sem laço infinito)")
+
+    def test_romaneio_solto_enquanto_esperava_a_porta_nao_compromete(self):
+        self.deixar_parcial("591012")
+        p = Porta(buscar="encontrado")
+        with mock.patch.object(S, "_tiktok_comp_pode", side_effect=["", "o pedido já tem romaneio/caixa"]):
+            self.rodar(p)
+        self.assertNotIn("atendimento/comprometer", p.rotas())
+        self.assertIn("romaneio", self.estado("591012")["comp_detalhe"])
+
+    def test_sem_nada_a_comprometer_nao_le_a_fila(self):
+        with mock.patch.object(S, "get_storage", wraps=S.get_storage) as gs:
+            self.assertEqual(S._tiktok_comp_candidatos(), [])
+        self.assertFalse(any(c.args and c.args[0] == "conf_pedidos" for c in gs.call_args_list))
+
+    def test_comprometer_repete_mesmo_com_o_automatico_desligado(self):
+        self.deixar_parcial("591005")
+        S._tiktok_config_gravar("atendimento_auto", "0", "teste")
+        p = Porta(buscar="encontrado")
+        self.rodar(p)
+        self.assertEqual(p.rotas(), ["atendimento/comprometer"], "só mexe em atendimento que já existe")
+        self.assertEqual(self.estado("591005")["comprometido"], "sim")
+        self.receber(_sc("591006"))
+        p2 = Porta(buscar="encontrado")
+        self.rodar(p2)
+        self.assertNotIn("atendimento/criar", p2.rotas(), "desligado não cria")
+
+    def test_comprometendo_que_sobrou_do_reinicio_volta_a_ser_tentado(self):
+        self.deixar_parcial("591007")
+        S._tiktok_comp_registrar("591007", "comprometendo", "Comprometendo pelo painel (luis)…")
+        S.ensure_tiktok_atendimento_schema()  # boot
+        e = self.estado("591007")
+        self.assertNotEqual(e["comprometido"], "comprometendo")
+        p = Porta(buscar="encontrado")
+        self.rodar(p)
+        self.assertEqual(self.estado("591007")["comprometido"], "sim")
+
+    def test_sem_atendimento_nao_deixa_comprometendo_preso(self):
+        self.receber(_sc("591008"))
+        S._tiktok_atendimento_registrar("591008", "criado", "x")  # sem número do atendimento
+        S._tiktok_comp_registrar("591008", "comprometendo", "…")
+        S.tiktok_atendimento_comprometer("591008")
+        self.assertNotEqual(self.estado("591008")["comprometido"], "comprometendo")
+
+    def test_formato_S_do_linx_vale_como_comprometido(self):
+        self.receber(_sc("591009"))
+        porta = Porta(buscar="encontrado")
+        porta.comprometer = _comp([{"codigo": "0893600022", "comprometido": "S"}])
+        self.rodar(porta)
+        self.assertEqual(self.estado("591009")["comprometido"], "sim")
+
+    def test_formato_desconhecido_nunca_e_sim(self):
+        self.receber(_sc("591010"))
+        porta = Porta(buscar="encontrado")
+        porta.comprometer = _comp([{"codigo": "0893600022", "comprometido": "N"}])
+        self.rodar(porta)
+        self.assertEqual(self.estado("591010")["comprometido"], "parcial")
+
+    def test_amostra_mascarada(self):
+        self.receber(_sc("591011"))
+        porta = Porta(buscar="encontrado")
+        porta.comprometer = dict(_comp(situacao="ja_comprometido"), cliente_nome="FULANO DE TAL", cpf="12345678909")
+        self.rodar(porta)
+        with S.DB_LOCK:
+            r = S.DB.execute("SELECT resposta FROM tiktok_amostra_v1963 WHERE tipo='porta atendimento/comprometer'").fetchone()
+        self.assertIsNotNone(r)
+        self.assertNotIn("12345678909", r["resposta"])
+        self.assertNotIn("FULANO", r["resposta"])
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()
