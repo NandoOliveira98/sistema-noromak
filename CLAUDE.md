@@ -1185,6 +1185,12 @@ até achar o código recusado, que fica fora do lote por 1 h (`ANUNCIO_APOLLO_LO
 (senão a trava de queda soltava cedo) e o lote nunca grava por cima de leitura mais nova (o rodízio leu depois), também no
 TikTok. (5) O lote roda numa thread (`anuncios_apollo_lote_fundo`, um por vez, `_APOLLO_LOTE_RODANDO`); a volta espera no
 máximo `ANUNCIO_APOLLO_LOTE_ESPERA_S` (15 s) e a filial que mudou depois entra na volta seguinte (`_APOLLO_LOTE_MUDANCAS`).
+**2ª revisão (só das correções, "corrigir os 3"):** a busca do código recusado continua no minuto seguinte
+(`_APOLLO_LOTE_ESTADO["suspeitos"]`; antes, com mais de ~16 códigos, as 5 chamadas não bastavam e recomeçava do zero); com
+só a busca pendente o lote conta como em dia e o aviso diz "procurando qual". O lote pede **sempre as três casas**
+(`APOLLO_LOTE_REVENDAS` = 1, 2, 3): "não existe no Apollo" não depende de quem tem Automático (peça só em Bauru ou só em
+Ribeirão anunciada em Araçatuba = 0). Sem número por cima de sem número não grava (a hora fica a da 1ª vez, o rodízio chega
+nele); peça que não existe em nenhuma casa não vai para o rodízio nem tira o TikTok de "em dia".
 
 ### Estúdio de Imagens (V20.17: servidor, tela e agente)
 `APP/imagens.html` (`/imagens`, menu Vendas e anúncios, módulo próprio **`imagens`** = `app_users.can_imagens`, mesma

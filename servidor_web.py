@@ -39891,6 +39891,7 @@ ANUNCIO_APOLLO_LOTE_RESERVA_S = 180     # sem lote completo ha mais que isto, o 
 ANUNCIO_APOLLO_LOTE_TIMEOUT = 60
 ANUNCIO_APOLLO_LOTE_FECHADA_S = 600     # porta nao liberada (404): tenta de novo em 10 min
 ANUNCIO_APOLLO_LOTE_ESPERA_S = 15       # revisao: a volta do worker espera o lote no maximo isto (roda numa thread)
+APOLLO_LOTE_REVENDAS = (1, 2, 3)        # 2a revisao: o lote pede sempre as tres casas (Araçatuba, Ribeirão, Bauru)
 ANUNCIO_APOLLO_LOTE_RECUSADO_S = 3600   # revisao: codigo que a porta recusa (422) fica fora do lote por 1 h
 _APOLLO_LOTE_LOCK = threading.Lock()
 _APOLLO_LOTE_RODANDO = threading.Lock()  # revisao: um lote por vez (a thread segura ate terminar)
@@ -39904,7 +39905,7 @@ def _apollo_lote_zerar() -> None:
         _APOLLO_LOTE_ESTADO.clear()
         _APOLLO_LOTE_ESTADO.update({"tentado_mono": 0.0, "ok_epoch": 0, "tiktok_ok_epoch": 0, "erro": "",
                                     "erro_em": "", "ok_em": "", "codigos": 0, "chamadas": 0, "fechada_ate": 0.0,
-                                    "fora": {}, "recusados": {}})
+                                    "fora": {}, "recusados": {}, "suspeitos": []})
         _APOLLO_LOTE_CHAMADAS.clear()
         _APOLLO_LOTE_MUDANCAS.clear()
 
@@ -39938,12 +39939,14 @@ def _apollo_lote_valor(item: dict[str, Any]) -> float | None:
     return None if valor is None else max(0.0, valor)
 
 
-def _apollo_lote_ler_itens(dados: dict[str, Any], parte: list[str], revendas: list[int],
-                           epoch: int) -> dict[tuple[str, int], tuple[float | None, int]]:
+def _apollo_lote_ler_itens(dados: dict[str, Any], parte: list[str], revendas: list[int], epoch: int,
+                           inexistentes: set[str] | None = None) -> dict[tuple[str, int], tuple[float | None, int]]:
     """revisao: {(normalize(codigo pedido), revenda): (valor, epoch)} de uma resposta.
     - o codigo da resposta casa pelo normalize e, sem isso, pela chave sem pontuacao (_exp_norm_codigo) (achado 2);
     - peca sem cadastro em todas as casas pedidas = None (a porta estoque responde ok:false e o rodizio gravava None:
-      SKU errado, "Peca confirmada" com dois codigos juntos, peca errada no kit) - nunca 0 (achado 1);
+      SKU errado, "Peca confirmada" com dois codigos juntos, peca errada no kit) - nunca 0 (achado 1). 2a revisao: as
+      casas pedidas sao SEMPRE as tres (APOLLO_LOTE_REVENDAS), entao "nao existe" nao depende de quem tem Automatico;
+      o codigo vai em `inexistentes` (o rodizio tambem nao acharia: nao vai para ele);
     - codigo pedido que nao voltou = None."""
     por_norm: dict[tuple[str, int], dict[str, Any]] = {}
     por_chave: dict[tuple[str, int], dict[str, Any]] = {}
@@ -39961,6 +39964,8 @@ def _apollo_lote_ler_itens(dados: dict[str, Any], parte: list[str], revendas: li
         norm, chave = normalize(cod), _exp_norm_codigo(cod)
         achados = {rev: por_norm.get((norm, rev)) or por_chave.get((chave, rev)) for rev in revendas}
         inexistente = all(it is not None and it.get("tem_cadastro") is False for it in achados.values())
+        if inexistente and inexistentes is not None:
+            inexistentes.add(norm)
         for rev, it in achados.items():
             saida[(norm, rev)] = (None if inexistente or it is None else _apollo_lote_valor(it), epoch)
     return saida
@@ -40018,35 +40023,44 @@ def anuncios_apollo_lote(mudancas: set[str] | None = None) -> bool:
         return bool(cod) and len(cod) <= ANUNCIO_APOLLO_LOTE_COD_MAX and cod not in recusados
 
     pedidos: set[str] = set()         # normalize(codigo): e assim que vai a porta (revisao, achado 3)
-    revendas: set[int] = set()
     for filial, cods in por_filial.items():
         for cod in cods:
             if cabe(normalize(cod)):
                 pedidos.add(normalize(cod))
-                revendas.add(ANUNCIO_REVENDA[filial])
     for cod in tiktok.values():
         if cabe(normalize(cod)):
             pedidos.add(normalize(cod))
-            revendas.add(TIKTOK_REVENDA_APOLLO)
     if not pedidos:
         with _APOLLO_LOTE_LOCK:
             _APOLLO_LOTE_ESTADO["fora"] = {f: {c for c in cods} for f, cods in por_filial.items() if cods}
+            _APOLLO_LOTE_ESTADO["suspeitos"] = []
         return False
     with _APOLLO_LOTE_LOCK:
         _APOLLO_LOTE_ESTADO["tentado_mono"] = agora_mono
-    revs = sorted(revendas)
-    fila = [sorted(pedidos)[i:i + ANUNCIO_APOLLO_LOTE_MAX] for i in range(0, len(pedidos), ANUNCIO_APOLLO_LOTE_MAX)]
+        # 2a revisao (achado 1): a busca do codigo recusado (422) continua de onde parou no minuto anterior; so os
+        # codigos que ainda estao em Automatico
+        suspeitos = [[c for c in p if c in pedidos] for p in (_APOLLO_LOTE_ESTADO.get("suspeitos") or [])]
+    suspeitos = [p for p in suspeitos if p]
+    em_suspeita = {c for p in suspeitos for c in p}
+    revs = list(APOLLO_LOTE_REVENDAS)  # 2a revisao (achado 2): sempre as tres casas
+    normais = sorted(pedidos - em_suspeita)
+    fila: list[tuple[list[str], bool]] = [(normais[i:i + ANUNCIO_APOLLO_LOTE_MAX], False)
+                                          for i in range(0, len(normais), ANUNCIO_APOLLO_LOTE_MAX)]
+    fila += [(p, True) for p in suspeitos]
     lidos: dict[tuple[str, int], tuple[float | None, int]] = {}
+    inexistentes: set[str] = set()
     completo = True
     erro = ""
     while fila:
-        parte = fila.pop(0)
+        parte, suspeito = fila.pop(0)
         with _APOLLO_LOTE_LOCK:
             agora = time.monotonic()
             _APOLLO_LOTE_CHAMADAS[:] = [t for t in _APOLLO_LOTE_CHAMADAS if agora - t < 60]
             if len(_APOLLO_LOTE_CHAMADAS) >= ANUNCIO_APOLLO_LOTE_POR_MINUTO:
-                completo = False
-                erro = erro or "mais códigos que cabem num minuto: o rodízio cobre o resto"
+                fila.insert(0, (parte, suspeito))
+                if any(not s for _, s in fila):  # sobrou codigo comum sem ler: o lote nao esta completo
+                    completo = False
+                    erro = erro or "mais códigos que cabem num minuto: o rodízio cobre o resto"
                 break
             _APOLLO_LOTE_CHAMADAS.append(agora)
         epoch = int(time.time())  # revisao (achado 4): a hora de ANTES da chamada (a leitura e desse momento)
@@ -40057,7 +40071,7 @@ def anuncios_apollo_lote(mudancas: set[str] | None = None) -> bool:
             if status == 422:  # revisao (achado 3): um codigo recusado nao derruba os outros - divide e acha o culpado
                 if len(parte) > 1:
                     meio = len(parte) // 2
-                    fila[:0] = [parte[:meio], parte[meio:]]
+                    fila += [(parte[:meio], True), (parte[meio:], True)]  # depois dos comuns: esses primeiro
                     continue
                 with _APOLLO_LOTE_LOCK:
                     _APOLLO_LOTE_ESTADO["recusados"][parte[0]] = time.monotonic() + ANUNCIO_APOLLO_LOTE_RECUSADO_S
@@ -40076,53 +40090,70 @@ def anuncios_apollo_lote(mudancas: set[str] | None = None) -> bool:
             completo = False
             erro = str((dados or {}).get("erro") or "resposta sem itens") if isinstance(dados, dict) else "resposta inválida"
             break
-        lidos.update(_apollo_lote_ler_itens(dados, parte, revs, epoch))
+        lidos.update(_apollo_lote_ler_itens(dados, parte, revs, epoch, inexistentes))
+    pendentes = [p for p, s in fila if s]  # 2a revisao (achado 1): a busca do recusado continua no proximo minuto
     if lidos:
-        _apollo_lote_gravar(lidos, por_filial, tiktok, mudancas)
+        _apollo_lote_gravar(lidos, por_filial, tiktok, mudancas, inexistentes)
     # revisao (achado 2): o que o lote nao cobriu (grande, recusado, sem numero) fica para o rodizio
+    # 2a revisao (achado 3): menos a peca que nao existe em nenhuma casa (o rodizio tambem nao acharia)
     with _APOLLO_LOTE_LOCK:
         recusados = set(_APOLLO_LOTE_ESTADO.get("recusados") or {})
+
+    def sem_cobertura(n: str, rev: int) -> bool:
+        if n in inexistentes:
+            return False
+        return not cabe(n) or n in recusados or (lidos.get((n, rev)) or (None, 0))[0] is None
+
     fora: dict[str, set[str]] = {}
     for filial, cods in por_filial.items():
         rev = ANUNCIO_REVENDA[filial]
         for cod in cods:
-            n = normalize(cod)
-            if not cabe(n) or n in recusados or (lidos.get((n, rev)) or (None, 0))[0] is None:
+            if sem_cobertura(normalize(cod), rev):
                 fora.setdefault(filial, set()).add(cod)
-    tiktok_ok = bool(tiktok) and all(
-        cabe(normalize(c)) and normalize(c) not in recusados
-        and (lidos.get((normalize(c), TIKTOK_REVENDA_APOLLO)) or (None, 0))[0] is not None for c in tiktok.values())
+    tiktok_ok = bool(tiktok) and not any(sem_cobertura(normalize(c), TIKTOK_REVENDA_APOLLO) for c in tiktok.values())
     epoch = int(time.time())
     repetido = False
     with _APOLLO_LOTE_LOCK:
         _APOLLO_LOTE_ESTADO["fora"] = fora
+        _APOLLO_LOTE_ESTADO["suspeitos"] = pendentes
         _APOLLO_LOTE_ESTADO["codigos"] = len(pedidos)
         if completo:
             _APOLLO_LOTE_ESTADO["ok_epoch"] = epoch
             _APOLLO_LOTE_ESTADO["ok_em"] = now_iso()
-            _APOLLO_LOTE_ESTADO["erro"] = ""
+            n_susp = sum(len(p) for p in pendentes)
+            aviso = (f"a porta recusou um código; procurando qual ({n_susp} código(s) pelo rodízio enquanto isso)"
+                     if pendentes else "")
+            repetido = _APOLLO_LOTE_ESTADO.get("erro") == aviso
+            _APOLLO_LOTE_ESTADO["erro"] = aviso
+            erro = aviso
             if tiktok_ok:
                 _APOLLO_LOTE_ESTADO["tiktok_ok_epoch"] = epoch
         else:
             repetido = _APOLLO_LOTE_ESTADO.get("erro") == erro[:300]
             _APOLLO_LOTE_ESTADO["erro"] = erro[:300]
             _APOLLO_LOTE_ESTADO["erro_em"] = now_iso()
-    if not completo and not repetido:  # o mesmo erro a cada minuto vai para o log uma vez so
+    if erro and not repetido:  # o mesmo erro (ou aviso) a cada minuto vai para o log uma vez so
         print(f"[anuncios_estoque] lote do Apollo: {erro[:300]}", file=sys.stderr, flush=True)
     return completo
 
 
 def _apollo_lote_gravar(lidos: dict[tuple[str, int], tuple[float | None, int]], por_filial: dict[str, dict[str, str]],
-                        tiktok: dict[str, str], mudancas: set[str] | None) -> None:
+                        tiktok: dict[str, str], mudancas: set[str] | None,
+                        inexistentes: set[str] | None = None) -> None:
     """V20.42: grava as leituras do lote (a mesma linha que o rodizio grava). So o que foi lido.
     revisao: carimbo = a hora de antes da chamada (achado 4); leitura mais nova (o rodizio leu depois) nunca e
-    trocada pela do lote; sem numero nao apaga uma leitura boa dos ultimos ANUNCIO_APOLLO_LOTE_RESERVA_S (achado 2)."""
+    trocada pela do lote; sem numero nao apaga uma leitura boa dos ultimos ANUNCIO_APOLLO_LOTE_RESERVA_S (achado 2).
+    2a revisao (achado 3): sem numero por cima de sem numero nao grava - a hora fica a da 1a vez, e o rodizio (que
+    escolhe o lido ha mais tempo) chega nele em vez de reler sempre os primeiros da ordem alfabetica."""
+    inexistentes = inexistentes or set()
 
     def deve_gravar(antes: Any, valor: float | None, epoch: int) -> bool:
         if antes is None:
             return True
         lido = int(antes["lido_epoch"] or 0)
         if lido > epoch:
+            return False
+        if valor is None and not int(antes["respondeu"] or 0):
             return False
         if valor is None and int(antes["respondeu"] or 0) and lido >= epoch - ANUNCIO_APOLLO_LOTE_RESERVA_S:
             return False
@@ -40159,7 +40190,8 @@ def _apollo_lote_gravar(lidos: dict[tuple[str, int], tuple[float | None, int]], 
             DB.execute("""INSERT OR REPLACE INTO tiktok_apollo_v1964(codigo,disponivel,respondeu,erro,lido_em,lido_epoch)
                           VALUES(?,?,?,?,?,?)""",
                        (chave_tk, valor, 1 if valor is not None else 0,
-                        "" if valor is not None else "Bauru não respondeu no Apollo", quando, epoch))
+                        "" if valor is not None else ("Código não existe no Apollo" if normalize(cod) in inexistentes
+                                                      else "Bauru não respondeu no Apollo"), quando, epoch))
         DB.commit()
 
 
