@@ -133,7 +133,7 @@ memoria_limitar_arenas()
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.46-MEMORIA"
+APP_VERSION = "20.47-CADASTRO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2805,6 +2805,7 @@ def init_db() -> None:
     ensure_tiktok_estoque_schema()  # V19.64
     ensure_tiktok_sc_schema()  # V20.30: pedidos pela extensão do Seller Center
     ensure_tiktok_atendimento_schema()  # V20.33: cadastro + atendimento do TikTok no Apollo
+    ensure_mkt_atendimento_schema()  # V20.47: cliente + atendimento de ML/Shopee pelo painel
     ensure_anuncios_schema()  # V20.23
     tiktok_anuncios_espelhar_boot()  # V20.40: as variações do TikTok já lidas aparecem na plataforma de anúncios
     ensure_ml_billing_credito_schema()
@@ -9044,6 +9045,9 @@ def _anuncio_pedidos_com_atendimento() -> set[str] | None:
             # V20.43: só com as peças comprometidas (sem isso o Apollo não reserva: desconta, o lado seguro)
             rows += DB.execute("SELECT pedido FROM tiktok_atendimento_v2033 "
                                "WHERE situacao IN ('criado','ja_existia') AND comprometido='sim'").fetchall()
+            # V20.47: atendimento de ML/Shopee criado pelo botão do painel, com as peças comprometidas
+            rows += DB.execute("SELECT pedido FROM mkt_atendimento_v2047 "
+                               "WHERE situacao IN ('criado','ja_existia') AND comprometido='sim'").fetchall()
     except sqlite3.Error:
         return None
     return {normalize(r[0]) for r in rows}
@@ -11889,7 +11893,7 @@ def _tiktok_vinculos() -> dict[str, str]:
 
 
 def _tiktok_atendimento_pecas_do_sku(it: dict[str, Any], catalogo: dict[str, Any], conhecidos: Any,
-                                     confirmadas: frozenset[str], vinculos: dict[str, str]
+                                     confirmadas: frozenset[str], vinculos: dict[str, str], canal: str = "TikTok"
                                      ) -> tuple[list[tuple[str, int]], dict[str, Any] | None]:
     """Peças de UMA unidade do SKU vendido. Vínculo à mão vence; SKU cortado (V20.08) e SKU com cara de dois códigos
     sem Cadastro de Kits = revisar (o atendimento sairia sem peça)."""
@@ -11897,7 +11901,7 @@ def _tiktok_atendimento_pecas_do_sku(it: dict[str, Any], catalogo: dict[str, Any
     vinculo = vinculos.get(str(it.get("sku_id") or ""))
     if vinculo:
         return [(c, u) for c, u in _tiktok_pecas(vinculo)], None
-    if len(sku) >= TIKTOK_SKU_LIMITE:
+    if canal == "TikTok" and len(sku) >= TIKTOK_SKU_LIMITE:   # V20.47: o corte é só do TikTok
         raise TikTokAtendRevisar(f"SKU {sku} veio cortado pelo TikTok (limite de {TIKTOK_SKU_LIMITE} caracteres): faça o "
                                  f"vínculo à mão na tela Estoque TikTok para o atendimento sair com todas as peças.")
     partes, comp = _anuncio_sku_partes(sku, catalogo, conhecidos, confirmadas)
@@ -11909,14 +11913,15 @@ def _tiktok_atendimento_pecas_do_sku(it: dict[str, Any], catalogo: dict[str, Any
     return [(str(c).strip(), int(u)) for c, u in partes if str(c).strip() and int(u) > 0], comp
 
 
-def _tiktok_atendimento_conferir_fila(pedido: str, venda: dict[str, Any], linhas: list[dict[str, Any]]) -> None:
+def _tiktok_atendimento_conferir_fila(pedido: str, venda: dict[str, Any], linhas: list[dict[str, Any]],
+                                     canal: str = "TikTok") -> None:
     """revisar-antes-de-subir (06/11): o atendimento só sai se as peças da FILA (com as exclusões e alterações do
     ADMIN já aplicadas pelo get_storage) baterem com as do TikTok. Linha excluída, SKU/quantidade mudados pelo ADMIN
     ou fila desatualizada = revisar (a decisão do ADMIN vence a integração; ninguém adivinha qual vale)."""
     catalogo = _load_kit_catalog()
     confirmadas = _anuncio_pecas_confirmadas()
     conhecidos = _anuncios_conhecidos_lazy()
-    vinculos = _tiktok_vinculos()
+    vinculos = _tiktok_vinculos() if canal == "TikTok" else {}
     por_sku = {normalize(i.get("sku")): i for i in venda.get("itens") or []}
 
     def somar(destino: dict[str, int], pecas: list[tuple[str, int]], vezes: int) -> None:
@@ -11926,7 +11931,7 @@ def _tiktok_atendimento_conferir_fila(pedido: str, venda: dict[str, Any], linhas
 
     esperado: dict[str, int] = {}
     for it in venda.get("itens") or []:
-        somar(esperado, _tiktok_atendimento_pecas_do_sku(it, catalogo, conhecidos, confirmadas, vinculos)[0],
+        somar(esperado, _tiktok_atendimento_pecas_do_sku(it, catalogo, conhecidos, confirmadas, vinculos, canal)[0],
               int(it.get("qtd") or 0))
     na_fila: dict[str, int] = {}
     for row in linhas:
@@ -11938,24 +11943,24 @@ def _tiktok_atendimento_conferir_fila(pedido: str, venda: dict[str, Any], linhas
         # SkuOrigemImportacao; procurar por ele contava a peça do TikTok dos dois lados e deixava passar.
         it = por_sku.get(normalize(row.get("SKU")))
         if it is not None:
-            pecas = _tiktok_atendimento_pecas_do_sku(it, catalogo, conhecidos, confirmadas, vinculos)[0]
+            pecas = _tiktok_atendimento_pecas_do_sku(it, catalogo, conhecidos, confirmadas, vinculos, canal)[0]
         else:
             pecas = _anuncio_sku_partes(row.get("SKU"), catalogo, conhecidos, confirmadas)[0]
         somar(na_fila, pecas, qtd)
     esperado = {k: v for k, v in esperado.items() if k and v}
     na_fila = {k: v for k, v in na_fila.items() if k and v}
     if esperado != na_fila:
-        raise TikTokAtendRevisar("As peças da fila não batem com as do TikTok (linha excluída ou alterada pelo ADMIN, "
+        raise TikTokAtendRevisar(f"As peças da fila não batem com as do {canal} (linha excluída ou alterada pelo ADMIN, "
                                  "ou cancelamento ainda não lido). Confira o pedido e crie o atendimento à mão.")
 
 
-def _tiktok_atendimento_itens(venda: dict[str, Any]) -> list[dict[str, Any]]:
+def _tiktok_atendimento_itens(venda: dict[str, Any], canal: str = "TikTok") -> list[dict[str, Any]]:
     """Itens do atendimento: SKU do TikTok aberto em peças (vínculo à mão / Cadastro de Kits / "KITn-X" / "A/B"),
     preço do kit dividido pelo custo. SKU cortado ou com cara de dois códigos sem Cadastro de Kits = revisar."""
     catalogo = _load_kit_catalog()
     confirmadas = _anuncio_pecas_confirmadas()
     conhecidos = _anuncios_conhecidos_lazy()
-    vinculos = _tiktok_vinculos()
+    vinculos = _tiktok_vinculos() if canal == "TikTok" else {}
     ctx: dict[str, Any] | None = None
     saida: list[dict[str, Any]] = []
     for it in venda.get("itens") or []:
@@ -11966,7 +11971,7 @@ def _tiktok_atendimento_itens(venda: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         if total_cent <= 0:
             raise TikTokAtendRevisar(f"SKU {sku} sem valor de venda.")
-        partes, _ = _tiktok_atendimento_pecas_do_sku(it, catalogo, conhecidos, confirmadas, vinculos)
+        partes, _ = _tiktok_atendimento_pecas_do_sku(it, catalogo, conhecidos, confirmadas, vinculos, canal)
         if not partes:
             raise TikTokAtendRevisar(f"SKU {sku} sem código do Apollo.")
         if len(partes) == 1:
@@ -12204,6 +12209,476 @@ def tiktok_atendimento_manual_iniciar(pedido: str, ator: str) -> dict[str, Any]:
         _TIKTOK_ATEND_MANUAL_LOCK.release()
         raise
     return {"ok": True, "iniciado": True, "atendimento_tiktok": tiktok_atendimento_do_pedido(pedido)}
+
+
+# ---------------------------------------------------------------------------
+# V20.47 — criar cliente e atendimento de ML/Shopee pelo painel (dono, 10/11). Quando o cadastro automático
+# passa MKT_ATEND_APOS_S (2 h) sem achar o cliente no Apollo (a integração ML/Shopee → Apollo ainda não trouxe
+# a venda), o painel do romaneio mostra o botão: a MESMA rotina do TikTok (V20.33/V20.43) — itens e preço da
+# venda copiada (vendas_v1799/vendas_conta_v1898, kit dividido pelo custo de Araçatuba), conferência com as
+# peças da fila (decisões do ADMIN valem), cliente criado/atualizado, `atendimento/criar` com a chave
+# ML-/SHOPEE-<pedido> (a porta nunca cria dois para a mesma chave) e `atendimento/comprometer`.
+# Risco aceito pelo dono: a integração pode trazer a venda depois e abrir outro atendimento. Para reduzir,
+# logo antes de criar o painel procura no Apollo um atendimento aberto do cliente com as peças do pedido:
+# achou = não cria (situação "ja_tinha"). Só pelo botão (nenhuma rotina cria sozinha).
+# ---------------------------------------------------------------------------
+MKT_ATEND_APOS_S = 2 * 3600
+# marketplace -> (origem na porta, prefixo da chave, condição de pagamento, nome nas mensagens)
+# A porta ainda NÃO aplica a condição (V20.33): o painel/Faturamento acerta antes do caixa. Shopee = 971 (já
+# acertada pela extensão); a do ML criado pelo botão fica com o aviso até o dono informar o código.
+MKT_ATEND_CANAIS: dict[str, tuple[str, str, int | None, str]] = {
+    "Mercado Livre": ("MERCADOLIVRE", "ML", None, "Mercado Livre"),
+    "Shopee": ("SHOPEE", "SHOPEE", 971, "Shopee"),
+}
+MKT_ATEND_FINAIS = ("criado", "ja_existia")
+MKT_ATEND_VALOR_TOL = 0.10          # atendimento "da integração" só com o valor da venda (até 10 centavos)
+_MKT_ATEND_LOCK = threading.Lock()
+
+
+def ensure_mkt_atendimento_schema() -> None:
+    with DB_LOCK:
+        DB.execute(
+            """CREATE TABLE IF NOT EXISTS mkt_atendimento_v2047 (
+                   pedido TEXT PRIMARY KEY,
+                   marketplace TEXT NOT NULL DEFAULT '',
+                   situacao TEXT NOT NULL DEFAULT '',
+                   detalhe TEXT NOT NULL DEFAULT '',
+                   cliente TEXT NOT NULL DEFAULT '',
+                   atendimento TEXT NOT NULL DEFAULT '',
+                   valor REAL,
+                   itens_json TEXT NOT NULL DEFAULT '',
+                   comprometido TEXT NOT NULL DEFAULT '',
+                   comp_detalhe TEXT NOT NULL DEFAULT '',
+                   enviado_em TEXT NOT NULL DEFAULT '',
+                   atualizado_em TEXT NOT NULL DEFAULT ''
+               )""")
+        colunas = {r["name"] for r in DB.execute("PRAGMA table_info(mkt_atendimento_v2047)")}
+        if "enviado_em" not in colunas:
+            DB.execute("ALTER TABLE mkt_atendimento_v2047 ADD COLUMN enviado_em TEXT NOT NULL DEFAULT ''")
+        # "criando"/"comprometendo" que sobrou de um reinício: o botão volta a aparecer. Se o criar já tinha saído
+        # (enviado_em), o clique seguinte vai direto à porta, cuja chave nunca cria dois atendimentos.
+        DB.execute("UPDATE mkt_atendimento_v2047 SET situacao='incerto', detalhe='O servidor reiniciou no meio: "
+                   "confira e tente de novo.' WHERE situacao='criando'")
+        DB.execute("UPDATE mkt_atendimento_v2047 SET comprometido='erro', comp_detalhe='O servidor reiniciou no meio: "
+                   "tente de novo.' WHERE comprometido='comprometendo'")
+        DB.commit()
+
+
+def mkt_atendimento_do_pedido(pedido: str) -> dict[str, Any] | None:
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM mkt_atendimento_v2047 WHERE pedido=?", (str(pedido or "").strip(),)).fetchone()
+    return dict(row) if row else None
+
+
+def _mkt_atend_gravar(pedido: str, **campos: Any) -> None:
+    if "itens" in campos:
+        itens = campos.pop("itens")
+        campos["itens_json"] = json_dumps(itens) if itens is not None else ""
+    for chave in ("detalhe", "comp_detalhe"):
+        if chave in campos:
+            campos[chave] = str(campos[chave] or "")[:500]
+    campos["atualizado_em"] = now_iso()
+    with DB_LOCK:
+        DB.execute("INSERT OR IGNORE INTO mkt_atendimento_v2047(pedido) VALUES(?)", (str(pedido),))
+        DB.execute(f"UPDATE mkt_atendimento_v2047 SET {', '.join(k + '=?' for k in campos)} WHERE pedido=?",
+                   (*campos.values(), str(pedido)))
+        DB.commit()
+
+
+def _mkt_linhas_na_fila(pedido: str, leve: bool = False) -> list[dict[str, Any]]:
+    """Linhas PENDENTES do pedido (com as decisões do ADMIN já aplicadas). Concluído = nenhuma.
+    `leve` (revisão): o estado do botão (painel, Faturamento, acompanhamento) lê a fila guardada da V20.04
+    (`_ml_fila_leitura`, só para decidir); quem cria lê a fila de verdade."""
+    alvo = normalize(pedido)
+    if leve:
+        linhas = _ml_fila_leitura()
+    else:
+        with DB_LOCK:
+            bruto, _, _ = get_storage("conf_pedidos")
+        linhas = _rows_from_storage_value(bruto)
+    return [r for r in linhas if isinstance(r, dict) and normalize(order_number(r)) == alvo]
+
+
+def _mkt_atend_desde(pedido: str) -> float | None:
+    """Desde quando o cadastro automático procura o cliente: o início dele, senão a chegada do nome/CPF."""
+    auto = cadastro_auto_do_pedido(pedido) or {}
+    if float(auto.get("inicio_epoch") or 0) > 0:
+        return float(auto["inicio_epoch"])
+    with DB_LOCK:
+        row = DB.execute("SELECT atualizado_em FROM cliente_fiscal WHERE order_key=?", (normalize(pedido),)).fetchone()
+    try:
+        return datetime.fromisoformat(str(row["atualizado_em"])).timestamp() if row else None
+    except (TypeError, ValueError):
+        return None
+
+
+def mkt_atendimento_estado(pedido: str, agora: float | None = None) -> dict[str, Any]:
+    """O que o painel mostra: `acao` = criar | comprometer | "" e `disponivel`. Só lê o banco (nunca o Apollo)."""
+    pedido = str(pedido or "").strip()
+    agora = float(agora if agora is not None else time.time())
+    atual = mkt_atendimento_do_pedido(pedido) or {}
+    saida: dict[str, Any] = {**atual, "disponivel": False, "acao": "", "motivo": ""}
+    linhas = _mkt_linhas_na_fila(pedido, leve=True)
+    if not linhas:
+        return {**saida, "motivo": "o pedido não está na fila de pendentes"}
+    mp = _vendas_marketplace(linhas[0].get("Marketplace") or linhas[0].get("Origem"))
+    if mp not in MKT_ATEND_CANAIS:
+        return {**saida, "motivo": "só para pedidos do Mercado Livre e da Shopee"}
+    situacao = str(atual.get("situacao") or "")
+    if situacao in MKT_ATEND_FINAIS and MKT_ATEND_CANAIS[mp][2] is None:
+        # revisão: a porta não aplica a condição e o painel/Faturamento só acertam Shopee/Magalu/TikTok.
+        saida["condicao_aviso"] = (f"Atendimento criado pelo Noromak: acerte a condição de pagamento do "
+                                   f"{MKT_ATEND_CANAIS[mp][3]} no Apollo antes do caixa.")
+    if situacao == "criando":
+        return {**saida, "motivo": "criando agora"}
+    ja_atendido = _tiktok_atendimento_ja_atendido(pedido)
+    if situacao in MKT_ATEND_FINAIS:
+        if atual.get("comprometido") in ("sim", "comprometendo"):
+            return {**saida, "motivo": "atendimento criado e peças comprometidas" if atual.get("comprometido") == "sim"
+                    else "comprometendo agora"}
+        if ja_atendido:
+            return {**saida, "motivo": "o pedido já tem romaneio/caixa"}
+        return {**saida, "disponivel": True, "acao": "comprometer"}
+    if situacao == "ja_tinha":
+        return {**saida, "motivo": str(atual.get("detalhe") or "já existe atendimento no Apollo")}
+    if ja_atendido:
+        return {**saida, "motivo": "o pedido já tem romaneio/caixa"}
+    conhecido = _exp_cliente_do_pedido(pedido)
+    if not conhecido["documento"] or not conhecido["nome_fiscal"]:
+        return {**saida, "motivo": "sem nome/CPF da nota"}
+    if not situacao:  # o botão ainda não foi usado: só depois de o automático procurar por 2 h
+        if (cadastro_auto_do_pedido(pedido) or {}).get("situacao") in CADASTRO_AUTO_FEITOS:
+            return {**saida, "motivo": "o cliente já está no Apollo (o atendimento vem da integração)"}
+        desde = _mkt_atend_desde(pedido)
+        if desde is None or agora - desde < MKT_ATEND_APOS_S:
+            libera = _cadastro_auto_hora((desde or agora) + MKT_ATEND_APOS_S)
+            return {**saida, "motivo": f"o botão aparece às {libera}, se o cliente ainda não estiver no Apollo",
+                    "libera_epoch": (desde or agora) + MKT_ATEND_APOS_S}
+    return {**saida, "disponivel": True, "acao": "criar", "marketplace": mp}
+
+
+def _mkt_condicao_pendente(pedido: str) -> str:
+    """Aviso quando o atendimento foi criado pelo botão num canal sem condição automática (ML)."""
+    atual = mkt_atendimento_do_pedido(pedido) or {}
+    canal = MKT_ATEND_CANAIS.get(str(atual.get("marketplace") or ""))
+    if str(atual.get("situacao") or "") in MKT_ATEND_FINAIS and canal and canal[2] is None:
+        return (f"Atendimento criado pelo Noromak: acerte a condição de pagamento do {canal[3]} no Apollo e "
+                f"envie ao caixa pelo painel do pedido.")
+    return ""
+
+
+def _mkt_faturamento_barreira(pedido: str, res: dict[str, Any]) -> dict[str, Any]:
+    """2ª revisão: o lote do Faturamento não manda ao caixa o atendimento do ML criado pelo botão (a porta não aplica
+    a condição e o lote só acerta Shopee/Magalu). Fica em atenção com o motivo."""
+    if res.get("situacao") in ("pronto", "pronto_caixa", "corrigir_valor"):
+        aviso = _mkt_condicao_pendente(pedido)
+        if aviso:
+            return {**res, "situacao": "atencao", "motivo": aviso}
+    return res
+
+
+def mkt_atendimento_painel(pedido: str) -> dict[str, Any]:
+    """Revisão: o acompanhamento da extensão (a cada 4 s) lê só isto — sem ir ao Apollo. Antes relia o painel
+    inteiro e gastava as 12 leituras/min da porta que a própria criação precisava."""
+    return {"ok": True, "pedido": str(pedido or "").strip(), "atendimento_mkt": mkt_atendimento_estado(pedido)}
+
+
+def _mkt_atend_venda(pedido: str) -> dict[str, Any]:
+    """Itens da venda copiada (SKU, unidades, valor), somados por SKU — o mesmo formato da venda do TikTok."""
+    chave = str(pedido or "").strip()
+    por_sku: dict[str, dict[str, Any]] = {}
+    with DB_LOCK:
+        for tabela in ("vendas_v1799", "vendas_conta_v1898"):
+            try:
+                rows = DB.execute(f"SELECT sku, qty, amount FROM {tabela} WHERE order_id=? OR pack_id=?",
+                                  (chave, chave)).fetchall()
+            except sqlite3.OperationalError:
+                continue
+            for r in rows:
+                sku = str(r["sku"] or "").strip()
+                item = por_sku.setdefault(normalize(sku), {"sku": sku, "qtd": 0, "valor": 0.0})
+                item["qtd"] += int(r["qty"] or 0)
+                item["valor"] = round(item["valor"] + float(r["amount"] or 0), 2)
+    return {"itens": [i for i in por_sku.values() if i["qtd"] > 0]}
+
+
+def _mkt_atend_montar(pedido: str, nome_canal: str) -> tuple[list[dict[str, Any]], float]:
+    """Itens e valor do atendimento a partir da venda, conferidos com a fila (ADMIN vale). TikTokAtendRevisar = parar."""
+    venda = _mkt_atend_venda(pedido)
+    if not venda["itens"]:
+        raise TikTokAtendRevisar(f"A venda do {nome_canal} ainda não foi copiada (vendas): sem o preço não dá para "
+                                 f"criar o atendimento. Tente de novo em alguns minutos.")
+    linhas = _mkt_linhas_na_fila(pedido)
+    if not linhas:
+        raise TikTokAtendRevisar("O pedido não está mais na fila de pendentes.")
+    itens = _tiktok_atendimento_itens(venda, canal=nome_canal)
+    _tiktok_atendimento_conferir_fila(pedido, venda, linhas, canal=nome_canal)
+    esperado = round(sum(i["quantidade"] * i["unitario"] for i in itens), 2)
+    total = round(sum(float(i["valor"] or 0) for i in venda["itens"]), 2)
+    if abs(esperado - total) > 0.009:
+        # revisão: kit sem peça de 1 unidade e total que não divide — o atendimento sairia abaixo da venda e o
+        # Faturamento barraria. Melhor criar à mão.
+        raise TikTokAtendRevisar(("O valor da venda (R$ %.2f) não divide entre as peças do kit sem perder centavos "
+                                  "(R$ %.2f): crie o atendimento à mão." % (total, esperado)).replace(".", ","))
+    return itens, esperado
+
+
+def _mkt_atend_ligados(pedido: str) -> set[str]:
+    """Atendimentos já ligados a OUTRO pedido (botão, TikTok, Faturamento, romaneio/caixa)."""
+    chave = normalize(pedido)
+    with DB_LOCK:
+        numeros = [r[0] for r in DB.execute(
+            "SELECT atendimento FROM mkt_atendimento_v2047 WHERE pedido<>? AND atendimento<>''", (str(pedido),))]
+        numeros += [r[0] for r in DB.execute(
+            "SELECT atendimento FROM tiktok_atendimento_v2033 WHERE pedido<>? AND atendimento<>''", (str(pedido),))]
+        numeros += [r[0] for r in DB.execute(
+            "SELECT atendimento FROM faturamento_v1943 WHERE order_key<>? AND atendimento<>''", (chave,))]
+        numeros += [r[0] for r in DB.execute(
+            "SELECT contato FROM linx_operacoes_v1860 WHERE order_key<>? AND contato<>''", (chave,))]
+    return {re.sub(r"\D", "", str(n or "")) for n in numeros if re.sub(r"\D", "", str(n or ""))}
+
+
+def _mkt_atend_ja_tem(pedido: str, esperado: float, marketplace: str = "") -> tuple[str, str]:
+    """Procura no Apollo um atendimento aberto do cliente que seja ESTA venda (o da integração): todas as peças,
+    algo ainda a soltar, o valor da venda e não ligado a outro pedido (homônimo, outra compra, 2º pedido do mesmo
+    cliente). Devolve (número, "") quando acha, ("", "") quando não há, ("", erro) quando não deu para saber."""
+    d = exp_romaneio_preparar(pedido)
+    if not d.get("ok") or d.get("situacao") in ("erro", "cliente", "informar_atendimento"):
+        return "", str(d.get("aviso") or d.get("error") or "o Apollo não listou os atendimentos")
+    ligados = _mkt_atend_ligados(pedido)
+    for c in d.get("candidatos") or []:
+        numero = re.sub(r"\D", "", str(c.get("atendimento") or ""))
+        valor = _tiktok_num(c.get("valor"))
+        # 2ª revisão: na Shopee a integração grava o que o comprador pagou (cupons e moedas fora, V19.99) —
+        # vale também a diferença explicada pelo escrow, a mesma regra do Faturamento.
+        valor_ok = valor is not None and (
+            abs(valor - esperado) <= MKT_ATEND_VALOR_TOL
+            or bool(_faturamento_diferenca_explicada(pedido, marketplace, esperado, valor)))
+        if (c.get("bate") and not c.get("faltam") and float(c.get("total_a_soltar") or 0) > 0
+                and valor_ok and numero not in ligados):
+            return numero, ""
+    return "", ""
+
+
+def _mkt_itens_iguais(a: Any, b: Any) -> bool:
+    """2ª revisão: só código e quantidade. O preço de cada peça do kit é dividido pelo custo de Araçatuba de
+    agora e muda com ele — comparar o preço travava o "Comprometer peças" para sempre."""
+    def chaves(lista: Any) -> list[tuple[str, int]]:
+        return sorted((_exp_norm_codigo(i.get("codigo")), int(i.get("quantidade") or 0))
+                      for i in (lista or []) if isinstance(i, dict))
+    return chaves(a) == chaves(b)
+
+
+def mkt_atendimento_comprometer(pedido: str) -> dict[str, Any]:
+    """Compromete as peças do atendimento criado pelo botão. Mesma porta e mesma leitura do TikTok."""
+    pedido = str(pedido).strip()
+    atual = mkt_atendimento_do_pedido(pedido) or {}
+    contato = re.sub(r"\D", "", str(atual.get("atendimento") or ""))
+    if str(atual.get("situacao") or "") not in MKT_ATEND_FINAIS or not contato:
+        _mkt_atend_gravar(pedido, comprometido="", comp_detalhe="Sem atendimento criado para comprometer.")
+        return {"ok": False, "comprometido": "", "motivo": "sem atendimento criado"}
+    # revisão: o pedido não pode ter mudado depois do atendimento (ADMIN tirou/mudou peça): reservaria o que saiu.
+    canal = MKT_ATEND_CANAIS.get(str(atual.get("marketplace") or ""), ("", "", None, "marketplace"))[3]
+    try:
+        itens, _ = _mkt_atend_montar(pedido, canal)
+        guardados = json.loads(atual.get("itens_json") or "null")
+        if guardados is not None and not _mkt_itens_iguais(itens, guardados):
+            raise TikTokAtendRevisar("o pedido mudou depois do atendimento: confira no Apollo")
+    except (TikTokAtendRevisar, ValueError, TypeError) as exc:
+        _mkt_atend_gravar(pedido, comprometido="nao", comp_detalhe="Não comprometido: " + str(exc))
+        return {"ok": False, "comprometido": "nao", "motivo": str(exc)}
+    corpo = {"revenda": _exp_revenda(pedido), "operador": "noromak", "contato": int(contato)}
+    with EXP_PORTA_LOCK:
+        if _tiktok_atendimento_ja_atendido(pedido):  # confere de novo na vez (só o banco, leve)
+            _mkt_atend_gravar(pedido, comprometido="nao", comp_detalhe="Não comprometido: o pedido já tem romaneio/caixa.")
+            return {"ok": False, "comprometido": "nao", "motivo": "já com romaneio/caixa"}
+        try:
+            r = _exp_porta("atendimento/comprometer", corpo, escrita=True)
+        except PortaErro as exc:
+            estado = "incerto" if exc.incerto else "erro"
+            _mkt_atend_gravar(pedido, comprometido=estado, comp_detalhe="Comprometer: " + str(exc))
+            return {"ok": False, "comprometido": estado, "motivo": str(exc)}
+    situacao = str(r.get("situacao") or "")
+    itens_r = [i for i in (r.get("itens") or []) if isinstance(i, dict)]
+    faltam = [f"{i.get('codigo') or i.get('item') or '?'}: {i.get('motivo') or 'não comprometeu'}"
+              for i in itens_r if not _tiktok_comp_item_ok(i.get("comprometido"))]
+    if r.get("ok") is True and (situacao == "ja_comprometido" or (itens_r and not faltam)):
+        estado, detalhe = "sim", "Peças comprometidas no Apollo."
+    elif r.get("ok") is True and faltam:
+        estado, detalhe = "parcial", "Peças NÃO comprometidas: " + "; ".join(faltam)
+    else:
+        estado = "nao"
+        detalhe = "Não comprometido: " + str(r.get("erro") or r.get("mensagem") or situacao or "o Apollo não confirmou")
+    _mkt_atend_gravar(pedido, comprometido=estado, comp_detalhe=detalhe)
+    audit("noromak", "expedicao.mkt_atendimento_comprometer", f"{pedido}|{contato}|{estado}")
+    return {"ok": estado == "sim", "comprometido": estado, "motivo": detalhe}
+
+
+def mkt_atendimento_pedido(pedido: str, ator: str, endereco_texto: str = "", bairro: str = "") -> dict[str, Any]:
+    """Cliente + atendimento + comprometer de UM pedido do ML/Shopee. Grava o estado; nunca levanta."""
+    pedido = str(pedido).strip()
+    atual = mkt_atendimento_do_pedido(pedido) or {}
+    linhas = _mkt_linhas_na_fila(pedido)
+    mp = _vendas_marketplace(linhas[0].get("Marketplace") or linhas[0].get("Origem")) if linhas else ""
+    if mp not in MKT_ATEND_CANAIS:
+        _mkt_atend_gravar(pedido, situacao="revisar", detalhe="O pedido não está na fila (ML/Shopee).")
+        return {"ok": False, "situacao": "revisar", "motivo": "fora da fila"}
+    origem, prefixo, condicao, nome_canal = MKT_ATEND_CANAIS[mp]
+    _mkt_atend_gravar(pedido, marketplace=mp)
+
+    def parar(situacao: str, detalhe: str, **extra: Any) -> dict[str, Any]:
+        _mkt_atend_gravar(pedido, situacao=situacao, detalhe=detalhe, **extra)
+        return {"ok": False, "situacao": situacao, "motivo": detalhe}
+
+    # 1) itens e preço da venda, conferidos com a fila — antes de qualquer gravação no Apollo
+    try:
+        itens, esperado = _mkt_atend_montar(pedido, nome_canal)
+    except TikTokAtendRevisar as exc:
+        return parar("revisar", str(exc))
+    # 2) cliente: cria se não existe. Revisão: já feito pelo botão (repetição) = não regrava (2 escritas a menos).
+    conhecido = _exp_cliente_do_pedido(pedido)
+    codigo = re.sub(r"\D", "", str(conhecido.get("codigo") or ""))
+    if not ((cadastro_auto_do_pedido(pedido) or {}).get("situacao") == "feito" and codigo):
+        r = exp_cadastro_atualizar(pedido, ator, endereco_texto=endereco_texto, criar=True, bairro=bairro)
+        if not r.get("ok"):
+            situacao = "incerto" if r.get("situacao") == "incerto" else "erro"
+            return parar(situacao, "Cadastro do cliente: " + str(r.get("error") or r.get("situacao") or "?"))
+        codigo = re.sub(r"\D", "", str(r.get("cliente") or ""))
+    # 3) a integração pode ter trazido a venda: atendimento DESTA venda já aberto = não cria outro. Revisão: se o
+    # criar já saiu antes (incerto/reinício), o aberto pode ser o NOSSO — vai direto à porta (a chave devolve ja_existia).
+    if not atual.get("enviado_em"):
+        numero_ja, erro_busca = _mkt_atend_ja_tem(pedido, esperado, mp)
+        if erro_busca:
+            return parar("erro", "Não deu para conferir no Apollo se o atendimento já existe: " + erro_busca,
+                         cliente=codigo)
+        if numero_ja:
+            return parar("ja_tinha", f"O Apollo já tem o atendimento {numero_ja} desta venda (mesmas peças e valor, "
+                                     f"veio da integração): nenhum outro foi criado.", cliente=codigo,
+                         atendimento=numero_ja)
+    # 4) revisão: relê fila e venda logo antes de criar — o ADMIN pode ter mexido durante o cadastro.
+    try:
+        itens2, esperado2 = _mkt_atend_montar(pedido, nome_canal)
+    except TikTokAtendRevisar as exc:
+        return parar("revisar", str(exc), cliente=codigo)
+    if not _mkt_itens_iguais(itens2, itens) or esperado2 != esperado:
+        return parar("revisar", "O pedido mudou enquanto o cliente era cadastrado: confira e clique de novo.",
+                     cliente=codigo)
+    if _tiktok_atendimento_ja_atendido(pedido):
+        return parar("revisar", "O pedido já tem romaneio/caixa: nada criado.", cliente=codigo)
+    corpo: dict[str, Any] = {"revenda": _exp_revenda(pedido), "operador": "noromak", "origem": origem,
+                             "pedido_externo": f"{prefixo}-{pedido}", "cliente": int(codigo),
+                             "observacao": f"{nome_canal} {pedido}", "valor_esperado": esperado, "itens": itens}
+    if condicao:
+        corpo["condicao_pagamento"] = condicao
+    with EXP_PORTA_LOCK:
+        if _tiktok_atendimento_ja_atendido(pedido):  # confere de novo na vez (só o banco)
+            return parar("revisar", "O pedido já tem romaneio/caixa: nada criado.", cliente=codigo)
+        _mkt_atend_gravar(pedido, enviado_em=now_iso())   # o criar vai sair: a repetição vai direto à porta
+        try:
+            ra = _exp_porta("atendimento/criar", corpo, escrita=True)
+        except PortaErro as exc:
+            if exc.incerto:   # a mesma chave nunca cria outro atendimento: o botão pode tentar de novo
+                return parar("incerto", str(exc), cliente=codigo, valor=esperado, itens=itens)
+            return parar("erro", str(exc), cliente=codigo, valor=esperado, itens=itens, enviado_em="")
+    _tiktok_guardar_amostra(f"porta atendimento/criar {origem}", ra)
+    situacao = str(ra.get("situacao") or "")
+    numero = re.sub(r"\D", "", str(ra.get("atendimento") or ""))
+    if not ra.get("ok") or situacao not in MKT_ATEND_FINAIS or not numero:
+        motivo = str(ra.get("erro") or ra.get("mensagem") or situacao or "o Apollo não confirmou")
+        textos = {"sem_credito": "Cliente sem crédito liberado no Apollo (libere pelo painel ou no Apollo)",
+                  "sem_estoque": "Peça sem estoque no Apollo", "item_nao_encontrado": "Peça não encontrada no Apollo",
+                  "preco_recusado": "O Apollo recusou o preço", "valor_divergente": "O Apollo gravou outro valor",
+                  "cliente_nao_encontrado": "Cliente não encontrado no Apollo", "apollo_fora": "Apollo fora do ar"}
+        # recusa = nada criado: o próximo clique volta a procurar o atendimento da integração
+        return parar("revisar" if situacao == "sem_credito" else "erro", f"{textos.get(situacao, 'Recusado')}: {motivo}",
+                     cliente=codigo, valor=esperado, itens=itens, enviado_em="")
+    valor = _tiktok_num(ra.get("valor"))
+    detalhe = "Atendimento criado" if situacao == "criado" else "Atendimento já existia (mesma venda)"
+    if valor is not None and abs(valor - esperado) > 0.009:
+        detalhe += (f" — ATENÇÃO: o Apollo gravou R$ {valor:.2f}".replace(".", ",")
+                    + f" e a venda é R$ {esperado:.2f}".replace(".", ","))
+    _mkt_atend_gravar(pedido, situacao=situacao, detalhe=detalhe, cliente=codigo, atendimento=numero, valor=esperado,
+                      itens=itens, comprometido="comprometendo", comp_detalhe="Comprometendo as peças…")
+    audit(ator, "expedicao.mkt_atendimento", f"{pedido}|{numero}|{situacao}|{esperado:.2f}")
+    # 5) comprometer (falhar aqui não desfaz o atendimento: o botão volta como "Comprometer peças")
+    try:
+        comp = mkt_atendimento_comprometer(pedido)
+    except Exception as exc:
+        _mkt_atend_gravar(pedido, comprometido="erro", comp_detalhe="Comprometer: " + str(exc)[:300])
+        comp = {"comprometido": "erro", "motivo": str(exc)}
+    return {"ok": True, "situacao": situacao, "atendimento": numero, "valor": esperado,
+            "comprometido": comp.get("comprometido"), "comprometido_motivo": comp.get("motivo")}
+
+
+def mkt_atendimento_iniciar(pedido: str, ator: str, endereco_texto: str = "", bairro: str = "",
+                            em_fundo: bool = True) -> dict[str, Any]:
+    """Botão do painel. Em segundo plano (a porta espera a vez; o nginx corta em 60 s); um por vez."""
+    pedido = str(pedido or "").strip()
+    if not pedido:
+        raise ValueError("Informe o pedido.")
+    estado = mkt_atendimento_estado(pedido)
+    if not estado["disponivel"]:
+        raise ValueError("Não dá para criar agora: " + (estado.get("motivo") or "?") + ".")
+    if not _MKT_ATEND_LOCK.acquire(blocking=False):
+        return {"ok": False, "ocupado": True, "error": "Outro atendimento está sendo criado. Aguarde e tente de novo."}
+    entregue = False      # revisão: a trava passou para quem roda (thread ou o rodar direto) — só ele solta
+    marcado = False
+    so_comprometer = False
+    anterior = ("", "", "", "")
+    resultado: dict[str, Any] = {}
+    try:
+        # revisão: confere de novo já com a trava (outro PC pode ter terminado enquanto este esperava)
+        estado = mkt_atendimento_estado(pedido)
+        if not estado["disponivel"]:
+            raise ValueError("Não dá para criar agora: " + (estado.get("motivo") or "?") + ".")
+        so_comprometer = estado["acao"] == "comprometer"
+        anterior = (str(estado.get("situacao") or ""), str(estado.get("detalhe") or ""),
+                    str(estado.get("comprometido") or ""), str(estado.get("comp_detalhe") or ""))
+        if so_comprometer:
+            _mkt_atend_gravar(pedido, comprometido="comprometendo", comp_detalhe=f"Comprometendo pelo painel ({ator})…")
+        else:
+            _mkt_atend_gravar(pedido, situacao="criando", detalhe=f"Criando pelo painel ({ator})…")
+        marcado = True
+        audit(ator, "expedicao.mkt_atendimento_botao", f"{pedido}|{'comprometer' if so_comprometer else 'criar'}")
+
+        def rodar() -> None:
+            try:
+                if so_comprometer:
+                    resultado.update(mkt_atendimento_comprometer(pedido))
+                else:
+                    resultado.update(mkt_atendimento_pedido(pedido, ator, endereco_texto, bairro))
+            except Exception as exc:
+                try:
+                    if so_comprometer:
+                        _mkt_atend_gravar(pedido, comprometido="erro", comp_detalhe="Comprometer: " + str(exc)[:300])
+                    else:
+                        _mkt_atend_gravar(pedido, situacao="erro", detalhe=str(exc)[:300])
+                except Exception:
+                    pass
+                resultado.update({"ok": False, "motivo": str(exc)})
+            finally:
+                _MKT_ATEND_LOCK.release()
+        if em_fundo:
+            threading.Thread(target=rodar, name=f"mkt-atendimento-{pedido}", daemon=True).start()
+            entregue = True
+        else:
+            entregue = True
+            rodar()
+    except BaseException:
+        if not entregue:
+            if marcado:   # revisão: a thread não subiu — nada foi feito, devolve o estado de antes
+                try:
+                    if so_comprometer:
+                        _mkt_atend_gravar(pedido, comprometido=anterior[2], comp_detalhe=anterior[3])
+                    else:
+                        _mkt_atend_gravar(pedido, situacao=anterior[0], detalhe=anterior[1])
+                except Exception:
+                    pass
+            _MKT_ATEND_LOCK.release()
+        raise
+    if not em_fundo:
+        return resultado
+    return {"ok": True, "iniciado": True, "atendimento_mkt": mkt_atendimento_estado(pedido)}
 
 
 def tiktok_atendimento_loop(stop_event: threading.Event) -> None:
@@ -21294,6 +21769,7 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
                     "nome_apollo": ""},
         "revenda": revenda,
         "atendimento_tiktok": tiktok_atendimento_do_pedido(pedido),  # V20.33
+        "atendimento_mkt": mkt_atendimento_estado(pedido),  # V20.47: botão de ML/Shopee
         "precisa_condicao": True, "candidatos": [], "escolhido": "", "nome_abreviado": False,
         **_exp_estado_operacoes(pedido),
         "cadastro_auto": cadastro_auto_do_pedido(pedido),  # V19.41
@@ -21760,6 +22236,38 @@ EXP_NOME_ROTULO = re.compile(r"^(TIPO DE CONTRIBUINTE|NAO CONTRIBUINTE|CONTRIBUI
                              r"|INSCRICAO ESTADUAL.*|DADOS D.*|OBSERVAC.*)$")
 
 
+# V20.47 (dono, 10/11, pedido 2000019436248196): o Apollo recusa o endereço quando a cidade não é a do cadastro de
+# CEP dele ("O CEP é de CRISTALINA, não de CAMPOS LINDOS. Nada foi enviado." — Campos Lindos é distrito de
+# Cristalina-GO; o ML manda o distrito). Tenta UMA vez de novo com a cidade que o próprio Apollo indica para o CEP e
+# avisa a troca. Outro erro, ou a mesma cidade, segue como antes.
+_EXP_CEP_CIDADE_RE = re.compile(r"CEP\s+(?:\S+\s+)?(?:é|e|eh)\s+de\s+(.+?),\s*n(?:ã|a)o\s+de\s+(.+?)(?:[.;]|$)", re.I)
+
+
+def _exp_porta_endereco(rota: str, corpo: dict[str, Any], avisos: list[str]) -> dict[str, Any]:
+    erro_porta: PortaErro | None = None
+    try:
+        r: dict[str, Any] | None = _exp_porta(rota, corpo, escrita=True)
+        texto = str((r or {}).get("erro") or "")
+    except PortaErro as exc:
+        if exc.incerto or exc.passageiro:
+            raise
+        erro_porta, r, texto = exc, None, str(exc)
+    m = _EXP_CEP_CIDADE_RE.search(texto) if texto else None
+    end = corpo.get("endereco")
+    nova = _exp_limpo(m.group(1))[:50] if m else ""   # revisão: sem acento, como todo endereço
+    if not nova or not isinstance(end, dict) or normalize(nova) == normalize(end.get("cidade")):
+        if erro_porta is not None:
+            raise erro_porta
+        return r or {}
+    antiga = str(end.get("cidade") or "")
+    end["cidade"] = nova       # o mesmo endereço segue para o atualizar e para a resposta da tela
+    r = _exp_porta(rota, corpo, escrita=True)
+    if not r.get("erro"):
+        avisos.append(f"Cidade gravada como {nova}: no Apollo o CEP {end.get('cep') or ''} é de lá "
+                      f"(o marketplace mandou {antiga}).".replace("CEP  é", "CEP é"))
+    return r
+
+
 def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any = "",
                            endereco_texto: Any = "", criar: bool = True, bairro: Any = "") -> dict[str, Any]:
     """Botão do cadastro pela porta (V19.32, contrato real do Guilherme de 15/10):
@@ -21793,6 +22301,29 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
     elif len(documento) == 14 and (ie_isento or usuario != "automatico"):
         fiscal = {"categoria": 2, "inscricao_estadual": "ISENTO"}
     avisos: list[str] = []
+    nome_apollo = ""
+    # V20.47: o automático procura o cliente pelo CPF ANTES de ler o envio no ML. A maioria das
+    # tentativas não acha o cliente (ainda não caiu no Apollo): assim cada uma custa só essa
+    # leitura, e a rotina pode continuar tentando por dias sem pesar.
+    if not criar and not codigo:
+        vez = _ExpVezDaPorta(None if usuario == "automatico" else EXP_CLIQUE_ESPERA_S)
+        if not vez.ok:
+            return {"ok": False, "situacao": "ocupado",
+                    "error": "O Apollo está ocupado com outra gravação agora. Espere alguns segundos e tente de novo."}
+        with vez:
+            try:
+                b = exp_buscar_cliente(documento, operador, revenda)
+            except PortaErro as exc:
+                return {"ok": False, "situacao": "incerto" if exc.incerto else "erro", "error": str(exc),
+                        "passageiro": bool(exc.passageiro)}
+        if b["situacao"] == "nao_cadastrado":
+            return {"ok": False, "situacao": "nao_cadastrado", "error": "Cliente ainda não está no Apollo."}
+        if b["situacao"] == "mais_de_um":
+            return {"ok": False, "situacao": "mais_de_um", "lista": b["lista"],
+                    "error": "Mais de um cliente com este CPF/CNPJ no Apollo: informe o código certo."}
+        if b["situacao"] != "encontrado" or not b["cliente"]:
+            return {"ok": False, "error": "Resposta inesperada da busca do cliente."}
+        codigo, nome_apollo = b["cliente"], b["nome"]
     try:
         end = exp_endereco_entrega(pedido)
     except Exception as exc:  # ML fora do ar não impede nome/contatos
@@ -21806,7 +22337,6 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
     elif end.get("bairro_padrao"):
         avisos.append(f"Bairro gravado como {EXP_BAIRRO_PADRAO_SHOPEE}: a página não informou o bairro.")
     criado = False
-    nome_apollo = ""
     # V20.33 (2ª revisão): o botão espera a vez da porta no máximo EXP_CLIQUE_ESPERA_S (a rotina do TikTok pode
     # estar gravando); as rotinas automáticas esperam o quanto for preciso.
     vez = _ExpVezDaPorta(None if usuario == "automatico" else EXP_CLIQUE_ESPERA_S)
@@ -21815,7 +22345,7 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
                 "error": "O Apollo está ocupado com outra gravação agora. Espere alguns segundos e tente de novo."}
     with vez:
         try:
-            if codigo and _exp_nome_abreviado(nome_limpo):   # V20.09: só o nome abreviado gasta a busca
+            if codigo and not nome_apollo and _exp_nome_abreviado(nome_limpo):   # V20.09: só o nome abreviado gasta a busca
                 nome_apollo = exp_buscar_cliente(documento, operador, revenda)["nome"]
             if not codigo:
                 b = exp_buscar_cliente(documento, operador, revenda)
@@ -21836,11 +22366,11 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
                                 "error": "Cliente novo precisa do endereço inteiro: " + end["falta"] + "."}
                     if not nome_limpo:
                         return {"ok": False, "error": "Cliente novo precisa do nome da NF-e."}
-                    c = _exp_porta("cliente/criar", {
+                    c = _exp_porta_endereco("cliente/criar", {
                         "revenda": revenda, "documento": documento, "operador": operador, "nome": nome_limpo,
                         "email": LINX_CADASTRO_EMAIL, "ddd_celular": LINX_CADASTRO_DDD, "celular": EXP_CELULAR_PADRAO,
                         "endereco": endereco,
-                        **fiscal}, escrita=True)
+                        **fiscal}, avisos)
                     novo = re.sub(r"\D", "", str(c.get("cliente") or ""))
                     if c.get("situacao") not in ("criado", "ja_cadastrado") or not novo:
                         return {"ok": False, "situacao": c.get("situacao") or "erro",
@@ -21861,7 +22391,7 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
             if endereco:
                 corpo["endereco"] = endereco
             corpo.update(fiscal)
-            at = _exp_porta("cliente/atualizar", corpo, escrita=True)
+            at = _exp_porta_endereco("cliente/atualizar", corpo, avisos)
             if at.get("situacao") != "atualizado":
                 return {"ok": False, "situacao": at.get("situacao") or "erro", "cliente": codigo,
                         "error": at.get("erro") or "O Apollo não confirmou a atualização."}
@@ -21872,7 +22402,8 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
                 avisos.append("CNPJ: categoria e I.E. não enviadas (I.E. da NF-e não lida). Confira no Apollo.")
             cr = _exp_porta("cliente/credito", {**base, "situacao_credito": "1"}, escrita=True)
         except PortaErro as exc:
-            return {"ok": False, "situacao": "incerto" if exc.incerto else "erro", "cliente": codigo, "error": str(exc)}
+            return {"ok": False, "situacao": "incerto" if exc.incerto else "erro", "cliente": codigo, "error": str(exc),
+                    "passageiro": bool(exc.passageiro)}   # V20.47: o automático para a volta no limite
     # V19.39: crédito que o Apollo não gravou (descarte em silêncio da Linx: os clientes
     # criados pela API em 15/10 voltaram "nao_gravou") trava o caixa na função 257.
     if cr.get("situacao") in ("nao_gravou", "recusado", "incerto"):
@@ -21898,16 +22429,26 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
 # e da Shopee, com a MESMA gravação do botão (nome, e-mail e celular padrão, endereço
 # sem acento e crédito) — exp_cadastro_atualizar(..., criar=False). Regras:
 #   - NUNCA cria cliente: da venda até o cliente cair no Apollo leva um tempo incerto;
-#     criar na hora duplicaria. Não achou → tenta de novo a cada 10 min por até 1 h,
-#     contada de quando o Noromak recebeu o nome/CPF da NF-e (vale fora do expediente);
-#     depois fica "não encontrado no Apollo" e quem resolve é o botão.
+#     criar na hora duplicaria. Não achou → tenta de novo (V20.47: 10 min na 1ª hora,
+#     30 min até 6 h, depois de hora em hora, por até 3 dias), contado de quando o Noromak
+#     recebeu o nome/CPF da NF-e (vale fora do expediente); depois fica "não encontrado
+#     no Apollo" e quem resolve é o botão. Pedido que sai da fila para de ser tentado.
 #   - só pedidos que chegaram DEPOIS de ligar; "mais de um cliente" ou erro não mexe;
 #   - cada pedido é feito uma vez; interruptor no Admin (perfil Admin), começa desligado.
 # ---------------------------------------------------------------------------
-CADASTRO_AUTO_INTERVALO = 600      # 10 min entre tentativas do mesmo pedido
-CADASTRO_AUTO_JANELA = 3600        # 1 h tentando
+CADASTRO_AUTO_INTERVALO = 600      # 10 min entre tentativas do mesmo pedido (1ª hora)
+# V20.47 (dono, 10/11): 1 h era pouco — a maioria dos clientes cai no Apollo depois e o
+# Faturamento ficava parado em "aguardando cadastro". Continua tentando enquanto o pedido
+# está na fila, cada vez mais espaçado: (até X segundos desde o início, intervalo).
+CADASTRO_AUTO_ESPACAMENTO = ((3600, 600), (6 * 3600, 1800))
+CADASTRO_AUTO_INTERVALO_LONGO = 3600   # depois de 6 h: de hora em hora
+CADASTRO_AUTO_JANELA = 3 * 86400   # 3 dias tentando (pedido que sai da fila para antes)
 CADASTRO_AUTO_POR_RODADA = 5       # a porta aceita 6 escritas/min; cada pedido = 2
-CADASTRO_AUTO_FINAIS = ("feito", "nao_encontrado", "mais_de_um", "erro")
+CADASTRO_AUTO_FINAIS = ("feito", "feito_sem_endereco", "nao_encontrado", "mais_de_um", "erro")
+# V20.47 (revisão): "feito_sem_endereco" = o automático gravou nome, contatos e crédito mas não
+# tinha o endereço (Shopee mascara na API). Para o Faturamento vale como feito; a extensão Linx
+# (que só pula a etapa com "feito") continua oferecendo o cadastro com o endereço da página.
+CADASTRO_AUTO_FEITOS = ("feito", "feito_sem_endereco")
 CADASTRO_AUTO_MARKETPLACES = ("Mercado Livre", "Shopee")
 
 
@@ -21966,7 +22507,10 @@ def cadastro_auto_do_pedido(pedido: str) -> dict[str, Any] | None:
 
 
 def _cadastro_auto_registrar(pedido: str, inicio: float, agora: float, tentativas: int, situacao: str,
-                             detalhe: str, cliente: str = "") -> None:
+                             detalhe: str, cliente: str = "", automatico: bool = False) -> None:
+    # V20.47 (revisão): a rotina nunca troca um cadastro já feito (o botão pode ter feito
+    # enquanto ela esperava a vez); o botão (automatico=False) sempre grava.
+    trava = (" WHERE cadastro_auto_v1941.situacao NOT IN ('feito','feito_sem_endereco')" if automatico else "")
     with DB_LOCK:
         DB.execute(
             """INSERT INTO cadastro_auto_v1941(order_key,pedido,inicio_epoch,ultima_epoch,tentativas,situacao,detalhe,cliente,atualizado_em)
@@ -21974,19 +22518,36 @@ def _cadastro_auto_registrar(pedido: str, inicio: float, agora: float, tentativa
                ON CONFLICT(order_key) DO UPDATE SET ultima_epoch=excluded.ultima_epoch, tentativas=excluded.tentativas,
                    situacao=excluded.situacao, detalhe=excluded.detalhe,
                    cliente=CASE WHEN excluded.cliente<>'' THEN excluded.cliente ELSE cadastro_auto_v1941.cliente END,
-                   atualizado_em=excluded.atualizado_em""",
+                   atualizado_em=excluded.atualizado_em""" + trava,
             (normalize(pedido), pedido, inicio, agora, tentativas, situacao, str(detalhe or "")[:400], cliente, now_iso()),
         )
         DB.commit()
 
 
-def _cadastro_auto_candidatos(ligado_em: str) -> list[dict[str, Any]]:
+def _cadastro_auto_intervalo(decorrido: float) -> int:
+    """V20.47: espera entre tentativas conforme o tempo desde a chegada do nome/CPF."""
+    for ate, intervalo in CADASTRO_AUTO_ESPACAMENTO:
+        if decorrido < ate:
+            return intervalo
+    return CADASTRO_AUTO_INTERVALO_LONGO
+
+
+def _cadastro_auto_hora(epoch: float) -> str:
+    """Hora de Brasília (HH:MM) para a mensagem da próxima tentativa."""
+    return datetime.fromtimestamp(float(epoch) - 3 * 3600, tz=timezone.utc).strftime("%H:%M")
+
+
+def _cadastro_auto_candidatos(ligado_em: str, agora: float | None = None) -> list[dict[str, Any]]:
     """Pedidos pendentes (ML/Shopee) cujo nome/CPF da NF-e chegou depois de ligar e que
-    ainda não terminaram. O início da contagem de 1 h é a chegada do nome/CPF."""
+    ainda não terminaram. O início da contagem é a chegada do nome/CPF.
+    V20.47: "não encontrado" (da regra antiga de 1 h) volta a ser candidato enquanto o
+    pedido está na fila e dentro da janela nova."""
+    agora = float(agora if agora is not None else time.time())
     with DB_LOCK:
         pendentes, _, _ = get_storage("conf_pedidos")
         fiscais = DB.execute(
-            "SELECT pedido, atualizado_em FROM cliente_fiscal WHERE documento_numero<>'' AND nome_fiscal<>'' AND atualizado_em>=?",
+            "SELECT pedido, atualizado_em, linx_cliente FROM cliente_fiscal "
+            "WHERE documento_numero<>'' AND nome_fiscal<>'' AND atualizado_em>=?",
             (ligado_em,),
         ).fetchall()
         estados = {r["order_key"]: dict(r) for r in DB.execute("SELECT * FROM cadastro_auto_v1941").fetchall()}
@@ -22003,14 +22564,25 @@ def _cadastro_auto_candidatos(ligado_em: str) -> list[dict[str, Any]]:
             continue
         estado = estados.get(chave)
         if estado and estado["situacao"] in CADASTRO_AUTO_FINAIS:
-            continue
+            # (revisão) com o código do cliente já guardado alguém resolveu fora da porta
+            # (extensão antiga, Apollo): não reabre, senão regravaria por cima.
+            reabre = (estado["situacao"] == "nao_encontrado" and not str(f["linx_cliente"] or "").strip()
+                      and agora - float(estado["inicio_epoch"] or 0) < CADASTRO_AUTO_JANELA)
+            if not reabre:
+                continue
         try:
             chegou = datetime.fromisoformat(str(f["atualizado_em"])).timestamp()
         except Exception:
             chegou = time.time()
         saida.append({"pedido": f["pedido"], "inicio": (estado or {}).get("inicio_epoch") or chegou,
                       "ultima": (estado or {}).get("ultima_epoch") or 0, "tentativas": (estado or {}).get("tentativas") or 0})
-    return saida
+    # V20.47 (revisão): quem vence primeiro vai primeiro (nunca tentado = já venceu). Sem ordem,
+    # os pedidos antigos — os primeiros do banco — ocupavam as vagas e o novo esperava horas.
+    def _vence(c: dict[str, Any]) -> tuple[float, float]:
+        if not c["ultima"]:
+            return (0.0, -float(c["inicio"]))
+        return (float(c["ultima"]) + _cadastro_auto_intervalo(float(c["ultima"]) - float(c["inicio"])), 0.0)
+    return sorted(saida, key=_vence)
 
 
 def cliente_fiscal_da_api_ml() -> int:
@@ -22050,33 +22622,50 @@ def cadastro_auto_rodada(agora: float | None = None, esperar=None) -> dict[str, 
     except Exception as exc:
         print(f"[cadastro-auto] nome/CPF da API do ML: {exc}", flush=True)
     feitos = 0
-    for c in _cadastro_auto_candidatos(cfg["ligado_em"]):
-        if c["ultima"] and agora - c["ultima"] < CADASTRO_AUTO_INTERVALO:
-            continue                                   # tenta de 10 em 10 min
+    for c in _cadastro_auto_candidatos(cfg["ligado_em"], agora):
+        if c["ultima"] and agora - c["ultima"] < _cadastro_auto_intervalo(c["ultima"] - float(c["inicio"])):
+            continue                                   # V20.47: 10 min, 30 min, depois 1 h
         if feitos >= CADASTRO_AUTO_POR_RODADA:
             break
         if feitos and esperar:
             esperar(25)
+        # V20.47 (revisão): a lista é da hora em que a volta começou; o botão pode ter feito
+        # o cadastro enquanto ela esperava — relê antes de ir ao Apollo.
+        if (cadastro_auto_do_pedido(c["pedido"]) or {}).get("situacao") in CADASTRO_AUTO_FEITOS:
+            continue
         feitos += 1
         tent = int(c["tentativas"]) + 1
         try:
             r = exp_cadastro_atualizar(c["pedido"], "automatico", criar=False)
         except Exception as exc:                       # nunca derruba a rodada
             r = {"ok": False, "situacao": "erro", "error": str(exc)}
+        if r.get("passageiro"):
+            # V20.47 (revisão): Apollo no limite por minuto (429) ou sem resposta na leitura —
+            # para a volta (como o Faturamento, V20.12) e não gasta a vez do pedido.
+            break
         sit = str(r.get("situacao") or "")
         vencido = agora - float(c["inicio"]) >= CADASTRO_AUTO_JANELA
-        if r.get("ok"):
+        if r.get("ok") and not r.get("endereco"):
+            final = "feito_sem_endereco"
+            det = "; ".join(r.get("avisos") or []) or "Endereço não enviado."
+        elif r.get("ok"):
             final, det = "feito", "; ".join(r.get("avisos") or []) or f"crédito: {r.get('credito')}"
         elif sit == "nao_cadastrado":
-            final, det = ("nao_encontrado" if vencido else "aguardando"), "Cliente ainda não está no Apollo."
+            if vencido:
+                final, det = "nao_encontrado", "Cliente não apareceu no Apollo em 3 dias."
+            else:
+                proxima = agora + _cadastro_auto_intervalo(agora - float(c["inicio"]))
+                final, det = "aguardando", f"Cliente ainda não está no Apollo. Próxima tentativa às {_cadastro_auto_hora(proxima)}."
         elif sit == "mais_de_um":
             final, det = "mais_de_um", "Mais de um cliente com este CPF/CNPJ no Apollo."
         elif sit == "desligado":
             break
         else:
             final, det = ("erro" if vencido else "aguardando"), str(r.get("error") or sit or "erro")
-        _cadastro_auto_registrar(c["pedido"], float(c["inicio"]), agora, tent, final, det, str(r.get("cliente") or ""))
-        contagem[final] = contagem.get(final, 0) + 1
+        _cadastro_auto_registrar(c["pedido"], float(c["inicio"]), agora, tent, final, det, str(r.get("cliente") or ""),
+                                 automatico=True)
+        chave = "feito" if final in CADASTRO_AUTO_FEITOS else final
+        contagem[chave] = contagem.get(chave, 0) + 1
     return contagem
 
 
@@ -22280,17 +22869,26 @@ def faturamento_conferir(pedido: str, marketplace: str = "", agora: float | None
     estado_cad = cadastro_auto_do_pedido(pedido) or {}
     conhecido = _exp_cliente_do_pedido(pedido)
     valor = _exp_valor_pedido(pedido)
-    if estado_cad.get("situacao") != "feito":
-        res = {"situacao": "aguardando_cadastro", "atendimento": "", "valor_atendimento": None,
-               "motivo": {"nao_encontrado": "Cliente não apareceu no Apollo em 1 h: use o botão do painel.",
-                          "mais_de_um": "Mais de um cliente com este CPF/CNPJ no Apollo."}.get(
-                   estado_cad.get("situacao"), "Aguardando o cadastro do cliente.")}
+    if estado_cad.get("situacao") not in CADASTRO_AUTO_FEITOS:   # V20.47: feito sem endereço vale
+        detalhe_cad = str(estado_cad.get("detalhe") or "")
+        if estado_cad.get("situacao") != "aguardando":
+            motivo = {"nao_encontrado": "Cliente não apareceu no Apollo em 3 dias: use o botão do painel.",
+                      "mais_de_um": "Mais de um cliente com este CPF/CNPJ no Apollo."}.get(
+                estado_cad.get("situacao"), "Aguardando o cadastro do cliente.")
+        elif detalhe_cad.startswith("Cliente ainda não está no Apollo."):
+            # V20.47: diz quando o automático tenta de novo.
+            motivo = "Aguardando o cliente cair no Apollo. " + detalhe_cad.replace("Cliente ainda não está no Apollo. ", "")
+        else:
+            # (revisão) erro da porta, não "cliente fora do Apollo": a rotina tenta de novo sozinha.
+            motivo = "Aguardando o cadastro automático (última tentativa: " + detalhe_cad[:160] + ")."
+        res = {"situacao": "aguardando_cadastro", "atendimento": "", "valor_atendimento": None, "motivo": motivo.strip()}
         d = {}
     else:
         d = exp_romaneio_preparar(pedido)
         mp_explicar = marketplace or d.get("marketplace") or ""
         res = faturamento_classificar(pedido, d, valor, explicar=lambda v, a: _faturamento_diferenca_explicada(
             pedido, mp_explicar, v, a))
+        res = _mkt_faturamento_barreira(pedido, res)   # V20.47 (2ª revisão)
     cliente = str(((d.get("cliente") or {}).get("codigo")) or estado_cad.get("cliente") or conhecido["codigo"] or "")
     nome = str(conhecido["nome_fiscal"] or ((d.get("cliente") or {}).get("nome_apollo")) or "")
     with DB_LOCK:
@@ -24392,7 +24990,7 @@ def faturamento_rodada(agora: float | None = None, esperar=None) -> int:
     # com o teto por rodada, os do fim nunca chegavam (261016S2NU71S0, 16/10).
     def _vez(item: tuple[str, str]) -> tuple[int, float]:
         e = estado.get(normalize(item[0])) or {}
-        destravou = e.get("situacao") == "aguardando_cadastro" and             (cadastro_auto_do_pedido(item[0]) or {}).get("situacao") == "feito"
+        destravou = e.get("situacao") == "aguardando_cadastro" and             (cadastro_auto_do_pedido(item[0]) or {}).get("situacao") in CADASTRO_AUTO_FEITOS
         return (0 if destravou else 1, float(e.get("conferido_epoch") or 0))
     apollo_cheio = False
     for pedido, mp in sorted(_faturamento_pendentes(), key=_vez):
@@ -24400,7 +24998,7 @@ def faturamento_rodada(agora: float | None = None, esperar=None) -> int:
         intervalo = FATURAMENTO_REPETIR_APOLLO if e and e["situacao"] == "aguardando_apollo" else FATURAMENTO_INTERVALO
         if e and (e["situacao"] == "feito" or agora - float(e["conferido_epoch"] or 0) < intervalo):
             continue
-        aguardando = (cadastro_auto_do_pedido(pedido) or {}).get("situacao") != "feito"
+        aguardando = (cadastro_auto_do_pedido(pedido) or {}).get("situacao") not in CADASTRO_AUTO_FEITOS
         if not aguardando:                      # só quem vai ao Apollo conta no teto
             if feitos >= FATURAMENTO_POR_RODADA or apollo_cheio:
                 continue
@@ -24982,7 +25580,7 @@ def full_cadastro_atualizar(order_id: str, nota: dict[str, Any], usuario: str = 
                      "ddd_celular": LINX_CADASTRO_DDD, "celular": EXP_CELULAR_PADRAO, "nome": nome, **fiscal}
             if endereco:
                 corpo["endereco"] = endereco
-            at = _exp_porta("cliente/atualizar", corpo, escrita=True)
+            at = _exp_porta_endereco("cliente/atualizar", corpo, avisos)
         except PortaErro as exc:
             return {"ok": False, "situacao": "erro", "error": str(exc)}
     if at.get("situacao") != "atualizado":
@@ -50431,6 +51029,24 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/expedicao-apollo/criar-atendimento":
+            # V20.47 (revisão): o acompanhamento do botão lê só o estado (banco), nunca o Apollo.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            pedido_q = str((query.get("pedido") or [""])[0] or "").strip()
+            filial = self.filial_da_requisicao(ctx)   # 2ª revisão: pedido de outra filial = 403, como no POST
+            if filial != FILIAL_TODAS:
+                with DB_LOCK:
+                    permitido = pedido_da_filial(pedido_q, filial)
+                if not permitido:
+                    self.send_json({"ok": False, "error": f"O pedido {pedido_q} é de outra filial.", "code": "OUTRA_FILIAL"}, 403)
+                    return
+            try:
+                self.send_json(mkt_atendimento_painel(pedido_q))
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/romaneio-pedido":
             # V19.87: romaneio do pedido aberto na Conferência (botão Reimprimir). Só lê.
             ctx = self.auth()
@@ -50937,7 +51553,8 @@ class AppHandler(BaseHTTPRequestHandler):
         if path in ("/api/expedicao-apollo/romaneio/soltar", "/api/expedicao-apollo/caixa/previa",
                     "/api/expedicao-apollo/caixa/enviar", "/api/expedicao-apollo/cadastro",
                     "/api/expedicao-apollo/valor/reservar", "/api/expedicao-apollo/valor/concluir",
-                    "/api/expedicao-apollo/valor/liberar", "/api/expedicao-apollo/tiktok-atendimento"):
+                    "/api/expedicao-apollo/valor/liberar", "/api/expedicao-apollo/tiktok-atendimento",
+                    "/api/expedicao-apollo/criar-atendimento"):
             ctx = self.auth(admin_only=True)
             if ctx is None:
                 return
@@ -50959,6 +51576,14 @@ class AppHandler(BaseHTTPRequestHandler):
                         return
                     try:
                         resultado = tiktok_atendimento_manual_iniciar(pedido, usuario)
+                    except ValueError as exc:
+                        resultado = {"ok": False, "error": str(exc)}
+                elif path.endswith("/criar-atendimento"):  # V20.47: cliente + atendimento de ML/Shopee pelo painel
+                    if self.pedido_de_outra_filial(ctx):
+                        return
+                    try:
+                        resultado = mkt_atendimento_iniciar(pedido, usuario, str(body.get("endereco_texto") or "")[:300],
+                                                            str(body.get("bairro") or "")[:80])
                     except ValueError as exc:
                         resultado = {"ok": False, "error": str(exc)}
                 elif path.endswith("/caixa/previa"):

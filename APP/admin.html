@@ -5128,9 +5128,9 @@ function pdCelulaClienteV1786(pedido,f){
 function pdCodClienteV1786(pedido,f){
   const cf=pdFiscalV1786(pedido);
   if(cf&&cf.linx_cliente)return `<span title="Cadastro atualizado no Linx em ${htmlSeguroBanco(String(cf.linx_atualizado_em||"").slice(0,16).replace("T"," "))}">✓ ${htmlSeguroBanco(cf.linx_cliente)}</span>`;
-  /* V19.41 — cadastro automático: aguardando o cliente cair no Apollo / não encontrado em 1 h. */
+  /* V19.41 — cadastro automático: aguardando o cliente cair no Apollo / não encontrado (V20.47: em 3 dias). */
   const auto=cf&&cf.cadastro_auto;
-  if(auto&&auto.situacao==="nao_encontrado")return `<span style="color:#B42318;font-weight:600" title="O cadastro automático tentou por 1 h e o cliente não apareceu no Apollo. Use o botão do pedido.">não encontrado no Apollo</span>`;
+  if(auto&&auto.situacao==="nao_encontrado")return `<span style="color:#B42318;font-weight:600" title="O cadastro automático tentou por 3 dias e o cliente não apareceu no Apollo. Use o botão do pedido.">não encontrado no Apollo</span>`;
   if(auto&&auto.situacao==="aguardando")return `<span style="color:#586A7D" title="Cadastro automático: ${htmlSeguroBanco(auto.detalhe||"")}">aguardando Apollo (${htmlSeguroBanco(auto.tentativas)}ª)</span>`;
   if(auto&&auto.situacao==="mais_de_um")return `<span style="color:#b45309;font-weight:600" title="Mais de um cliente com este CPF/CNPJ no Apollo.">vários no Apollo</span>`;
   /* V18.60 — consulta automática na Linx Smart API (só leitura): o cliente já existe lá? */

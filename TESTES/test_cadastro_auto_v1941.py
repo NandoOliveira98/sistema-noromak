@@ -48,7 +48,10 @@ class CadastroAuto(unittest.TestCase):
         self._rodar(porta, agora=time.time() + 3 * 3600)      # feito não repete
         self.assertEqual(porta.chamadas, [])
 
-    def test_nunca_cria_e_desiste_depois_de_1h(self):
+    def test_nunca_cria_e_espaca_as_tentativas_ate_3_dias(self):
+        # V20.47: 1 h era pouco (a maioria dos clientes cai no Apollo depois). Continua
+        # tentando enquanto o pedido está na fila: 10 min na 1ª hora, 30 min até 6 h,
+        # depois de hora em hora; desiste com 3 dias.
         S.cadastro_auto_ligar(True, "admin")
         _pedido()
         porta = PortaFalsa()
@@ -60,12 +63,68 @@ class CadastroAuto(unittest.TestCase):
         self._rodar(porta, agora=t0 + 610)                   # 10 min depois: tenta de novo
         self.assertEqual(porta.rotas().count("cliente/buscar"), 2)
         self.assertEqual(S.cadastro_auto_do_pedido(PEDIDO)["tentativas"], 2)
-        self._rodar(porta, agora=t0 + 3700)                  # passou 1 h: desiste
+        self._rodar(porta, agora=t0 + 3700)                  # passou 1 h: NÃO desiste
+        self.assertEqual(S.cadastro_auto_do_pedido(PEDIDO)["situacao"], "aguardando")
+        self.assertIn("Próxima tentativa", S.cadastro_auto_do_pedido(PEDIDO)["detalhe"])
+        self._rodar(porta, agora=t0 + 3700 + 1200)           # depois de 1 h: 30 min entre tentativas
+        self.assertEqual(porta.rotas().count("cliente/buscar"), 3)
+        self._rodar(porta, agora=t0 + 3700 + 1810)
+        self.assertEqual(porta.rotas().count("cliente/buscar"), 4)
+        self._rodar(porta, agora=t0 + 7 * 3600)              # depois de 6 h: de hora em hora
+        self._rodar(porta, agora=t0 + 7 * 3600 + 2400)
+        self.assertEqual(porta.rotas().count("cliente/buscar"), 5)
+        self._rodar(porta, agora=t0 + 3 * 86400 + 60)        # 3 dias: desiste
         self.assertEqual(S.cadastro_auto_do_pedido(PEDIDO)["situacao"], "nao_encontrado")
         self.assertNotIn("cliente/criar", porta.rotas())
         n = len(porta.chamadas)
-        self._rodar(porta, agora=t0 + 9000)
+        self._rodar(porta, agora=t0 + 3 * 86400 + 9000)
         self.assertEqual(len(porta.chamadas), n)
+
+    def test_tentativa_sem_cliente_nao_le_o_envio_no_ml(self):
+        # V20.47: a tentativa que não acha o cliente custa só a busca pelo CPF.
+        S.cadastro_auto_ligar(True, "admin")
+        _pedido()
+        porta = PortaFalsa()
+        porta.buscar = {"ok": True, "situacao": "nao_cadastrado"}
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True), \
+                mock.patch.object(S, "ml_api_get", return_value=ENVIO_ML) as ml:
+            S.cadastro_auto_rodada(agora=time.time())
+        self.assertEqual(porta.rotas(), ["cliente/buscar"])
+        ml.assert_not_called()
+
+    def test_achou_le_o_envio_e_busca_uma_vez_so(self):
+        S.cadastro_auto_ligar(True, "admin")
+        _pedido()
+        porta = PortaFalsa()
+        porta.buscar = {"ok": True, "situacao": "encontrado", "cliente": 83100}
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True), \
+                mock.patch.object(S, "ml_api_get", return_value=ENVIO_ML) as ml:
+            self.assertEqual(S.cadastro_auto_rodada(agora=time.time())["feito"], 1)
+        self.assertEqual(porta.rotas().count("cliente/buscar"), 1)
+        self.assertTrue(ml.called)
+        self.assertIn("endereco", next(c for r, c in porta.chamadas if r == "cliente/atualizar"))
+
+    def test_nao_encontrado_antigo_volta_a_ser_tentado(self):
+        # Os que a regra de 1 h já tinha dado como "não encontrado" voltam enquanto estão na fila.
+        S.cadastro_auto_ligar(True, "admin")
+        _pedido()
+        t0 = time.time()
+        S._cadastro_auto_registrar(PEDIDO, t0, t0, 7, "nao_encontrado", "Cliente ainda não está no Apollo.")
+        porta = PortaFalsa()
+        porta.buscar = {"ok": True, "situacao": "encontrado", "cliente": 83100}
+        self.assertEqual(self._rodar(porta, agora=t0 + 4 * 3600)["feito"], 1)
+        self.assertEqual(S.cadastro_auto_do_pedido(PEDIDO)["situacao"], "feito")
+
+    def test_faturamento_mostra_a_proxima_tentativa(self):
+        S.cadastro_auto_ligar(True, "admin")
+        _pedido()
+        porta = PortaFalsa()
+        porta.buscar = {"ok": True, "situacao": "nao_cadastrado"}
+        self._rodar(porta)
+        with mock.patch.object(S, "_exp_porta", side_effect=PortaFalsa()):
+            r = S.faturamento_conferir(PEDIDO, "Mercado Livre")
+        self.assertEqual(r["situacao"], "aguardando_cadastro")
+        self.assertIn("Próxima tentativa", r["motivo"])
 
     def test_cliente_cai_no_apollo_durante_a_hora(self):
         S.cadastro_auto_ligar(True, "admin")
@@ -102,7 +161,7 @@ class CadastroAuto(unittest.TestCase):
         _pedido(marketplace="SHOPEE")
         porta = PortaFalsa()
         with mock.patch.object(S, "shopee_order_details", return_value=[]):
-            self.assertEqual(self._rodar(porta)["feito"], 1)
+            self.assertEqual(self._rodar(porta)["feito"], 1)   # V20.47: conta como feito (sem endereço)
         reiniciar_banco()
         S.cadastro_auto_ligar(True, "admin")
         _pedido(marketplace="MAGALU")
@@ -128,6 +187,108 @@ class CadastroAuto(unittest.TestCase):
             d = S.exp_romaneio_preparar(PEDIDO)
         self.assertEqual(d["cadastro_auto"]["situacao"], "aguardando")
         self.assertEqual(S.lista_cliente_fiscal()["clientes"][PEDIDO]["cadastro_auto"]["situacao"], "aguardando")
+
+
+class RevisaoV2047(unittest.TestCase):
+    """revisar-antes-de-subir da V20.47 (10/11, "corrigir todos")."""
+
+    def setUp(self):
+        reiniciar_banco()
+        S.cadastro_auto_ligar(True, "admin")
+
+    def _rodar(self, porta, agora=None, ml=ENVIO_ML):
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True), \
+                mock.patch.object(S, "ml_api_get", return_value=ml):
+            return S.cadastro_auto_rodada(agora=agora)
+
+    def test_feito_pelo_botao_no_meio_da_rodada_nao_e_refeito_nem_desfeito(self):
+        # A rodada escolhe os candidatos no começo; o botão marca "feito" enquanto ela espera.
+        _pedido()
+        t0 = time.time()
+        velho = S._cadastro_auto_candidatos(S.cadastro_auto_config()["ligado_em"], t0)
+        S._cadastro_auto_registrar(PEDIDO, t0, t0, 0, "feito", "pelo botão (luis)", "83100")
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_cadastro_auto_candidatos", return_value=velho):
+            self._rodar(porta, agora=t0 + 30)
+        self.assertEqual(porta.chamadas, [])
+        self.assertEqual(S.cadastro_auto_do_pedido(PEDIDO)["situacao"], "feito")
+
+    def test_registro_da_rotina_nunca_troca_o_feito(self):
+        _pedido()
+        t0 = time.time()
+        S._cadastro_auto_registrar(PEDIDO, t0, t0, 0, "feito", "pelo botão (luis)", "83100")
+        S._cadastro_auto_registrar(PEDIDO, t0, t0 + 5, 3, "aguardando", "erro da porta", automatico=True)
+        self.assertEqual(S.cadastro_auto_do_pedido(PEDIDO)["situacao"], "feito")
+
+    def test_pedido_novo_passa_na_frente_dos_antigos(self):
+        t0 = time.time()
+        gravar_como_admin([linha(PEDIDO, "0893764272", Marketplace="MERCADO LIVRE", ShipmentIdMercadoLivre="48263508506"),
+                           linha("2000019000000002", "0893764272", Marketplace="MERCADO LIVRE",
+                                 ShipmentIdMercadoLivre="48263508507")])
+        S.salvar_cliente_fiscal(PEDIDO, "06278073994", "Fulano de Tal da Silva", fonte="extensao", usuario="t")
+        S.salvar_cliente_fiscal("2000019000000002", "11144477735", "Beltrano Souza", fonte="extensao", usuario="t")
+        # o 1º (mais antigo no banco) já está há 7 h tentando; o 2º acabou de chegar
+        S._cadastro_auto_registrar(PEDIDO, t0 - 7 * 3600, t0 - 2 * 3600, 9, "aguardando", "x", automatico=True)
+        porta = PortaFalsa()
+        porta.buscar = {"ok": True, "situacao": "nao_cadastrado"}
+        with mock.patch.object(S, "CADASTRO_AUTO_POR_RODADA", 1):
+            self._rodar(porta, agora=t0)
+        self.assertEqual(porta.corpo("cliente/buscar")["documento"], "11144477735")
+
+    def test_nao_encontrado_com_cliente_ja_guardado_nao_e_reaberto(self):
+        # Resolvido à mão (extensão antiga / Apollo): o código ficou guardado sem "feito".
+        _pedido()
+        t0 = time.time()
+        S._cadastro_auto_registrar(PEDIDO, t0, t0, 7, "nao_encontrado", "Cliente ainda não está no Apollo.")
+        S.salvar_cliente_fiscal(PEDIDO, "06278073994", "Fulano de Tal da Silva", linx_cliente="83100",
+                                fonte="extensao", usuario="luis")
+        porta = PortaFalsa()
+        self._rodar(porta, agora=t0 + 4 * 3600)
+        self.assertEqual(porta.chamadas, [])
+        self.assertEqual(S.cadastro_auto_do_pedido(PEDIDO)["situacao"], "nao_encontrado")
+
+    def test_apollo_no_limite_para_a_volta_e_nao_gasta_tentativa(self):
+        gravar_como_admin([linha(PEDIDO, "0893764272", Marketplace="MERCADO LIVRE", ShipmentIdMercadoLivre="48263508506"),
+                           linha("2000019000000002", "0893764272", Marketplace="MERCADO LIVRE",
+                                 ShipmentIdMercadoLivre="48263508507")])
+        S.salvar_cliente_fiscal(PEDIDO, "06278073994", "Fulano de Tal da Silva", fonte="extensao", usuario="t")
+        S.salvar_cliente_fiscal("2000019000000002", "11144477735", "Beltrano Souza", fonte="extensao", usuario="t")
+        chamadas = []
+
+        def porta(rota, corpo, escrita=False):
+            chamadas.append(rota)
+            raise S.PortaErro("Muitas chamadas ao Apollo", passageiro=True)
+
+        self._rodar(porta)
+        self.assertEqual(chamadas, ["cliente/buscar"])          # parou no 1º limite
+        self.assertIsNone(S.cadastro_auto_do_pedido(PEDIDO))
+        self.assertIsNone(S.cadastro_auto_do_pedido("2000019000000002"))
+
+    def test_sem_endereco_fica_feito_sem_endereco_e_o_faturamento_segue(self):
+        # Shopee: a API mascara o endereço; o painel da extensão continua oferecendo o cadastro
+        # (ela só pula com "feito") e o Faturamento não fica parado.
+        _pedido(marketplace="SHOPEE")
+        porta = PortaFalsa()
+        with mock.patch.object(S, "shopee_order_details", return_value=[]):
+            self.assertEqual(self._rodar(porta)["feito"], 1)
+        self.assertEqual(S.cadastro_auto_do_pedido(PEDIDO)["situacao"], "feito_sem_endereco")
+        self.assertNotIn("endereco", porta.corpo("cliente/atualizar"))
+        with mock.patch.object(S, "_exp_porta", side_effect=PortaFalsa()):
+            r = S.faturamento_conferir(PEDIDO, "Shopee")
+        self.assertNotEqual(r["situacao"], "aguardando_cadastro")
+        porta.chamadas.clear()
+        self._rodar(porta, agora=time.time() + 3 * 3600)        # não é tentado de novo
+        self.assertEqual(porta.chamadas, [])
+
+    def test_faturamento_nao_diz_cliente_fora_do_apollo_quando_o_erro_foi_da_porta(self):
+        _pedido()
+        t0 = time.time()
+        S._cadastro_auto_registrar(PEDIDO, t0, t0, 1, "aguardando", "Resposta inesperada da busca do cliente.",
+                                   automatico=True)
+        with mock.patch.object(S, "_exp_porta", side_effect=PortaFalsa()):
+            r = S.faturamento_conferir(PEDIDO, "Mercado Livre")
+        self.assertNotIn("cair no Apollo", r["motivo"])
+        self.assertIn("Resposta inesperada", r["motivo"])
 
 
 class BotaoMarcaFeito(unittest.TestCase):
