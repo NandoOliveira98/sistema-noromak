@@ -684,6 +684,20 @@ workers (inclusive os `except`) usam `ml_log_event_se_mudou` / `shopee_log_event
 (`_log_se_mudou`): só grava quando (resultado, detalhe) mudou para aquele recurso. O backup
 copia por lotes (`backup(pages=2000, sleep=0.05)`, também no `publicar.sh`): `ionice` só vale
 com CFQ/BFQ.
+**V20.48 — rotinas do ML sem trabalho repetido** (10/11: alerta de expedição travada; banco ocupado 45% em 18 h, telas com
+"Broken pipe"). Pelo `/api/saude/medicao`: vigia de etiquetas 2 h 56 min de banco e reconciliação 2 h 05 min. (1) A recuperação de
+pedidos presos rodava em toda volta do vigia (`round(120 / 300)` = 0 → 1 desde a V20.15) e reimportava os ~60 pedidos que só esperam
+etiqueta: agora `_ml_descoberta_devida` (por casa, `ML_DESCOBERTA_S` = 900 s) e `_ml_recover_local_pending_identifiers_once(automatica=True)`
+pula a linha com venda E envio fora do Full (é do vigia; o botão manual continua completo). (2) Reconciliação: venda já reconhecida sem
+envio (ou Full protegido) só a cada `ML_RECONC_COM_VENDA_S` (900 s, `_ML_RECONC_COM_VENDA` em memória); print/extensão sem venda segue a
+cada minuto. (3) Precificador: abrir relia todos os anúncios no ML (174 s); `_ml_precificador_live` guarda a lista + detalhes 15 min por
+casa (leitura com erro não fica; uma por vez); os vínculos gravados no banco valem na hora. Teste: `TESTES/test_ml_rotinas_leves_v2048.py`.
+**revisar-antes-de-subir (10/11):** a recuperação automática só pula quem o vigia acompanha (venda + envio + etiqueta ainda não
+VINCULADA): linha com o texto VINCULADA sem etiqueta válida (o ADMIN removeu) continua sendo revista. A lista do Precificador vem do
+`ml_todos_os_anuncios` (scan; a paginação por offset estourava em ~1000 e a leitura "falhava" sempre, sem nunca ser guardada); leitura
+parcial fica guardada com os erros, sem nenhum anúncio não fica; quem chega com outra leitura em andamento espera no máximo
+`ML_PRECIFICADOR_LIVE_ESPERA_S` (5 s) e recebe a última leitura (sem nenhuma, lê sozinho). A reconciliação só marca a vez com a volta
+completa (`_ml_reconc_marcar`) e a descoberta que falhou é tentada na volta seguinte. Teste: classe `RevisaoV2048`.
 **V20.04 — vigias leves (40% de CPU e banco ocupado 39,7%, 30/10):** os vigias de etiquetas e de pedidos novos
 remontavam a fila, decodificavam o `conf_etiquetas` e abriam o JSON de todos os concluídos a cada ciclo, por conta.
 `_ml_fila_leitura` e `_ml_etiquetas_validas` guardam a leitura pela versão das chaves (a fila também pela do tombstone),

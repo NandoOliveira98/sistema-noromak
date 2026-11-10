@@ -133,7 +133,7 @@ memoria_limitar_arenas()
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.47-CADASTRO"
+APP_VERSION = "20.48-ML-LEVE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -1195,15 +1195,77 @@ def _ml_precificador_persisted_links() -> dict[str, list[dict[str, Any]]]:
             merged[sku] = rows
     return _ml_merge_seed_links(merged)
 
+# V20.48: abrir o Precificador relia TODOS os anúncios no ML (174 s e 126 s em 10/11, a tela e o nginx desistiam).
+# A parte do ML (lista + detalhes) fica guardada ML_PRECIFICADOR_LIVE_S; os vínculos gravados no banco são lidos
+# a cada pedido (valem na hora). Revisão: lista pelo scan (sem o limite de offset), leitura parcial também fica (com os
+# erros), sem nenhum anúncio não fica; uma leitura por vez e quem chega espera no máximo ML_PRECIFICADOR_LIVE_ESPERA_S.
+ML_PRECIFICADOR_LIVE_S = 900
+ML_PRECIFICADOR_LIVE_ESPERA_S = 5   # revisão: quem chega com uma leitura em andamento não espera minutos
+_ML_PRECIFICADOR_LIVE: dict[Any, Any] = {}
+_ML_PRECIFICADOR_LIVE_LOCK = threading.Lock()
+
+
+def _ml_precificador_live_ler() -> tuple[str, list[str], dict[str, dict[str, Any]], list[str]]:
+    """Lê do ML: a lista é a do `ml_todos_os_anuncios` (scan com scroll_id, todos os status, sem o limite de ~1000 da
+    paginação por offset, que fazia a leitura sempre "falhar" em parte) e os detalhes pelo `ml_items_meta`."""
+    errors: list[str] = []
+    seller_id = ""
+    item_ids: list[str] = []
+    try:
+        _, seller_id = ml_access_token()
+        for raw_id in ml_todos_os_anuncios():
+            item_id = str(raw_id or "").strip().upper()
+            if item_id and not item_id.startswith("MLB"):
+                item_id = "MLB" + re.sub(r"\D+", "", item_id)
+            if item_id and item_id not in item_ids:
+                item_ids.append(item_id)
+    except Exception as exc:
+        errors.append("Mercado Livre indisponível para enriquecimento: " + str(exc)[:240])
+    digit_ids = [re.sub(r"\D+", "", item_id) for item_id in item_ids]
+    meta_map: dict[str, dict[str, Any]] = {}
+    for start in range(0, len(digit_ids), 100):
+        batch = digit_ids[start:start + 100]
+        try:
+            meta_map.update(ml_items_meta(batch))
+        except Exception as exc:
+            errors.append(f"meta {start}: {str(exc)[:240]}")
+    return str(seller_id), item_ids, meta_map, errors
+
+
+def _ml_precificador_live(max_items: int) -> tuple[str, list[str], dict[str, dict[str, Any]], list[str]]:
+    casa = ml_casa_atual()
+
+    def devolver(g: dict[str, Any]) -> tuple[str, list[str], dict[str, dict[str, Any]], list[str]]:
+        return g["seller"], list(g["ids"])[:max_items], dict(g["meta"]), list(g["erros"])
+
+    guardado = _ML_PRECIFICADOR_LIVE.get(casa)
+    if guardado and time.time() - guardado["em"] < ML_PRECIFICADOR_LIVE_S:
+        return devolver(guardado)
+    if not _ML_PRECIFICADOR_LIVE_LOCK.acquire(timeout=ML_PRECIFICADOR_LIVE_ESPERA_S):
+        # outra tela está lendo: a última leitura (mesmo vencida) ou lê sozinho, como antes da V20.48
+        guardado = _ML_PRECIFICADOR_LIVE.get(casa)
+        if guardado:
+            return devolver(guardado)
+        seller_id, item_ids, meta_map, errors = _ml_precificador_live_ler()
+        return seller_id, item_ids[:max_items], meta_map, errors
+    try:
+        guardado = _ML_PRECIFICADOR_LIVE.get(casa)   # quem segurava a trava pode ter acabado de ler
+        if guardado and time.time() - guardado["em"] < ML_PRECIFICADOR_LIVE_S:
+            return devolver(guardado)
+        seller_id, item_ids, meta_map, errors = _ml_precificador_live_ler()
+        if item_ids:   # parcial também vale (com os erros junto); sem nenhum anúncio não guarda
+            _ML_PRECIFICADOR_LIVE[casa] = {"em": time.time(), "seller": seller_id, "ids": list(item_ids),
+                                           "meta": dict(meta_map), "erros": list(errors)}
+        return seller_id, item_ids[:max_items], meta_map, errors
+    finally:
+        _ML_PRECIFICADOR_LIVE_LOCK.release()
+
+
 def ml_precificador_links_payload(max_items: int = 5000) -> dict[str, Any]:
     """Monta SKU -> MLB pela base canônica e enriquece com a API do ML."""
     max_items = max(1, min(10000, int(max_items or 5000)))
     links = _ml_precificador_persisted_links()
-    item_ids: list[str] = []
-    seen_ids: set[str] = set()
     errors: list[str] = []
-    seller_id = ""
-    live_available = True
 
     persisted_by_mlb: dict[str, list[dict[str, Any]]] = {}
     for sku, rows in links.items():
@@ -1214,54 +1276,8 @@ def ml_precificador_links_payload(max_items: int = 5000) -> dict[str, Any]:
             if mlb:
                 persisted_by_mlb.setdefault(mlb, []).append(obj)
 
-    try:
-        _, seller_id = ml_access_token()
-    except Exception as exc:
-        live_available = False
-        errors.append("Mercado Livre indisponível para enriquecimento: " + str(exc)[:240])
-
-    if live_available:
-        for status in ("active", "paused", "closed"):
-            offset = 0
-            while len(item_ids) < max_items:
-                limit = min(100, max_items - len(item_ids))
-                path = (
-                    f"/users/{quote(str(seller_id))}/items/search"
-                    f"?status={quote(status)}&offset={offset}&limit={limit}"
-                )
-                try:
-                    payload = ml_api_get(path)
-                except Exception as exc:
-                    errors.append(f"{status}: {str(exc)[:240]}")
-                    break
-                results = payload.get("results") if isinstance(payload, dict) else []
-                if not isinstance(results, list) or not results:
-                    break
-                for raw_id in results:
-                    item_id = str(raw_id or "").strip().upper()
-                    if not item_id:
-                        continue
-                    if not item_id.startswith("MLB"):
-                        item_id = "MLB" + re.sub(r"\D+", "", item_id)
-                    if item_id and item_id not in seen_ids:
-                        seen_ids.add(item_id)
-                        item_ids.append(item_id)
-                        if len(item_ids) >= max_items:
-                            break
-                paging = payload.get("paging") if isinstance(payload, dict) else {}
-                total = int((paging or {}).get("total") or 0)
-                offset += len(results)
-                if not results or (total and offset >= total):
-                    break
-
-    digit_ids = [re.sub(r"\D+", "", item_id) for item_id in item_ids]
-    meta_map: dict[str, dict[str, Any]] = {}
-    for start in range(0, len(digit_ids), 100):
-        batch = digit_ids[start:start + 100]
-        try:
-            meta_map.update(ml_items_meta(batch))
-        except Exception as exc:
-            errors.append(f"meta {start}: {str(exc)[:240]}")
+    seller_id, item_ids, meta_map, erros_ml = _ml_precificador_live(max_items)   # V20.48: guardada 15 min
+    errors.extend(erros_ml)
 
     precifier = _promo_precifier_index()
     precifier_by_compact: dict[str, str] = {}
@@ -18108,7 +18124,24 @@ def _ml_bind_manual_pending_rows(
             bound += 1
     return bound
 
-def _ml_manual_pending_numbers() -> set[str]:
+# V20.48: pedido cuja venda a API já reconheceu, mas sem envio ainda (ou Full protegido), é revisto a cada
+# ML_RECONC_COM_VENDA_S — não a cada 60 s (5 pedidos reimportados por minuto em 10/11, 2 h 05 min de banco em 18 h).
+# Pedido de print/extensão (sem a venda) continua a cada minuto. Memória do processo: reiniciar só revê antes.
+ML_RECONC_COM_VENDA_S = 900
+_ML_RECONC_COM_VENDA: dict[tuple[str, str], float] = {}
+
+
+def _ml_reconc_marcar(vezes: list[tuple[str, str]], agora: float | None = None) -> None:
+    """V20.48 (revisão): marca a revisão só depois de a volta da reconciliação dar certo (token + busca)."""
+    agora = float(agora if agora is not None else time.time())
+    for vez in vezes:
+        _ML_RECONC_COM_VENDA[vez] = agora
+
+
+def _ml_manual_pending_numbers(agora: float | None = None, vezes: list[tuple[str, str]] | None = None) -> set[str]:
+    """`vezes` recebe as (casa, venda) escolhidas agora; quem chama marca com `_ml_reconc_marcar` se der certo.
+    Sem `vezes`, marca na hora (uso direto)."""
+    agora = float(agora if agora is not None else time.time())
     linked = _ml_linked_order_ids()
     result: set[str] = set()
     casa = ml_casa_atual()
@@ -18133,6 +18166,15 @@ def _ml_manual_pending_numbers() -> set[str]:
         if (sale_id and str(row.get("ShipmentIdMercadoLivre") or "").strip()
                 and str(row.get("LogisticaMercadoLivre") or "").strip().lower() != "fulfillment"):
             continue
+        if sale_id:   # V20.48
+            vez = (casa, sale_id)
+            ultima = _ML_RECONC_COM_VENDA.get(vez)
+            if ultima is not None and agora - ultima < ML_RECONC_COM_VENDA_S:
+                continue
+            if vezes is None:
+                _ML_RECONC_COM_VENDA[vez] = agora
+            else:
+                vezes.append(vez)
         for raw_id in (order_number(row), sale_id, row.get("PackIdMercadoLivre")):
             digits = re.sub(r"\D+", "", str(raw_id or ""))
             if digits:
@@ -18144,7 +18186,8 @@ def ml_reconcile_manual_orders_once() -> dict[str, int]:
     if not ML_MANUAL_RECONCILE_LOCK.acquire(blocking=False):
         return {"manual": 0, "matched": 0, "ready": 0, "errors": 0}
     try:
-        manual_numbers = _ml_manual_pending_numbers()
+        vezes: list[tuple[str, str]] = []
+        manual_numbers = _ml_manual_pending_numbers(vezes=vezes)
         if not manual_numbers:
             return {"manual": 0, "matched": 0, "ready": 0, "errors": 0}
 
@@ -18212,6 +18255,7 @@ def ml_reconcile_manual_orders_once() -> dict[str, int]:
             if not remaining or stop_by_date or len(orders) < ML_CATCHUP_PAGE_SIZE:
                 break
 
+        _ml_reconc_marcar(vezes)   # V20.48 (revisão): só com a volta completa (falha = tenta no minuto seguinte)
         return {"manual": len(manual_numbers), "matched": matched, "ready": ready, "errors": errors}
     finally:
         ML_MANUAL_RECONCILE_LOCK.release()
@@ -19260,8 +19304,11 @@ def _ml_recover_one_identifier(identifier: str, *, source: str) -> dict[str, Any
     return out
 
 
-def _ml_recover_local_pending_identifiers_once(*, max_identifiers: int = 80) -> dict[str, Any]:
-    """Recupera pedidos locais presos por IDs salvos em campos errados ou migração de API."""
+def _ml_recover_local_pending_identifiers_once(*, max_identifiers: int = 80, automatica: bool = False) -> dict[str, Any]:
+    """Recupera pedidos locais presos por IDs salvos em campos errados ou migração de API.
+    V20.48: `automatica` (o vigia de etiquetas) pula a linha que a API já reconheceu (venda E envio, fora do Full):
+    quem acompanha a etiqueta dela é o próprio vigia. Antes os ~60 pedidos que só esperavam etiqueta eram
+    reimportados a cada volta (2 h 56 min de banco ocupado em 18 h, 10/11). O botão manual continua completo."""
     linked = _ml_linked_order_ids()
     completed = _ml_completed_order_ids()
     identifiers: list[str] = []
@@ -19277,6 +19324,12 @@ def _ml_recover_local_pending_identifiers_once(*, max_identifiers: int = 80) -> 
             continue
         oid = str(row.get("VendaMercadoLivre") or "").strip()
         if oid and (oid in linked or oid in completed):
+            continue
+        if (automatica and oid and str(row.get("ShipmentIdMercadoLivre") or "").strip()
+                and str(row.get("LogisticaMercadoLivre") or "").strip().lower() != "fulfillment"
+                and str(row.get("Etiqueta API Mercado Livre") or "").strip().upper() != "VINCULADA"):
+            # V20.48: é do vigia de etiquetas. Revisão: a linha com o texto VINCULADA que chegou aqui (não está entre as
+            # etiquetas válidas: o ADMIN removeu a etiqueta) o vigia pula — a recuperação continua sendo quem a revê.
             continue
         sid = re.sub(r"\D+", "", str(row.get("ShipmentIdMercadoLivre") or ""))
         if sid and sid not in shipment_ids:
@@ -19491,7 +19544,6 @@ def ml_pending_label_watch_loop(stop_event: threading.Event) -> None:
     (ou que perdeu webhook) volta a ser sincronizado quando a etiqueta surgir.
     """
     cycles = 0
-    discovery_every = max(1, int(round(120 / max(1, ML_PENDING_WATCH_INTERVAL))))
     while not stop_event.wait(ML_PENDING_WATCH_INTERVAL):
         casas = ml_casas_conectadas()
         if not casas:
@@ -19500,18 +19552,34 @@ def ml_pending_label_watch_loop(stop_event: threading.Event) -> None:
         # V18.94: cada casa revê as etiquetas dos pedidos DELA, com a conta dela.
         for casa in casas:
             with ml_na_casa(casa):
-                _ml_pending_label_watch_ciclo(cycles % discovery_every == 0)
+                _ml_pending_label_watch_ciclo(True)   # V20.48: o relógio da casa decide (15 min)
+
+
+# V20.48: a descoberta (recuperação de presos + varredura de pedidos pagos) roda a cada ML_DESCOBERTA_S por casa.
+# Era `cycles % round(120 / intervalo)`: com o intervalo de 300 s da V20.15 a conta dava 1 e rodava em toda volta.
+ML_DESCOBERTA_S = 900
+_ML_DESCOBERTA_ULTIMA: dict[str, float] = {}
+
+
+def _ml_descoberta_devida(casa: str, agora: float | None = None) -> bool:
+    agora = float(agora if agora is not None else time.time())
+    ultima = _ML_DESCOBERTA_ULTIMA.get(casa)
+    if ultima is not None and agora - ultima < ML_DESCOBERTA_S:
+        return False
+    _ML_DESCOBERTA_ULTIMA[casa] = agora
+    return True
 
 
 def _ml_pending_label_watch_ciclo(descobrir: bool) -> None:
-    """Um ciclo do vigia de etiquetas na casa atual (V18.94: era o corpo do laço)."""
+    """Um ciclo do vigia de etiquetas na casa atual (V18.94: era o corpo do laço).
+    V20.48: `descobrir` só pede; quem decide é o relógio da casa (`_ml_descoberta_devida`)."""
     try:
         ml_pending_label_watch_once()
-        if descobrir:
+        if descobrir and _ml_descoberta_devida(ml_casa_atual()):
             try:
                 # Varredura automática curta: até 3 dias / 4 páginas (200 pedidos).
                 # A verificação manual continua usando a janela completa configurada.
-                recovery = _ml_recover_local_pending_identifiers_once(max_identifiers=30)
+                recovery = _ml_recover_local_pending_identifiers_once(max_identifiers=30, automatica=True)
                 if recovery.get("ready"):
                     ml_log_event("shipment_watcher", "/local-recovery", "", ML_CLIENT_ID,
                                  "PEDIDOS PRESOS RECUPERADOS", json_dumps(recovery))
@@ -19520,6 +19588,7 @@ def _ml_pending_label_watch_ciclo(descobrir: bool) -> None:
                     ml_log_event("shipment_watcher", "/orders/search", "", ML_CLIENT_ID,
                                  "ETIQUETAS RECUPERADAS", json_dumps(result))
             except Exception as discovery_exc:
+                _ML_DESCOBERTA_ULTIMA.pop(ml_casa_atual(), None)   # V20.48 (revisão): falhou = tenta na volta seguinte
                 ml_log_event("shipment_watcher", "/orders/search", "", ML_CLIENT_ID,
                              "ERRO DESCOBERTA", str(discovery_exc)[:1200])
     except Exception as exc:
