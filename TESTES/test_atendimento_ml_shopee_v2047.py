@@ -9,6 +9,7 @@ aberto do cliente com as peças do pedido (a integração pode ter trazido a ven
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 import unittest
 from unittest import mock
 
@@ -75,11 +76,12 @@ class Porta:
         return next(c for r, c in self.chamadas if r == rota)
 
 
-def _venda(pedido, sku, qtd, valor, line="1"):
+def _venda(pedido, sku, qtd, valor, line="1", horas=3.0):
+    venda_em = datetime.fromtimestamp(time.time() - horas * 3600, timezone.utc).isoformat()
     with S.DB_LOCK:
         S.DB.execute("INSERT INTO vendas_v1799(marketplace,order_id,line_key,sale_at,sale_day,sku,qty,amount,status,updated_at) "
-                     "VALUES('ml',?,?,'2026-11-10T10:00:00','2026-11-10',?,?,?,'paid','2026-11-10T10:00:00')",
-                     (pedido, line, sku, qtd, valor))
+                     "VALUES('ml',?,?,?,'2026-11-10',?,?,?,'paid','2026-11-10T10:00:00')",
+                     (pedido, line, venda_em, sku, qtd, valor))
         S.DB.commit()
 
 
@@ -94,7 +96,7 @@ class Base(unittest.TestCase):
         inicio = time.time() - horas * 3600
         S._cadastro_auto_registrar(PEDIDO, inicio, time.time() - 600, 5, "aguardando",
                                    "Cliente ainda não está no Apollo.", automatico=True)
-        _venda(PEDIDO, sku, qtd, valor)
+        _venda(PEDIDO, sku, qtd, valor, horas=horas)
 
     def criar(self, porta, custos=None, **kw):
         custos = custos or {}
@@ -120,10 +122,64 @@ class QuandoAparece(Base):
         self.pedido(horas=3)
         self.assertTrue(S.mkt_atendimento_estado(PEDIDO)["disponivel"])
 
-    def test_cadastro_feito_nao_aparece(self):
-        self.pedido(horas=3)
+    def test_cliente_criado_pelo_noromak_aparece_na_hora(self):
+        # V20.49 (dono, 10/11, pedido 2000015964547311): o painel CRIOU o cliente (ele não existia no Apollo, então a
+        # integração ainda não trouxe a venda) — o botão aparece na hora, só sem atendimento aberto com as peças.
+        self.pedido(horas=0.2)
+        S._cadastro_auto_registrar(PEDIDO, time.time(), time.time(), 0, "feito", "pelo botão", "83070", cliente_criado=True)
+        e = S.mkt_atendimento_estado(PEDIDO)
+        self.assertTrue(e["disponivel"])
+        self.assertEqual(e["acao"], "criar")
+        self.assertTrue(e["requer_sem_atendimento"])
+
+    def test_cliente_que_ja_existia_espera_2h_da_venda(self):
+        # o cliente já estava no Apollo (compra anterior): a venda nova cai pela integração — espera 2 h da venda.
+        self.pedido(horas=0.2)
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE vendas_v1799 SET sale_at=? WHERE order_id=?",
+                         (datetime.fromtimestamp(time.time() - 600, timezone.utc).isoformat(), PEDIDO))
+            S.DB.commit()
         S._cadastro_auto_registrar(PEDIDO, time.time(), time.time(), 0, "feito", "pelo botão", "83070")
-        self.assertFalse(S.mkt_atendimento_estado(PEDIDO)["disponivel"])
+        e = S.mkt_atendimento_estado(PEDIDO)
+        self.assertFalse(e["disponivel"], "REGRESSÃO: botão na hora para toda venda com cliente antigo")
+        self.assertIn("aparece às", e["motivo"])
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE vendas_v1799 SET sale_at=? WHERE order_id=?",
+                         (datetime.fromtimestamp(time.time() - 3 * 3600, timezone.utc).isoformat(), PEDIDO))
+            S.DB.commit()
+        e = S.mkt_atendimento_estado(PEDIDO)
+        self.assertTrue(e["disponivel"])
+        self.assertTrue(e["requer_sem_atendimento"])
+
+    def test_marca_continua_depois_de_um_clique_sem_sucesso(self):
+        self.pedido(horas=0.2)
+        S._cadastro_auto_registrar(PEDIDO, time.time(), time.time(), 0, "feito", "pelo botão", "83070", cliente_criado=True)
+        S._mkt_atend_gravar(PEDIDO, situacao="revisar", detalhe="A venda ainda não foi copiada")
+        e = S.mkt_atendimento_estado(PEDIDO)
+        self.assertTrue(e["disponivel"])
+        self.assertTrue(e["requer_sem_atendimento"], "REGRESSÃO: a marca sumiu e o botão voltaria com o atendimento na tela")
+
+    def test_romaneio_ja_solto_no_apollo_nao_cria(self):
+        self.pedido(horas=3)
+        S.salvar_cliente_fiscal(PEDIDO, CPF, NOME, linx_cliente="83070", fonte="porta", usuario="t")
+        S._cadastro_auto_registrar(PEDIDO, time.time(), time.time(), 0, "feito", "pelo botão", "83070")
+        porta = Porta(buscar="encontrado",
+                      abertos=[{"atendimento": 790001, "cliente": NOME.upper(), "valor": 25.9, "aberto_em": "2026-11-10"}],
+                      previa_itens=[{"codigo": "0893764272", "descricao": "LIMPA AR", "requisitada": 1.0, "a_soltar": 0.0}])
+        self.criar(porta)
+        self.assertNotIn("atendimento/criar", porta.rotas())
+        self.assertEqual(self.estado()["situacao"], "ja_tinha")
+
+    def test_cliente_ja_cadastrado_com_atendimento_da_integracao_nao_cria(self):
+        self.pedido(horas=0.2)
+        S._cadastro_auto_registrar(PEDIDO, time.time(), time.time(), 0, "feito", "pelo botão", "83070", cliente_criado=True)
+        S.salvar_cliente_fiscal(PEDIDO, CPF, NOME, linx_cliente="83070", fonte="porta", usuario="t")
+        porta = Porta(buscar="encontrado",
+                      abertos=[{"atendimento": 790001, "cliente": NOME.upper(), "valor": 25.9, "aberto_em": "2026-11-10"}],
+                      previa_itens=[{"codigo": "0893764272", "descricao": "LIMPA AR", "requisitada": 1.0, "a_soltar": 1.0}])
+        self.criar(porta)
+        self.assertNotIn("atendimento/criar", porta.rotas())
+        self.assertEqual(self.estado()["situacao"], "ja_tinha")
 
     def test_magalu_e_tiktok_ficam_de_fora(self):
         self.pedido(marketplace="MAGALU", horas=3)
@@ -293,14 +349,16 @@ class RevisaoBotao(Base):
         self.assertTrue(r["ok"], r)
         self.assertIn("atendimento/criar", porta.rotas())
 
-    def test_atendimento_sem_nada_a_soltar_nao_conta(self):
+    def test_atendimento_com_romaneio_ja_solto_conta_como_ja_existente(self):
+        # V20.49: atendimento com as peças e o romaneio já solto no Apollo (fora do painel) = a venda já tem
+        # atendimento — não cria outro (o lado seguro: duplicar compromete o estoque em dobro).
         self.pedido()
         porta = Porta(buscar="encontrado",
                       abertos=[{"atendimento": 790001, "cliente": NOME.upper(), "valor": 25.9, "aberto_em": "2026-11-10"}],
                       previa_itens=[{"codigo": "0893764272", "descricao": "LIMPA AR", "requisitada": 1.0, "a_soltar": 0.0}])
-        r = self.criar(porta)
-        self.assertTrue(r["ok"], r)
-        self.assertIn("atendimento/criar", porta.rotas())
+        self.criar(porta)
+        self.assertNotIn("atendimento/criar", porta.rotas())
+        self.assertEqual(self.estado()["situacao"], "ja_tinha")
 
     def test_admin_muda_a_fila_durante_o_cadastro(self):
         self.pedido()

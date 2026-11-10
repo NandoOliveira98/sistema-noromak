@@ -1931,6 +1931,15 @@ vai por `_exp_limpo`. Teste: classe `RevisaoBotao`.
 preço da peça do kit muda com o custo de Araçatuba); "criado" já grava `comprometido='comprometendo'` (o acompanhamento não para antes do
 comprometer); o Faturamento põe em atenção o ML criado pelo botão até a condição ser acertada (`_mkt_faturamento_barreira`: o lote não o
 manda ao caixa); o GET do estado recusa pedido de outra filial (403 `OUTRA_FILIAL`). Teste: classe `Revisao2Botao`.
+**V20.49 — botão com o cliente já cadastrado** (dono, 10/11, pedido 2000015964547311: o "Atualizar cadastro" do painel criou o
+cliente e o botão sumiu, "o cliente já está no Apollo"). Decisão (revisão): **cliente CRIADO pelo Noromak** (`cadastro_auto_v1941.cliente_criado`,
+gravado pelo botão quando o `cliente/criar` criou: ele não existia, então a integração ainda não trouxe a venda) = botão **na hora**; cliente que
+**já existia** = espera de **2 h desde a venda** (`_mkt_atend_desde` lê o `sale_at` das vendas copiadas; o "Atualizar cadastro" regravava o
+início do cadastro com a hora do clique). Com o cliente no Apollo vai `requer_sem_atendimento` (vale até o criar sair, `enviado_em`): a
+extensão Linx Cliente **0.55** só mostra o botão na etapa do romaneio quando nenhum atendimento aberto cobre as peças e o painel leu o Apollo
+(sem erro, ocupado ou `romaneio_fora`). No clique, `romaneio_fora` (romaneio solto direto no Apollo) conta como atendimento existente
+(`ja_tinha`). Limite que já existia: o painel olha só os 4 primeiros atendimentos abertos (`EXP_MAX_ATENDIMENTOS`). Teste: `QuandoAparece` em
+`TESTES/test_atendimento_ml_shopee_v2047.py`.
 **Cidade do CEP** (pedido 2000019436248196): o Apollo recusa "O CEP é de CRISTALINA, não de CAMPOS LINDOS" (o ML manda o distrito);
 `_exp_porta_endereco` tenta uma vez de novo com a cidade que o Apollo indica (criar e atualizar, também no Full) e avisa a troca.
 

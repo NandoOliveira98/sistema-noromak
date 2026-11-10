@@ -133,7 +133,7 @@ memoria_limitar_arenas()
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.48-ML-LEVE"
+APP_VERSION = "20.49-ATENDIMENTO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -12316,7 +12316,24 @@ def _mkt_linhas_na_fila(pedido: str, leve: bool = False) -> list[dict[str, Any]]
 
 
 def _mkt_atend_desde(pedido: str) -> float | None:
-    """Desde quando o cadastro automático procura o cliente: o início dele, senão a chegada do nome/CPF."""
+    """Desde quando contar as 2 h. V20.49: a hora da VENDA (vendas copiadas); sem ela, o início do cadastro automático,
+    senão a chegada do nome/CPF. (O "Atualizar cadastro" do painel regrava o início do cadastro com a hora do clique.)"""
+    chave = str(pedido or "").strip()
+    menor: float | None = None
+    with DB_LOCK:
+        for tabela in ("vendas_v1799", "vendas_conta_v1898"):
+            try:
+                rows = DB.execute(f"SELECT sale_at FROM {tabela} WHERE order_id=? OR pack_id=?", (chave, chave)).fetchall()
+            except sqlite3.OperationalError:
+                continue
+            for r in rows:
+                try:
+                    t = datetime.fromisoformat(str(r["sale_at"]).replace("Z", "+00:00")).timestamp()
+                except (TypeError, ValueError):
+                    continue
+                menor = t if menor is None else min(menor, t)
+    if menor is not None:
+        return menor
     auto = cadastro_auto_do_pedido(pedido) or {}
     if float(auto.get("inicio_epoch") or 0) > 0:
         return float(auto["inicio_epoch"])
@@ -12362,15 +12379,23 @@ def mkt_atendimento_estado(pedido: str, agora: float | None = None) -> dict[str,
     conhecido = _exp_cliente_do_pedido(pedido)
     if not conhecido["documento"] or not conhecido["nome_fiscal"]:
         return {**saida, "motivo": "sem nome/CPF da nota"}
-    if not situacao:  # o botão ainda não foi usado: só depois de o automático procurar por 2 h
-        if (cadastro_auto_do_pedido(pedido) or {}).get("situacao") in CADASTRO_AUTO_FEITOS:
-            return {**saida, "motivo": "o cliente já está no Apollo (o atendimento vem da integração)"}
+    auto = cadastro_auto_do_pedido(pedido) or {}
+    cliente_existe = auto.get("situacao") in CADASTRO_AUTO_FEITOS
+    # V20.49: com o cliente no Apollo, o botão só aparece sem atendimento aberto com as peças (a extensão confere no
+    # painel) — enquanto o criar não saiu. Antes a marca sumia depois de um clique que parou em "revisar"/"erro".
+    requer = bool(cliente_existe and not atual.get("enviado_em"))
+    if not situacao:
+        if cliente_existe and int(auto.get("cliente_criado") or 0):
+            # V20.49 (dono, 10/11, pedido 2000015964547311): o Noromak CRIOU o cliente (não existia no Apollo) — a
+            # integração ainda não trouxe a venda: na hora.
+            return {**saida, "disponivel": True, "acao": "criar", "marketplace": mp, "requer_sem_atendimento": True}
+        # cliente que já existia (ou ainda não achado): 2 h desde a venda, para a integração trazer o atendimento
         desde = _mkt_atend_desde(pedido)
         if desde is None or agora - desde < MKT_ATEND_APOS_S:
             libera = _cadastro_auto_hora((desde or agora) + MKT_ATEND_APOS_S)
             return {**saida, "motivo": f"o botão aparece às {libera}, se o cliente ainda não estiver no Apollo",
                     "libera_epoch": (desde or agora) + MKT_ATEND_APOS_S}
-    return {**saida, "disponivel": True, "acao": "criar", "marketplace": mp}
+    return {**saida, "disponivel": True, "acao": "criar", "marketplace": mp, "requer_sem_atendimento": requer}
 
 
 def _mkt_condicao_pendente(pedido: str) -> str:
@@ -12461,6 +12486,8 @@ def _mkt_atend_ja_tem(pedido: str, esperado: float, marketplace: str = "") -> tu
     d = exp_romaneio_preparar(pedido)
     if not d.get("ok") or d.get("situacao") in ("erro", "cliente", "informar_atendimento"):
         return "", str(d.get("aviso") or d.get("error") or "o Apollo não listou os atendimentos")
+    if d.get("romaneio_fora"):   # V20.49: romaneio solto direto no Apollo/Linx: o atendimento desta venda existe
+        return re.sub(r"\D", "", str(d.get("romaneio_fora") or "")), ""
     ligados = _mkt_atend_ligados(pedido)
     for c in d.get("candidatos") or []:
         numero = re.sub(r"\D", "", str(c.get("atendimento") or ""))
@@ -22484,7 +22511,8 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
     # a rotina automática não refaz o mesmo pedido.
     if usuario != "automatico":
         agora = time.time()
-        _cadastro_auto_registrar(pedido, agora, agora, 0, "feito", "pelo botão (" + usuario[:40] + ")", codigo)
+        _cadastro_auto_registrar(pedido, agora, agora, 0, "feito", "pelo botão (" + usuario[:40] + ")", codigo,
+                                 cliente_criado=criado)   # V20.49
     audit(usuario, "expedicao.cadastro", f"{pedido}|{codigo}|{'criado' if criado else 'atualizado'}|{cr.get('situacao')}")
     return {"ok": True, "situacao": "criado" if criado else "atualizado", "cliente": codigo,
             "nome": nome_limpo, "endereco": endereco, "cidade_apollo": at.get("cidade"),
@@ -22536,6 +22564,10 @@ def ensure_cadastro_auto_schema() -> None:
                    atualizado_em TEXT NOT NULL DEFAULT ''
                )"""
         )
+        # V20.49: o cliente foi CRIADO pelo Noromak (não existia no Apollo = a integração ainda não trouxe a venda)
+        colunas = {r["name"] for r in DB.execute("PRAGMA table_info(cadastro_auto_v1941)")}
+        if "cliente_criado" not in colunas:
+            DB.execute("ALTER TABLE cadastro_auto_v1941 ADD COLUMN cliente_criado INTEGER NOT NULL DEFAULT 0")
         DB.execute(
             """CREATE TABLE IF NOT EXISTS cadastro_auto_config_v1941 (
                    id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -22576,19 +22608,23 @@ def cadastro_auto_do_pedido(pedido: str) -> dict[str, Any] | None:
 
 
 def _cadastro_auto_registrar(pedido: str, inicio: float, agora: float, tentativas: int, situacao: str,
-                             detalhe: str, cliente: str = "", automatico: bool = False) -> None:
+                             detalhe: str, cliente: str = "", automatico: bool = False,
+                             cliente_criado: bool = False) -> None:
     # V20.47 (revisão): a rotina nunca troca um cadastro já feito (o botão pode ter feito
     # enquanto ela esperava a vez); o botão (automatico=False) sempre grava.
     trava = (" WHERE cadastro_auto_v1941.situacao NOT IN ('feito','feito_sem_endereco')" if automatico else "")
     with DB_LOCK:
         DB.execute(
-            """INSERT INTO cadastro_auto_v1941(order_key,pedido,inicio_epoch,ultima_epoch,tentativas,situacao,detalhe,cliente,atualizado_em)
-               VALUES(?,?,?,?,?,?,?,?,?)
+            """INSERT INTO cadastro_auto_v1941(order_key,pedido,inicio_epoch,ultima_epoch,tentativas,situacao,detalhe,cliente,
+                   atualizado_em,cliente_criado)
+               VALUES(?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(order_key) DO UPDATE SET ultima_epoch=excluded.ultima_epoch, tentativas=excluded.tentativas,
                    situacao=excluded.situacao, detalhe=excluded.detalhe,
                    cliente=CASE WHEN excluded.cliente<>'' THEN excluded.cliente ELSE cadastro_auto_v1941.cliente END,
+                   cliente_criado=MAX(cadastro_auto_v1941.cliente_criado, excluded.cliente_criado),
                    atualizado_em=excluded.atualizado_em""" + trava,
-            (normalize(pedido), pedido, inicio, agora, tentativas, situacao, str(detalhe or "")[:400], cliente, now_iso()),
+            (normalize(pedido), pedido, inicio, agora, tentativas, situacao, str(detalhe or "")[:400], cliente, now_iso(),
+             1 if cliente_criado else 0),
         )
         DB.commit()
 
