@@ -739,17 +739,47 @@ class MagaluEstoque(EstoqueBase):
         self.assertTrue(r["ok"], r)
         self.assertEqual(self.mg.escritas("/stocks/"), [], "mesmo número: nada enviado")
 
+    MSG_409 = "Stock cannot be saved because it already exists for the sku {sku}."
+
     def test_v2055_409_ja_existe_e_gravacao_em_andamento(self):
         self.inserir_magalu()
         self.mg.estoque["P1"] = 5
         S._MAGALU_ESTOQUE_SEM_MOSTRAR.clear()
-        msg = "Stock cannot be saved because it already exists for the sku {sku}."
-        self.mg.estoque_erro = S.MagaluRecusou("Magalu HTTP 409: " + msg, msg, 409)
+        self.mg.nao_muda.add("P1")
+        r = S.anuncio_estoque_manual("magalu", "P1", 8, "luis")   # 202 aceito, ainda não mostrado
+        self.assertEqual(r["resultado"], "ignorado")
+        self.mg.estoque_erro = S.MagaluRecusou("Magalu HTTP 409: " + self.MSG_409, self.MSG_409, 409)
         r = S.anuncio_estoque_manual("magalu", "P1", 8, "luis")
         self.assertEqual((r["ok"], r["resultado"]), (False, "ignorado"), "409 'já existe' = a Magalu ainda processa")
+        self.assertIn("409", r["erro"], "o registro diz que foi o 409, não que aceitou")
+        self.assertNotIn("202", r["erro"])
         self.mg.estoque["P1"] = 8  # a Magalu terminou a gravação anterior
+        self.mg.estoque_erro = None
+        self.mg.nao_muda.discard("P1")
         r = S.anuncio_estoque_manual("magalu", "P1", 8, "luis")
         self.assertTrue(r["ok"], r)
+
+    def test_v2055_409_sem_envio_anterior_e_erro(self):
+        """Revisão: sem gravação nossa em andamento, o 409 não é "processando" (ex.: POST com a linha já criada)."""
+        self.inserir_magalu()
+        self.mg.estoque["P1"] = 5
+        S._MAGALU_ESTOQUE_SEM_MOSTRAR.clear()
+        self.mg.estoque_erro = S.MagaluRecusou("Magalu HTTP 409: " + self.MSG_409, self.MSG_409, 409)
+        r = S.anuncio_estoque_manual("magalu", "P1", 8, "luis")
+        self.assertEqual(r["resultado"], "erro")
+        envio = S._magalu_estoque_enviar("P1", 8, criar=True)   # o estoque inicial do Publicar
+        self.assertTrue(envio["erro"], "o Publicar não segue sem o estoque")
+
+    def test_v2055_mesmo_numero_com_gravacao_pendente_envia(self):
+        """Revisão: a Magalu mostra 20 mas um 21 nosso ainda processa; voltar a 20 tem de ser enviado."""
+        self.inserir_magalu()
+        self.mg.estoque["P1"] = 20
+        S._MAGALU_ESTOQUE_SEM_MOSTRAR.clear()
+        self.mg.nao_muda.add("P1")
+        S.anuncio_estoque_manual("magalu", "P1", 21, "luis")      # aceito, ainda mostra 20
+        antes = len(self.mg.escritas("/stocks/"))
+        S.anuncio_estoque_manual("magalu", "P1", 20, "luis")
+        self.assertEqual(len(self.mg.escritas("/stocks/")), antes + 1, "com gravação pendente o 20 vai à Magalu")
 
     def test_v2055_outro_409_continua_erro(self):
         self.inserir_magalu()

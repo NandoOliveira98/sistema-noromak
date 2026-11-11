@@ -5,6 +5,7 @@ sozinho; kit = preço dividido entre as peças pelo custo; pedido de Bauru usa a
 A porta não cria dois atendimentos para o mesmo `pedido_externo` (responde "ja_existia").
 """
 
+import time
 from unittest import mock
 
 from base import S, TesteNoromak, linha, gravar_como_admin
@@ -137,6 +138,23 @@ class Rotina(Base):
         porta2 = Porta()
         self.rodar(porta2)
         self.assertNotIn("atendimento/criar", porta2.rotas())
+
+    def test_v2055_cadastro_segurado_para_o_painel_nao_e_erro(self):
+        """revisar-antes-de-subir (11/11): leitura segurada pela vez do painel (V20.54) = Apollo ocupado, 2 min."""
+        self.receber(_sc("580099"))
+
+        class Segura(Porta):
+            def __call__(self, rota, corpo, escrita=False):
+                if rota == "cliente/buscar":
+                    raise S.PortaErro("Apollo reservado para o painel neste minuto.", passageiro=True)
+                return super().__call__(rota, corpo, escrita)
+        t0 = time.time()
+        self.rodar(Segura())
+        e = self.estado("580099")
+        self.assertEqual(e["situacao"], "aguardando", e)
+        with S.DB_LOCK:
+            prox = S.DB.execute("SELECT proxima_epoch FROM tiktok_atendimento_v2033 WHERE pedido='580099'").fetchone()[0]
+        self.assertLess(prox - t0, 300, "Apollo ocupado tenta de novo em 2 min, não em 10")
 
     def test_desligado_nao_chama_o_apollo(self):
         S._tiktok_config_gravar("atendimento_auto", "0", "teste")

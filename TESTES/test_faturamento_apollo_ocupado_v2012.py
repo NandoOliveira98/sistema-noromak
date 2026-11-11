@@ -116,6 +116,17 @@ class ApolloOcupado(unittest.TestCase):
             self.assertEqual(S.faturamento_conferir(PEDIDOS[0], "Mercado Livre", t0 + 1000)["situacao"], "pronto")
         self.assertEqual(self._rodada_429(t0 + 1900)["situacao"], "aguardando_apollo")
 
+    def test_v2055_rotina_segurada_para_o_painel_nao_vira_atencao(self):
+        """revisar-antes-de-subir (11/11): a leitura segurada pela vez do painel (V20.54) não é Apollo fora do ar."""
+        t0 = time.time()
+        S.exp_porta_uso_zerar()
+        with mock.patch.object(S, "CHAVE_CRM", "chave-teste"), mock.patch.object(S, "EXP_PORTA_ROTINA_LEITURAS", 0), \
+                S.exp_porta_rotina():
+            self.assertEqual(S.faturamento_conferir(PEDIDOS[0], "Mercado Livre", t0)["situacao"], "aguardando_apollo")
+            r = S.faturamento_conferir(PEDIDOS[0], "Mercado Livre", t0 + 2400)
+        self.assertEqual(r["situacao"], "aguardando_apollo", r)
+        self.assertNotIn("sem resposta há", r["motivo"])
+
     def test_tela_poe_na_aba_aguardando(self):
         html = open(S.APP_DIR / "faturamento.html", encoding="utf-8").read()
         self.assertTrue('s==="aguardando_apollo"' in html, "aba Aguardando sem o aguardando_apollo")

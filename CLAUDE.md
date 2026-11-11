@@ -1120,6 +1120,12 @@ ou com "Sem resposta"/"Falha depois do envio").
 Automático reenviava o mesmo número; cada reenvio voltava 409 "Stock cannot be saved because it already exists" e na 3ª vez
 o anúncio parava. `_magalu_estoque_enviar` não grava quando a Magalu já mostra o número, e o 409 com "already exists" conta
 como "aguardando a Magalu" (3 seguidas = erro), não como recusa. Teste: `test_v2055_*` em `TESTES/test_anuncios_magalu_v2034.py`.
+**revisar-antes-de-subir (11/11, "corrigir todos"):** as duas regras só valem **sem** gravação nossa pendente / **com** ela
+(`_MAGALU_ESTOQUE_SEM_MOSTRAR` > 0): com um 202 ainda não mostrado o número igual é enviado (a leitura é velha) e sem ele o 409
+continua recusa — também no estoque inicial do Publicar (`criar=True`), que antes virava "publicado" sem estoque. O registro diz
+"recusou com 409", não "aceitou (202)". Junto, achados da V20.54: a leitura segurada pela vez do painel (`PortaErro.segurada`)
+não conta para o "Apollo sem resposta há 30 min" do Faturamento; no atendimento do TikTok o cadastro com Apollo ocupado fica
+`aguardando` (2 min, era `erro` e 10 min); no cadastro do Full para a volta sem gastar tentativa nem vencer a janela de 1 dia.
 
 **V20.26 — fase 3: controle de estoque dos anúncios do ML** (decisões do dono 05/11; plano
 `docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md`). **Exceção à regra "o Noromak nunca grava estoque": o Noromak grava

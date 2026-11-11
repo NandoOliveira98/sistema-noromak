@@ -115,6 +115,18 @@ class Rodada(unittest.TestCase):
         self.assertEqual(sit, "nao_encontrado")
         self.assertNotIn("cliente/criar", porta.rotas())
 
+    def test_v2055_apollo_ocupado_nao_gasta_tentativa(self):
+        """revisar-antes-de-subir (11/11): leitura segurada pela vez do painel (V20.54) = para a volta, nada gravado."""
+        _venda_full()
+
+        def segura(rota, corpo, escrita=False):
+            raise S.PortaErro("Apollo reservado para o painel neste minuto.", passageiro=True)
+        t0 = time.time()
+        self._rodar(segura, agora=t0 + 90000)   # mesmo depois da janela de 1 dia
+        with S.DB_LOCK:
+            row = S.DB.execute("SELECT situacao, tentativas FROM cadastro_full_v1945").fetchone()
+        self.assertIsNone(row, "nada registrado: na próxima volta tenta de novo")
+
     def test_sem_nota_nao_vai_ao_apollo(self):
         _venda_full()
         porta = PortaFalsa()

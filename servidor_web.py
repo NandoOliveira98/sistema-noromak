@@ -12045,6 +12045,12 @@ def tiktok_atendimento_pedido(pedido: str) -> dict[str, Any]:
         r = exp_cadastro_atualizar(pedido, "automatico", endereco_texto=end.get("texto") or "",
                                    criar=True, bairro=end.get("bairro") or "")
         if not r.get("ok"):
+            if r.get("passageiro"):
+                # revisar-antes-de-subir (11/11): Apollo ocupado / leitura segurada pela vez do painel (V20.54) não é
+                # erro: "aguardando" e de novo em 2 min.
+                detalhe = "Apollo ocupado no cadastro do cliente: " + str(r.get("error") or "?")
+                _tiktok_atendimento_registrar(pedido, "aguardando", detalhe, espera="passageiro")
+                return {"ok": False, "situacao": "aguardando", "motivo": detalhe}
             situacao = "incerto" if r.get("situacao") == "incerto" else "erro"
             detalhe = "Cadastro do cliente: " + str(r.get("error") or r.get("situacao") or "?")
             _tiktok_atendimento_registrar(pedido, situacao, detalhe, espera="cadastro")
@@ -21716,6 +21722,8 @@ class PortaErro(Exception):
         self.incerto = incerto
         # V20.12: limite por minuto (429) ou leitura sem resposta — passa sozinho, tentar de novo.
         self.passageiro = passageiro
+        # revisar-antes-de-subir (11/11): segurada pela vez do painel (V20.54), sem ir ao Apollo — não é Apollo fora.
+        self.segurada = False
 
 
 # V19.72: aviso do Guilherme (22/10) — cadastro que vai ao Apollo não pode ter acento,
@@ -21792,7 +21800,9 @@ def _exp_porta_vez(rota: str) -> None:
         if rotina and rota in EXP_PORTA_LEITURAS and (
                 u["bloqueado_ate"] > agora or len(u["rotina"]) >= EXP_PORTA_ROTINA_LEITURAS):
             u["seguradas"] += 1
-            raise PortaErro("Apollo reservado para o painel neste minuto. A rotina tenta de novo depois.", passageiro=True)
+            erro = PortaErro("Apollo reservado para o painel neste minuto. A rotina tenta de novo depois.", passageiro=True)
+            erro.segurada = True
+            raise erro
         (u["rotina"] if rotina else u["painel"]).append(agora)
         u["total"] += 1
 
@@ -22113,7 +22123,8 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
                 "faltam": faltam,
             })
     except PortaErro as exc:
-        return {**saida, "situacao": "erro", "aviso": str(exc), "apollo_ocupado": exc.passageiro}
+        return {**saida, "situacao": "erro", "aviso": str(exc), "apollo_ocupado": exc.passageiro,
+                "apollo_segurado": bool(getattr(exc, "segurada", False))}
     soltar = [c for c in saida["candidatos"] if c["total_a_soltar"]]
     # V19.30 (decisão do dono): escolhe sozinho só um atendimento, com peças batendo
     # (ou o número digitado); senão quem escolhe é a pessoa.
@@ -23122,7 +23133,7 @@ def faturamento_classificar(pedido: str, d: dict[str, Any], valor_pedido: float 
     if d.get("caixa"):
         return {**base, "situacao": "feito", "motivo": "Enviado ao caixa."}
     if d.get("apollo_ocupado"):   # V20.12: passa sozinho, nunca "atenção"
-        return {**base, "situacao": "aguardando_apollo",
+        return {**base, "situacao": "aguardando_apollo", "segurado": bool(d.get("apollo_segurado")),
                 "motivo": f"Apollo ocupado ({d.get('aviso') or 'sem resposta'}). Confere de novo em 2 min sozinho."}
     if not d.get("ok", True) or d.get("situacao") == "erro":
         return {**base, "situacao": "atencao", "motivo": d.get("aviso") or d.get("error") or "Apollo não respondeu."}
@@ -23205,8 +23216,11 @@ def faturamento_conferir(pedido: str, marketplace: str = "", agora: float | None
         if res["situacao"] == "aguardando_apollo":
             ant = DB.execute("SELECT apollo_desde FROM faturamento_v1943 WHERE order_key=?", (normalize(pedido),)).fetchone()
             desde = float(ant["apollo_desde"] or 0) if ant else 0.0
-            desde = desde or agora
-            if agora - desde >= FATURAMENTO_APOLLO_ATENCAO_S:
+            # revisar-antes-de-subir (11/11): a vez cedida ao painel (V20.54) não é "Apollo sem resposta": não começa
+            # nem completa os 30 min de atenção (o que já contava fica guardado).
+            segurado = bool(res.get("segurado"))
+            desde = desde or (0.0 if segurado else agora)
+            if desde and not segurado and agora - desde >= FATURAMENTO_APOLLO_ATENCAO_S:
                 res = {**res, "situacao": "atencao",
                        "motivo": f"Apollo sem resposta há {int((agora - desde) // 60)} min ({d.get('aviso') or 'sem resposta'}). "
                                  f"Confira a porta do Apollo; o pedido continua sendo conferido."}
@@ -25998,7 +26012,7 @@ def full_cadastro_atualizar(order_id: str, nota: dict[str, Any], usuario: str = 
                 corpo["endereco"] = endereco
             at = _exp_porta_endereco("cliente/atualizar", corpo, avisos)
         except PortaErro as exc:
-            return {"ok": False, "situacao": "erro", "error": str(exc)}
+            return {"ok": False, "situacao": "erro", "error": str(exc), "passageiro": bool(exc.passageiro)}
     if at.get("situacao") != "atualizado":
         return {"ok": False, "situacao": "erro", "cliente": codigo, "error": at.get("erro") or "O Apollo não confirmou."}
     avisos += [str(x) for x in (at.get("avisos") or [])]
@@ -26083,6 +26097,11 @@ def cadastro_full_rodada(agora: float | None = None, esperar=None, hoje: date | 
         except Exception as exc:
             r = {"ok": False, "situacao": "erro", "error": str(exc)}
         sit = str(r.get("situacao") or "")
+        if not r.get("ok") and r.get("passageiro"):
+            # revisar-antes-de-subir (11/11): Apollo ocupado (429/sem resposta ou a vez cedida ao painel, V20.54) não
+            # gasta tentativa nem vence a janela de 1 dia: para a volta sem gravar; a próxima tenta de novo.
+            contagem["apollo_ocupado"] = contagem.get("apollo_ocupado", 0) + 1
+            break
         if r.get("ok"):
             final = "feito"
             det = f"{r.get('nome_antes') or '?'} → {r.get('nome')}" + ("; " + "; ".join(r["avisos"]) if r.get("avisos") else "")
@@ -40031,9 +40050,12 @@ def _magalu_estoque_enviar(sku: str, qtd: int, criar: bool = False) -> dict[str,
         out["erro"] = ("o SKU tem estoque em mais de um centro de distribuição na Magalu (" + ", ".join(antes["branches"])
                        + "): ajuste na Magalu, o Noromak não escolhe")
         return out
-    if antes["estoque"] is not None and antes["estoque"] == int(qtd):
+    # Revisao (11/11): ha gravacao nossa aceita (202) e ainda nao mostrada? Entao a leitura e velha.
+    pendente_nosso = _MAGALU_ESTOQUE_SEM_MOSTRAR.get(sku, 0) > 0
+    if antes["estoque"] is not None and antes["estoque"] == int(qtd) and not pendente_nosso:
         # V20.55 (caso real 11/11, TUNAP109): a Magalu ja mostra o numero; reenviar o mesmo voltava 409 "already exists"
-        # e na 3a vez o Automatico parava. Nada a enviar (quem chama rele e ve o numero).
+        # e na 3a vez o Automatico parava. Nada a enviar (quem chama rele e ve o numero). Com uma gravacao nossa ainda
+        # processando o numero mostrado pode mudar depois (ex.: 21 pendente, voltar a 20): ai envia.
         out.update(aceito=True, ja_tinha=True, metodo="stocks (já estava)")
         return out
     corpo: dict[str, Any] = {"channel": {"id": MAGALU_CANAL_ID}, "quantity": int(qtd), "type": "AVAILABLE"}
@@ -40048,10 +40070,11 @@ def _magalu_estoque_enviar(sku: str, qtd: int, criar: bool = False) -> dict[str,
         out["aceito"] = True
     except MagaluRecusou as exc:
         _anuncio_amostra(f"magalu_estoque_{metodo.lower()} [erro]", {"erro": str(exc), "corpo": exc.corpo})
-        if exc.status == 409 and "already exists" in str(exc).lower():
-            # V20.55: 409 "already exists" = a gravacao anterior ainda esta sendo processada (11/11: o 202 das 13:40 so
-            # apareceu as 13:47). Conta como "aguardando a Magalu" (3 seguidas = erro), nao como recusa.
-            out["pendente"] = f"a Magalu ainda processa a gravação anterior ({exc})"
+        if exc.status == 409 and "already exists" in str(exc).lower() and pendente_nosso and not criar:
+            # V20.55: 409 "already exists" logo depois de um envio nosso aceito = a gravacao anterior ainda esta sendo
+            # processada (11/11: o 202 das 13:40 so apareceu as 13:47). Conta como "aguardando a Magalu" (3 seguidas =
+            # erro). Revisao: sem envio nosso pendente (ou no estoque inicial do Publicar) continua recusa.
+            out["pendente"] = f"a Magalu recusou com 409 enquanto processa a gravação anterior ({exc})"
         else:
             out["erro"] = f"a Magalu recusou: {exc}"
     except MagaluSemResposta as exc:
@@ -40094,11 +40117,17 @@ def _magalu_estoque_gravar_api(sku: str, qtd: int, ficha_codigo: str = "") -> di
         _MAGALU_ESTOQUE_SEM_MOSTRAR[sku] = n
         if n >= MAGALU_ESTOQUE_SEM_MOSTRAR_MAX:  # 2a revisao: sem laco calado - na 3a vez seguida conta como erro
             _MAGALU_ESTOQUE_SEM_MOSTRAR.pop(sku, None)
-            res["erro"] = (f"a Magalu aceitou o estoque {n} vezes seguidas e não mostra o número (mostra "
-                           f"{res['depois'] if res['depois'] is not None else 'sem número'}, enviado {qtd}): confira no painel")
+            mostra = res['depois'] if res['depois'] is not None else 'sem número'
+            res["erro"] = (f"a Magalu {n} vezes seguidas sem mostrar o número (mostra {mostra}, enviado {qtd}"
+                           + ("; a última foi recusada com 409 'already exists'" if envio.get("pendente") else "")
+                           + "): confira no painel")
             return res
+        if envio.get("pendente"):   # revisao: o registro diz que foi o 409, nao "aceitou"
+            como = "recusou com 409 'already exists' (gravação anterior ainda processando)"
+        else:
+            como = f"aceitou ({'sem resposta' if envio.get('sem_resposta') else '202'})"
         res.update(ignorado="aguardando_magalu",
-                   erro=(f"a Magalu aceitou ({'sem resposta' if envio.get('sem_resposta') else '202'}) e ainda mostra "
+                   erro=(f"a Magalu {como} e ainda mostra "
                          f"{res['depois'] if res['depois'] is not None else 'sem número'} (enviado {qtd}); a próxima rodada confere"))
     return res
 
