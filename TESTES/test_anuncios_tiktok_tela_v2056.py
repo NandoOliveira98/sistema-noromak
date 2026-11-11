@@ -41,6 +41,18 @@ class PuxarTiktok(unittest.TestCase):
         # trocar a fonte é uma decisão: sempre pergunta antes
         self.assertLess(corpo.index("nkConfirmar"), corpo.index("/api/integracoes/tiktok/fonte"))
 
+    def test_revisao_confirmacao_e_andamento(self):
+        corpo = re.search(r"async function puxarTiktok\(\) \{(.*?)\n\}", HTML, re.S).group(1)
+        # etiqueta automática ligada = recusa antes de trocar a fonte; atendimento ligado = avisado
+        self.assertLess(corpo.index("st.etiqueta_ligada"), corpo.index("/api/integracoes/tiktok/fonte"))
+        self.assertIn("st.atendimento_ligado", corpo)
+        self.assertIn("PEDIDOS", corpo)
+        self.assertNotIn("60000", corpo, "sem esperar às cegas")
+        acomp = re.search(r"async function acompanharTiktok\(\) \{(.*?)\n\}", HTML, re.S).group(1)
+        self.assertIn("/api/tiktok-estoque/catalogo", acomp)
+        self.assertIn('CASA === "aracatuba"', acomp)
+        self.assertIn("TTC.rodando", _funcao("acoesLista"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -634,6 +634,13 @@ Magalu, TikTok) aparecem com qualquer casa no seletor. Botão **"Puxar anúncios
 tela): lê `/api/integracoes/tiktok/status`; não conectado = aviso; fonte ainda na extensão = pergunta e troca pela mesma rota do
 cartão (`/api/integracoes/tiktok/fonte`, perfil Admin; o estoque do TikTok volta a Simulação); depois `/api/tiktok-estoque/atualizar`
 (catálogo em 2º plano) e a lista recarrega em 1 min. Teste: `TESTES/test_anuncios_tiktok_tela_v2056.py`.
+**revisar-antes-de-subir (11/11, "corrija todos"):** com a **etiqueta automática ligada** a troca para a API é recusada (pela API
+ela organiza o envio no TikTok sozinha); a confirmação diz que a extensão para de trazer os **pedidos**, que a importação pela API é
+a 1ª com pedido real e se o atendimento automático está ligado (`atendimento_ligado` no status). Andamento real da leitura:
+`TIKTOK_CATALOGO_ESTADO` + `GET /api/tiktok-estoque/catalogo` (módulo admin, só memória); a tela consulta até terminar, mostra
+o erro, avisa que os anúncios são de Bauru com o seletor em Araçatuba e o botão fica travado enquanto lê (`TTC`). **Ids das duas
+fontes:** se a leitura pela API não tem NENHUM id em comum com os ≥ 10 lidos pela extensão, nada é gravado (senão os anúncios do
+TikTok ficariam duplicados nas fichas) e o erro vai ao log e à tela. Teste: `TESTES/test_tiktok_puxar_v2056.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

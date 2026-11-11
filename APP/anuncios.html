@@ -231,7 +231,7 @@ window.addEventListener("beforeunload", e => { if (fichaSuja() || kitSujo() || c
 function acoesLista() {
   // V20.24: "Puxar anúncios do ML" roda em segundo plano (PUX); "Puxar um" lê só o anúncio colado (MLB ou link)
   $("acoes").innerHTML = seletorCasa() + (PODE ? `<button class="nk-btn pri" id="btnPuxar" onclick="puxar()" ${PUX.rodando ? "disabled" : ""}><i class=nk-i-download></i> ${PUX.rodando ? "Puxando…" : "Puxar anúncios do ML"}</button>
-      <button class="nk-btn" id="btnPuxarTiktok" onclick="puxarTiktok()"><i class=nk-i-download></i> Puxar anúncios do TikTok</button>
+      <button class="nk-btn" id="btnPuxarTiktok" onclick="puxarTiktok()" ${TTC.rodando ? "disabled" : ""}><i class=nk-i-download></i> ${TTC.rodando ? "Lendo o TikTok…" : "Puxar anúncios do TikTok"}</button>
       <span class="puxum"><input type="text" id="puxUmTexto" placeholder="MLB ou link do anúncio" aria-label="MLB ou link do anúncio" onkeydown="if(event.key==='Enter')puxarUm()"><button class="nk-btn" id="btnPuxarUm" onclick="puxarUm()">Puxar um</button></span>
       <button class="nk-btn" onclick="novoProduto()">+ Novo produto</button>` : "")
     + `<button class="nk-btn" onclick="carregarLista();carregarPainelEstoque()"><i class=nk-i-refresh></i> Atualizar</button>`;
@@ -327,6 +327,7 @@ function linkAnuncio(a) {
 // V20.24: a puxada em massa roda no servidor em segundo plano; a tela acompanha a cada 3 s (também ao abrir a página
 // com uma puxada em andamento, inclusive de outra pessoa).
 let PUX = {rodando: false, timer: null};
+let TTC = {rodando: false, timer: null};  // V20.56: leitura dos anúncios do TikTok (acompanharTiktok)
 function resumoPuxada(s) {
   const r = s.resultado || {};
   let alerta = !s.ok || !!s.erro;
@@ -398,23 +399,47 @@ async function puxarTiktok() {
     return;
   }
   if (st.fonte !== "api") {
-    if (!await nkConfirmar("A fonte do TikTok ainda é a extensão do Seller Center.\nPara trazer os anúncios e controlar o estoque de Bauru por aqui, a fonte passa a ser a API:\n• a extensão para de ler e gravar no TikTok;\n• os pedidos do TikTok passam a vir pela API;\n• os anúncios do TikTok ganham Manual/Automático aqui, e o estoque do TikTok começa em Simulação.\nPassar para a API?", {ok: "Passar para a API", perigo: false})) return;
+    // revisão V20.56: a etiqueta automática pela API organiza o envio no TikTok sozinha (grava de verdade): desligue antes
+    if (st.etiqueta_ligada) {
+      nkToast("A etiqueta automática do TikTok está ligada. Com a API ela organiza o envio no TikTok sozinha: desligue em Integrações → TikTok Shop antes de passar para a API.", "aviso", {duracao: 15000});
+      return;
+    }
+    const atend = st.atendimento_ligado
+      ? "• o atendimento automático no Apollo está LIGADO: passa a usar o preço lido pela API — confira o 1º atendimento;\n"
+      : "• o atendimento automático no Apollo está desligado (continua assim);\n";
+    if (!await nkConfirmar("A fonte do TikTok ainda é a extensão do Seller Center.\nPara trazer os anúncios e controlar o estoque de Bauru por aqui, a fonte passa a ser a API:\n• a extensão para de trazer os PEDIDOS e de ler e gravar o estoque no TikTok;\n• os pedidos do TikTok de Bauru passam a vir pela API — é a 1ª vez com pedido real: confira a fila de Bauru;\n" + atend + "• os anúncios do TikTok ganham Manual/Automático aqui, e o estoque do TikTok começa em Simulação.\nPassar para a API?", {ok: "Passar para a API", perigo: false})) return;
     try { await api("/api/integracoes/tiktok/fonte", {fonte: "api"}); }
     catch (e) { nkToast(e.message, e.status === 409 ? "aviso" : "erro", {duracao: 12000}); return; }
     nkToast("A fonte do TikTok agora é a API.", "ok");
   }
-  if (b) { b.disabled = true; b.textContent = "Lendo o TikTok…"; }
   try {
     await api("/api/tiktok-estoque/atualizar", {});
-    nkToast("Lendo os anúncios do TikTok em segundo plano. A lista se atualiza em 1 minuto.", "ok", {duracao: 12000});
   } catch (e) {
     nkToast(e.message, e.status === 409 ? "aviso" : "erro", {duracao: 12000});
+    if (e.status !== 409) return;   // 409 = já tem uma leitura rodando: acompanha ela
   }
-  setTimeout(() => {
-    const bb = $("btnPuxarTiktok");
-    if (bb) { bb.disabled = false; bb.innerHTML = "<i class=nk-i-download></i> Puxar anúncios do TikTok"; }
-    if (!F) carregarLista();
-  }, 60000);
+  TTC.rodando = true; if (!F) acoesLista();
+  nkToast("Lendo os anúncios do TikTok em segundo plano. Pode continuar usando a tela.", "ok", {duracao: 8000});
+  acompanharTiktok();
+}
+// revisão V20.56: andamento real da leitura (GET /api/tiktok-estoque/catalogo), em vez de esperar 60 s às cegas
+async function acompanharTiktok() {
+  clearTimeout(TTC.timer);
+  let s;
+  try { s = await api("/api/tiktok-estoque/catalogo"); }
+  catch (e) {
+    if (/\b(401|403)\b|login|permiss/i.test(String(e && (e.status || e.message) || ""))) { TTC.rodando = false; return; }
+    TTC.timer = setTimeout(acompanharTiktok, 5000); return;
+  }
+  if (s.rodando) { TTC.timer = setTimeout(acompanharTiktok, 3000); return; }
+  TTC.rodando = false;
+  if (!F) acoesLista();
+  if (s.erro) nkToast("Anúncios do TikTok: " + s.erro, "erro", {duracao: 20000});
+  else {
+    const casa = CASA === "aracatuba" ? " Eles são da casa Bauru: escolha “Todas” ou “Bauru” no topo para vê-los." : "";
+    nkToast(`Anúncios do TikTok lidos: ${s.variacoes ?? 0} variação(ões).${casa}`, "ok", {duracao: 15000});
+  }
+  if (!F) carregarLista();
 }
 async function puxarUm() {
   const campo = $("puxUmTexto"), b = $("btnPuxarUm");

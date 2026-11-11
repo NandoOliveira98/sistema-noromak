@@ -6572,6 +6572,8 @@ def tiktok_status_payload() -> dict[str, Any]:
         "importacao_ligada": tiktok_importacao_ligada(),  # V19.64
         "etiqueta_ligada": tiktok_etiqueta_ligada(),  # V20.29
         "fonte": tiktok_fonte(),  # V20.40: extensao | api
+        # V20.56 (revisão): a tela de Anúncios avisa antes de passar para a API (o atendimento roda sozinho por ela)
+        "atendimento_ligado": tiktok_atendimento_ligado(),
     }
 
 
@@ -9673,28 +9675,50 @@ def tiktok_produtos_sincronizar() -> dict[str, Any]:
     # revisar-antes-de-subir (V20.40): as travas da extensão (V19.81) também aqui. Lista vazia ou leitura que parou
     # antes da última página nunca apaga; leitura com menos de 70% do que existe também não.
     apagar = bool(vistos) and not token
+    with DB_LOCK:
+        existentes_ids = {str(r[0]) for r in DB.execute("SELECT sku_id FROM tiktok_sku_v1964").fetchall()}
+    # V20.56 (revisão): a 1ª leitura pela API depois da extensão. Se NENHUM id bate com os lidos pela extensão, os ids não
+    # são os mesmos nas duas fontes: gravar criaria todos os anúncios de novo (duplicados nas fichas) e o estoque iria
+    # para ids que a API não conhece. Nada é gravado; confira antes.
+    if vistos and len(existentes_ids) >= 10 and not (set(vistos) & existentes_ids):
+        msg = (f"Os ids das variações lidas pela API ({len(vistos)}) não batem com nenhum dos {len(existentes_ids)} lidos "
+               f"pela extensão: nada foi gravado (senão os anúncios do TikTok ficariam duplicados). Confira antes.")
+        tiktok_log_event_se_mudou("anuncios", "ids", "ERRO", msg)
+        return {"ok": False, "erro": msg, "variacoes": len(vistos)}
     if apagar:
-        with DB_LOCK:
-            existentes = int(DB.execute("SELECT COUNT(*) FROM tiktok_sku_v1964").fetchone()[0])
+        existentes = len(existentes_ids)
         if existentes >= 10 and len(vistos) < existentes * TIKTOK_LEITURA_MINIMA:
             apagar = False
     return _tiktok_sku_gravar(vistos, apagar_ausentes=apagar)
 
 
 TIKTOK_CATALOGO_LOCK = threading.Lock()  # revisar-antes-de-subir (V20.40): uma leitura dos anúncios por vez
+# V20.56 (revisão): andamento da leitura pedida pelo botão (a tela de Anúncios consulta até terminar). Só memória.
+TIKTOK_CATALOGO_ESTADO: dict[str, Any] = {"rodando": False, "iniciado_em": "", "fim_em": "", "variacoes": None, "erro": ""}
+
+
+def tiktok_catalogo_situacao() -> dict[str, Any]:
+    return dict(TIKTOK_CATALOGO_ESTADO)
 
 
 def tiktok_catalogo_iniciar() -> bool:
     """Botão "Atualizar anúncios" (fonte API): lê o catálogo numa thread. False = já tem uma rodando."""
     if not TIKTOK_CATALOGO_LOCK.acquire(blocking=False):
         return False
+    TIKTOK_CATALOGO_ESTADO.update(rodando=True, iniciado_em=now_iso(), fim_em="", variacoes=None, erro="")
 
     def rodar() -> None:
+        erro, variacoes = "", None
         try:
-            tiktok_produtos_sincronizar()
+            r = tiktok_produtos_sincronizar() or {}
+            variacoes = r.get("variacoes")
+            if r.get("ok") is False:
+                erro = str(r.get("erro") or "a leitura não terminou")
         except Exception as exc:
-            tiktok_log_event_se_mudou("anuncios", "atualizar", "ERRO", str(exc)[:800])
+            erro = str(exc)[:800]
+            tiktok_log_event_se_mudou("anuncios", "atualizar", "ERRO", erro)
         finally:
+            TIKTOK_CATALOGO_ESTADO.update(rodando=False, fim_em=now_iso(), variacoes=variacoes, erro=erro)
             TIKTOK_CATALOGO_LOCK.release()
     threading.Thread(target=rodar, name="tiktok-catalogo", daemon=True).start()
     return True
@@ -50636,6 +50660,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": "Produto não encontrado."}, 404)
                 else:
                     self.send_json({"ok": True, **res})
+            return
+        if path == "/api/tiktok-estoque/catalogo":  # V20.56: andamento do "Puxar anúncios do TikTok" (só memória)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, **tiktok_catalogo_situacao()})
             return
         if path == "/api/tiktok-estoque":  # V19.64: tela Estoque TikTok (só lê o banco)
             ctx = self.auth(admin_only=True)
