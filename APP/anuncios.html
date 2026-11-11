@@ -327,7 +327,7 @@ function linkAnuncio(a) {
 // V20.24: a puxada em massa roda no servidor em segundo plano; a tela acompanha a cada 3 s (também ao abrir a página
 // com uma puxada em andamento, inclusive de outra pessoa).
 let PUX = {rodando: false, timer: null};
-let TTC = {rodando: false, timer: null};  // V20.56: leitura dos anúncios do TikTok (acompanharTiktok)
+let TTC = {rodando: false, timer: null, desde: 0, falhas: 0};  // V20.56: leitura dos anúncios do TikTok (acompanharTiktok)
 function resumoPuxada(s) {
   const r = s.resultado || {};
   let alerta = !s.ok || !!s.erro;
@@ -425,19 +425,33 @@ async function puxarTiktok() {
 // revisão V20.56: andamento real da leitura (GET /api/tiktok-estoque/catalogo), em vez de esperar 60 s às cegas
 async function acompanharTiktok() {
   clearTimeout(TTC.timer);
+  if (!TTC.desde) TTC.desde = Date.now();
+  const parar = msg => { TTC.rodando = false; TTC.desde = 0; TTC.falhas = 0; if (!F) acoesLista(); if (msg) nkToast(msg, "aviso", {duracao: 15000}); };
+  // 2ª revisão: nunca fica consultando para sempre (leitura presa ou servidor fora)
+  if (Date.now() - TTC.desde > 15 * 60000) { parar("A leitura dos anúncios do TikTok passou de 15 min sem terminar. Atualize a tela mais tarde."); return; }
   let s;
-  try { s = await api("/api/tiktok-estoque/catalogo"); }
+  try { s = await api("/api/tiktok-estoque/catalogo"); TTC.falhas = 0; }
   catch (e) {
-    if (/\b(401|403)\b|login|permiss/i.test(String(e && (e.status || e.message) || ""))) { TTC.rodando = false; return; }
+    if (/\b(401|403)\b|login|permiss/i.test(String(e && (e.status || e.message) || ""))) { parar(""); return; }
+    TTC.falhas = (TTC.falhas || 0) + 1;
+    if (TTC.falhas >= 12) { parar("Sem resposta do servidor sobre a leitura do TikTok. Atualize a tela mais tarde."); return; }
     TTC.timer = setTimeout(acompanharTiktok, 5000); return;
   }
   if (s.rodando) { TTC.timer = setTimeout(acompanharTiktok, 3000); return; }
-  TTC.rodando = false;
-  if (!F) acoesLista();
+  parar("");
+  if (s.erro && s.ids_diferentes) {
+    // 2ª revisão: a saída da trava de ids (nada é trocado sem o Admin confirmar)
+    if (await nkConfirmar("Os anúncios lidos pela API do TikTok têm números diferentes dos que a extensão trouxe.\nSubstituir: os anúncios antigos da extensão saem da lista (os removidos por você ficam como estão) e entram os da API, em Manual.\nSubstituir pelos da API?", {ok: "Substituir pelos da API", perigo: false})) {
+      try { await api("/api/tiktok-estoque/atualizar", {substituir: true}); TTC.rodando = true; if (!F) acoesLista(); acompanharTiktok(); }
+      catch (e) { nkToast(e.message, e.status === 409 ? "aviso" : "erro", {duracao: 12000}); }
+    }
+    return;
+  }
   if (s.erro) nkToast("Anúncios do TikTok: " + s.erro, "erro", {duracao: 20000});
   else {
     const casa = CASA === "aracatuba" ? " Eles são da casa Bauru: escolha “Todas” ou “Bauru” no topo para vê-los." : "";
-    nkToast(`Anúncios do TikTok lidos: ${s.variacoes ?? 0} variação(ões).${casa}`, "ok", {duracao: 15000});
+    const n = s.variacoes == null ? "" : ` ${s.variacoes} variação(ões).`;  // 2ª revisão: sem número não vira "0"
+    nkToast(`Anúncios do TikTok lidos.${n}${casa}`, "ok", {duracao: 15000});
   }
   if (!F) carregarLista();
 }

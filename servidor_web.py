@@ -9539,6 +9539,11 @@ def tiktok_fonte_definir(fonte: str, usuario: str) -> str:
         st = tiktok_status_payload()
         if not st.get("connected") or not st.get("tem_loja"):
             raise ValueError("Conecte o TikTok Shop e rode o Testar leitura (loja lida) antes de usar a API.")
+        # V20.56 (2ª revisão): pela API a etiqueta automática organiza o envio no TikTok sozinha (grava de verdade).
+        # Ligada na época da extensão (sem efeito), viraria escrita real no clique: desligue antes, em qualquer tela.
+        if tiktok_fonte() != "api" and st.get("etiqueta_ligada"):
+            raise ValueError("A etiqueta automática do TikTok está ligada: desligue antes de passar para a API "
+                             "(pela API ela organiza o envio no TikTok sozinha).")
     # revisar-antes-de-subir (V20.40): sob a mesma trava do envio. Com uma rodada da extensão aberta (ela grava por
     # DIFERENÇA) a API gravaria o número final por cima e o TikTok somaria; espere a rodada fechar ou vencer.
     # 2ª revisão (V20.40): o worker segura a trava durante o envio (rede); o clique não espera mais que 20 s (504)
@@ -9642,8 +9647,9 @@ def _tiktok_quantidade(valor: Any) -> int | None:
         return None
 
 
-def tiktok_produtos_sincronizar() -> dict[str, Any]:
-    """Lê todos os anúncios da loja (paginado) e guarda cada variação. Só lê."""
+def tiktok_produtos_sincronizar(substituir: bool = False) -> dict[str, Any]:
+    """Lê todos os anúncios da loja (paginado) e guarda cada variação. Só lê.
+    V20.56 (2ª revisão): `substituir` = o Admin confirmou que os ids da API trocam os lidos pela extensão."""
     vistos: dict[str, dict[str, Any]] = {}
     token = ""
     for _ in range(200):
@@ -9678,13 +9684,28 @@ def tiktok_produtos_sincronizar() -> dict[str, Any]:
     with DB_LOCK:
         existentes_ids = {str(r[0]) for r in DB.execute("SELECT sku_id FROM tiktok_sku_v1964").fetchall()}
     # V20.56 (revisão): a 1ª leitura pela API depois da extensão. Se NENHUM id bate com os lidos pela extensão, os ids não
-    # são os mesmos nas duas fontes: gravar criaria todos os anúncios de novo (duplicados nas fichas) e o estoque iria
-    # para ids que a API não conhece. Nada é gravado; confira antes.
-    if vistos and len(existentes_ids) >= 10 and not (set(vistos) & existentes_ids):
+    # são os mesmos nas duas fontes: gravar criaria todos os anúncios de novo (duplicados nas fichas). Sem a confirmação
+    # do Admin nada é gravado; com ela (`substituir`, leitura completa) os da extensão saem e os da API entram.
+    sem_comum = bool(vistos) and len(existentes_ids) >= 10 and not (set(vistos) & existentes_ids)
+    if sem_comum and not substituir:
         msg = (f"Os ids das variações lidas pela API ({len(vistos)}) não batem com nenhum dos {len(existentes_ids)} lidos "
-               f"pela extensão: nada foi gravado (senão os anúncios do TikTok ficariam duplicados). Confira antes.")
+               f"pela extensão: nada foi gravado (senão os anúncios do TikTok ficariam duplicados). Use 'Substituir pelos "
+               f"da API' na tela de Anúncios para trocar os antigos.")
         tiktok_log_event_se_mudou("anuncios", "ids", "ERRO", msg)
-        return {"ok": False, "erro": msg, "variacoes": len(vistos)}
+        return {"ok": False, "erro": msg, "variacoes": len(vistos), "ids_diferentes": True}
+    if sem_comum and substituir:
+        if token:
+            return {"ok": False, "erro": "A leitura pela API parou antes da última página: nada foi substituído.",
+                    "variacoes": len(vistos)}
+        res = _tiktok_sku_gravar(vistos, apagar_ausentes=True)
+        with DB_LOCK:   # as linhas do espelho dos ids antigos saem (o removido pelo ADMIN fica: é tombstone)
+            antigos = [i for i in existentes_ids if i not in vistos]
+            for i in antigos:
+                DB.execute("DELETE FROM anuncio_canal_v2023 WHERE canal=? AND conta=? AND anuncio_id=? AND removido_em=''",
+                           (TIKTOK_ANUNCIO_CANAL, TIKTOK_CASA, i))
+            DB.commit()
+        tiktok_log_event("anuncios", "ids", "SUBSTITUIDO", f"{len(antigos)} da extensão trocados por {len(vistos)} da API")
+        return {**res, "substituidos": len(antigos)}
     if apagar:
         existentes = len(existentes_ids)
         if existentes >= 10 and len(vistos) < existentes * TIKTOK_LEITURA_MINIMA:
@@ -9694,33 +9715,49 @@ def tiktok_produtos_sincronizar() -> dict[str, Any]:
 
 TIKTOK_CATALOGO_LOCK = threading.Lock()  # revisar-antes-de-subir (V20.40): uma leitura dos anúncios por vez
 # V20.56 (revisão): andamento da leitura pedida pelo botão (a tela de Anúncios consulta até terminar). Só memória.
-TIKTOK_CATALOGO_ESTADO: dict[str, Any] = {"rodando": False, "iniciado_em": "", "fim_em": "", "variacoes": None, "erro": ""}
+TIKTOK_CATALOGO_ESTADO: dict[str, Any] = {"rodando": False, "iniciado_em": "", "fim_em": "", "variacoes": None, "erro": "",
+                                          "ids_diferentes": False}
 
 
 def tiktok_catalogo_situacao() -> dict[str, Any]:
     return dict(TIKTOK_CATALOGO_ESTADO)
 
 
-def tiktok_catalogo_iniciar() -> bool:
-    """Botão "Atualizar anúncios" (fonte API): lê o catálogo numa thread. False = já tem uma rodando."""
+def tiktok_catalogo_rodar(substituir: bool = False) -> None:
+    """Uma leitura do catálogo com o andamento (botão e worker de hora em hora). Quem chama segura a trava."""
+    TIKTOK_CATALOGO_ESTADO.update(rodando=True, iniciado_em=now_iso(), fim_em="", variacoes=None, erro="",
+                                  ids_diferentes=False)
+    erro, variacoes, ids_dif = "", None, False
+    try:
+        r = tiktok_produtos_sincronizar(substituir=substituir) or {}
+        variacoes = r.get("variacoes")
+        ids_dif = bool(r.get("ids_diferentes"))
+        if r.get("ok") is False:
+            erro = str(r.get("erro") or "a leitura não terminou")
+    except Exception as exc:
+        erro = str(exc)[:800]
+        tiktok_log_event_se_mudou("anuncios", "atualizar", "ERRO", erro)
+    finally:
+        TIKTOK_CATALOGO_ESTADO.update(rodando=False, fim_em=now_iso(), variacoes=variacoes, erro=erro,
+                                      ids_diferentes=ids_dif)
+
+
+def tiktok_catalogo_iniciar(substituir: bool = False) -> bool:
+    """Botão "Atualizar anúncios" (fonte API): lê o catálogo numa thread. False = já tem uma rodando (ou não subiu)."""
     if not TIKTOK_CATALOGO_LOCK.acquire(blocking=False):
         return False
-    TIKTOK_CATALOGO_ESTADO.update(rodando=True, iniciado_em=now_iso(), fim_em="", variacoes=None, erro="")
 
     def rodar() -> None:
-        erro, variacoes = "", None
         try:
-            r = tiktok_produtos_sincronizar() or {}
-            variacoes = r.get("variacoes")
-            if r.get("ok") is False:
-                erro = str(r.get("erro") or "a leitura não terminou")
-        except Exception as exc:
-            erro = str(exc)[:800]
-            tiktok_log_event_se_mudou("anuncios", "atualizar", "ERRO", erro)
+            tiktok_catalogo_rodar(substituir)
         finally:
-            TIKTOK_CATALOGO_ESTADO.update(rodando=False, fim_em=now_iso(), variacoes=variacoes, erro=erro)
             TIKTOK_CATALOGO_LOCK.release()
-    threading.Thread(target=rodar, name="tiktok-catalogo", daemon=True).start()
+    try:
+        threading.Thread(target=rodar, name="tiktok-catalogo", daemon=True).start()
+    except Exception as exc:  # 2ª revisão: thread que não sobe não deixa trava nem andamento presos
+        TIKTOK_CATALOGO_LOCK.release()
+        TIKTOK_CATALOGO_ESTADO.update(rodando=False, fim_em=now_iso(), erro=f"a leitura não começou ({exc})")
+        return False
     return True
 
 
@@ -12833,7 +12870,7 @@ def tiktok_estoque_loop(stop_event: threading.Event) -> None:
             if tiktok_status_payload().get("connected") and tiktok_fonte() == "api":
                 if (time.monotonic() - ultimo_catalogo > 3600 or ultimo_catalogo == 0)                         and TIKTOK_CATALOGO_LOCK.acquire(blocking=False):  # V20.40: nunca junto com o botão
                     try:
-                        tiktok_produtos_sincronizar()
+                        tiktok_catalogo_rodar()   # V20.56 (2ª revisão): mesmo andamento do botão
                         ultimo_catalogo = time.monotonic()
                     finally:
                         TIKTOK_CATALOGO_LOCK.release()
@@ -53472,7 +53509,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     audit(ctx["username"], "tiktok.estoque.enviar", f"{res['enviados']} ok, {res['erros']} erro")
                 elif path == "/api/tiktok-estoque/atualizar":
                     # revisar-antes-de-subir (V20.40): a leitura paginada passa dos 60 s do nginx: roda em 2º plano
-                    if not tiktok_catalogo_iniciar():
+                    if not tiktok_catalogo_iniciar(substituir=bool(body.get("substituir"))):  # V20.56 (2ª revisão)
                         self.send_json({"ok": False, "error": "Já tem uma leitura dos anúncios do TikTok rodando."}, 409)
                         return
                     res = {"ok": True, "iniciado": True}

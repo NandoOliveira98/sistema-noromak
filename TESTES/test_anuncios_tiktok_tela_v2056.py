@@ -53,6 +53,15 @@ class PuxarTiktok(unittest.TestCase):
         self.assertIn('CASA === "aracatuba"', acomp)
         self.assertIn("TTC.rodando", _funcao("acoesLista"))
 
+    def test_segunda_revisao(self):
+        acomp = re.search(r"async function acompanharTiktok\(\) \{(.*?)\n\}", HTML, re.S).group(1)
+        self.assertIn("ids_diferentes", acomp)
+        self.assertIn("substituir: true", acomp)
+        self.assertLess(acomp.index("nkConfirmar"), acomp.index("substituir: true"), "substituir só com confirmação")
+        self.assertNotIn("?? 0", acomp, "sem número não vira 0")
+        self.assertIn("TTC.falhas", acomp)
+        self.assertIn("15 * 60000", acomp)
+
 
 if __name__ == "__main__":
     unittest.main()

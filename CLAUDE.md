@@ -641,6 +641,12 @@ a 1ª com pedido real e se o atendimento automático está ligado (`atendimento_
 o erro, avisa que os anúncios são de Bauru com o seletor em Araçatuba e o botão fica travado enquanto lê (`TTC`). **Ids das duas
 fontes:** se a leitura pela API não tem NENHUM id em comum com os ≥ 10 lidos pela extensão, nada é gravado (senão os anúncios do
 TikTok ficariam duplicados nas fichas) e o erro vai ao log e à tela. Teste: `TESTES/test_tiktok_puxar_v2056.py`.
+2ª revisão (só das correções): a trava de ids tem saída — a tela pergunta "Substituir pelos da API" e manda
+`/api/tiktok-estoque/atualizar {substituir: true}`: com a leitura completa, os ids da extensão saem de `tiktok_sku_v1964` e as
+linhas do espelho deles saem de `anuncio_canal_v2023` (o removido pelo ADMIN fica). O worker de hora em hora usa o mesmo andamento
+(`tiktok_catalogo_rodar`); thread que não sobe solta a trava e o andamento. **O servidor** (`tiktok_fonte_definir`) recusa passar
+para a API com a etiqueta automática ligada (vale também para o cartão de Integrações). A tela não mostra "0" quando o número não
+veio e para de consultar depois de 12 falhas seguidas ou 15 min.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na
