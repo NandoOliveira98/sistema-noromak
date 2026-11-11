@@ -133,7 +133,7 @@ memoria_limitar_arenas()
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.52-ATEND-INTERRUPTOR"
+APP_VERSION = "20.53-CONDICAO-ML"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -12394,8 +12394,9 @@ def mkt_atendimento_estado(pedido: str, agora: float | None = None) -> dict[str,
     situacao = str(atual.get("situacao") or "")
     if situacao in MKT_ATEND_FINAIS and MKT_ATEND_CANAIS[mp][2] is None:
         # revisão: a porta não aplica a condição e o painel/Faturamento só acertam Shopee/Magalu/TikTok.
-        saida["condicao_aviso"] = (f"Atendimento criado pelo Noromak: acerte a condição de pagamento do "
-                                   f"{MKT_ATEND_CANAIS[mp][3]} no Apollo antes do caixa.")
+        # V20.53: a extensão Linx Cliente 0.59 acerta a 213 no "Enviar ao caixa" do painel (Linx web aberto).
+        saida["condicao_aviso"] = (f"Atendimento criado pelo Noromak: a condição de pagamento do {MKT_ATEND_CANAIS[mp][3]} "
+                                   f"(213) é acertada pelo painel ao enviar ao caixa — deixe o Linx web aberto neste Chrome.")
     if situacao == "criando":
         return {**saida, "motivo": "criando agora"}
     ja_atendido = _tiktok_atendimento_ja_atendido(pedido)
@@ -12442,8 +12443,8 @@ def _mkt_condicao_pendente(pedido: str) -> str:
     atual = mkt_atendimento_do_pedido(pedido) or {}
     canal = MKT_ATEND_CANAIS.get(str(atual.get("marketplace") or ""))
     if str(atual.get("situacao") or "") in MKT_ATEND_FINAIS and canal and canal[2] is None:
-        return (f"Atendimento criado pelo Noromak: acerte a condição de pagamento do {canal[3]} no Apollo e "
-                f"envie ao caixa pelo painel do pedido.")
+        return (f"Atendimento criado pelo Noromak: envie ao caixa pelo painel do pedido (ele acerta a condição de "
+                f"pagamento do {canal[3]}, 213).")
     return ""
 
 
