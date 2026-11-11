@@ -133,7 +133,7 @@ memoria_limitar_arenas()
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.49-ATENDIMENTO"
+APP_VERSION = "20.50-ENDERECO-SN"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -22339,8 +22339,21 @@ EXP_NOME_ROTULO = re.compile(r"^(TIPO DE CONTRIBUINTE|NAO CONTRIBUINTE|CONTRIBUI
 _EXP_CEP_CIDADE_RE = re.compile(r"CEP\s+(?:\S+\s+)?(?:é|e|eh)\s+de\s+(.+?),\s*n(?:ã|a)o\s+de\s+(.+?)(?:[.;]|$)", re.I)
 
 
+# V20.50 (dono, 11/11, ML 2000019472156870 "Br 101 km 26, SN"): o Apollo não tem campo de número (vai DENTRO do
+# Endereço, contrato do Guilherme). Número vazio gravava "BR 101 KM 26" sem a ", número" que o Linx DMS exige, e o
+# crédito pelo Linx web voltava HTTP 412. Sem número (vazio, "SN", "S/N", "0") vai "SN" — em todo criar/atualizar.
+EXP_NUMERO_SEM = "SN"
+
+
+def _exp_numero_ou_sn(numero: Any) -> str:
+    n = str(numero if numero is not None else "").strip()
+    return EXP_NUMERO_SEM if n.upper().replace("/", "").replace(".", "") in ("", "SN", "0") else n
+
+
 def _exp_porta_endereco(rota: str, corpo: dict[str, Any], avisos: list[str]) -> dict[str, Any]:
     erro_porta: PortaErro | None = None
+    if isinstance(corpo.get("endereco"), dict):
+        corpo["endereco"]["numero"] = _exp_numero_ou_sn(corpo["endereco"].get("numero"))
     try:
         r: dict[str, Any] | None = _exp_porta(rota, corpo, escrita=True)
         texto = str((r or {}).get("erro") or "")

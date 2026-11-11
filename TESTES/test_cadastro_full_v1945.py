@@ -97,7 +97,7 @@ class Rodada(unittest.TestCase):
         self.assertEqual(corpo["nome"], "M2 SOLUCOES GRAFICAS LTDA")
         self.assertEqual(corpo["endereco"]["rua"], "RUA BOLIVIA")
         self.assertEqual(corpo["endereco"]["bairro"], "CIDADE JARDIM MARAJOARA")
-        self.assertEqual(corpo["endereco"]["numero"], "")
+        self.assertEqual(corpo["endereco"]["numero"], "SN")  # V20.50: sem número vai "SN" (o Linx exige ", número")
         self.assertEqual((corpo["categoria"], corpo["inscricao_estadual"]), (3, "11862454"))
         self.assertEqual(porta.corpo("cliente/buscar")["documento"], "39467085000158")
 

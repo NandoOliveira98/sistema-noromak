@@ -1940,6 +1940,10 @@ extensão Linx Cliente **0.55** só mostra o botão na etapa do romaneio quando 
 (sem erro, ocupado ou `romaneio_fora`). No clique, `romaneio_fora` (romaneio solto direto no Apollo) conta como atendimento existente
 (`ja_tinha`). Limite que já existia: o painel olha só os 4 primeiros atendimentos abertos (`EXP_MAX_ATENDIMENTOS`). Teste: `QuandoAparece` em
 `TESTES/test_atendimento_ml_shopee_v2047.py`.
+**V20.50 — endereço sem número = "SN"** (dono, 11/11, ML 2000019472156870 "Br 101 km 26, SN"): o número vai dentro do
+Endereço do Apollo; vazio gravava sem a ", número" e o crédito pelo Linx web voltava 412 ("vírgula seguida de um espaço para
+o número"). `_exp_porta_endereco` troca número vazio/"SN"/"S/N"/"0" por "SN" em todo criar/atualizar (ML, Shopee, texto,
+TikTok, Full). Cliente já gravado sem número: "Atualizar cadastro" de novo. Teste: `TESTES/test_endereco_sem_numero_v2050.py`.
 **Cidade do CEP** (pedido 2000019436248196): o Apollo recusa "O CEP é de CRISTALINA, não de CAMPOS LINDOS" (o ML manda o distrito);
 `_exp_porta_endereco` tenta uma vez de novo com a cidade que o Apollo indica (criar e atualizar, também no Full) e avisa a troca.
 
