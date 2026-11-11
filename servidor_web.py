@@ -22201,6 +22201,18 @@ def exp_buscar_cliente(documento: str, operador: str = "noromak", revenda: int =
 
 
 EXP_BAIRRO_PADRAO_SHOPEE = "CENTRO"
+# V20.50 (revisar-antes-de-subir, 11/11): "sem número" escrito de qualquer jeito (SN, S/N, S N, S.N., S/Nº, SEM NUMERO,
+# SEM Nº, 0) e número com espaço antes da letra ("45 B", que o TikTok aceita) — a mesma regra nas leituras do endereço.
+_EXP_SEM_NUMERO_RE = re.compile(r"S\s*[/.\-]?\s*N\s*[º°.]?\.?|SEM\s+N(?:[UÚ]MERO|[º°.])?\.?|0", re.I)
+_EXP_NUMERO_RE = re.compile(r"\d+\s?[A-Za-z]?")
+
+
+def _exp_numero_lido(texto: Any) -> str | None:
+    """Número de um pedaço do endereço: o número, "" (sem número) ou None (não é número)."""
+    t = str(texto or "").strip()
+    if _EXP_SEM_NUMERO_RE.fullmatch(t):
+        return ""
+    return t if _EXP_NUMERO_RE.fullmatch(t) else None
 EXP_UF_POR_NOME = {
     "ACRE": "AC", "ALAGOAS": "AL", "AMAPA": "AP", "AMAZONAS": "AM", "BAHIA": "BA", "CEARA": "CE",
     "DISTRITO FEDERAL": "DF", "ESPIRITO SANTO": "ES", "GOIAS": "GO", "MARANHAO": "MA", "MATO GROSSO": "MT",
@@ -22227,8 +22239,8 @@ def _exp_endereco_shopee(order_sn: str) -> dict[str, Any]:
     rua = real(partes[0]) if partes else ""
     numero = ""
     complemento = ""
-    if len(partes) > 1 and re.fullmatch(r"\d+[A-Za-z]?|S/?N", partes[1].strip(), re.I):
-        numero = "" if partes[1].strip().upper() in ("SN", "S/N") else partes[1].strip()
+    if len(partes) > 1 and _exp_numero_lido(partes[1]) is not None:
+        numero = _exp_numero_lido(partes[1]) or ""
         resto = [real(p) for p in partes[2:]]
         # o que sobra até o bairro/cidade é complemento ("Casa", "Apartamento 202")
         for p in resto:
@@ -22265,8 +22277,8 @@ def exp_endereco_do_texto(texto: Any, bairro: Any = "") -> dict[str, Any]:
     estado, cidade = _exp_limpo(partes[-2]), _exp_limpo(partes[-3])
     meio = partes[1:-3]
     numero = ""
-    if meio and re.fullmatch(r"\d+[A-Za-z]?|S/?N", meio[0], re.I):
-        numero = "" if meio[0].upper().replace("/", "") == "SN" else meio[0]
+    if meio and _exp_numero_lido(meio[0]) is not None:
+        numero = _exp_numero_lido(meio[0]) or ""
         meio = meio[1:]
     endereco = {"rua": _exp_limpo(partes[0])[:120], "numero": numero[:10],
                 "complemento": _exp_limpo(", ".join(meio))[:60], "bairro": bairro_lido or EXP_BAIRRO_PADRAO_SHOPEE,
@@ -22347,7 +22359,7 @@ EXP_NUMERO_SEM = "SN"
 
 def _exp_numero_ou_sn(numero: Any) -> str:
     n = str(numero if numero is not None else "").strip()
-    return EXP_NUMERO_SEM if n.upper().replace("/", "").replace(".", "") in ("", "SN", "0") else n
+    return EXP_NUMERO_SEM if not n or _EXP_SEM_NUMERO_RE.fullmatch(n) else n
 
 
 def _exp_porta_endereco(rota: str, corpo: dict[str, Any], avisos: list[str]) -> dict[str, Any]:

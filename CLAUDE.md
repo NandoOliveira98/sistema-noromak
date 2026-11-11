@@ -1943,7 +1943,10 @@ extensão Linx Cliente **0.55** só mostra o botão na etapa do romaneio quando 
 **V20.50 — endereço sem número = "SN"** (dono, 11/11, ML 2000019472156870 "Br 101 km 26, SN"): o número vai dentro do
 Endereço do Apollo; vazio gravava sem a ", número" e o crédito pelo Linx web voltava 412 ("vírgula seguida de um espaço para
 o número"). `_exp_porta_endereco` troca número vazio/"SN"/"S/N"/"0" por "SN" em todo criar/atualizar (ML, Shopee, texto,
-TikTok, Full). Cliente já gravado sem número: "Atualizar cadastro" de novo. Teste: `TESTES/test_endereco_sem_numero_v2050.py`.
+TikTok, Full). Cliente já gravado sem número: "Atualizar cadastro" de novo. **revisar-antes-de-subir (11/11, "corrigir 1 e 3"):**
+"sem número" de qualquer grafia (S N, S.N., S/Nº, SEM NUMERO, SEM Nº) vira "SN" (`_EXP_SEM_NUMERO_RE`) e número com espaço antes da
+letra ("45 B", que o TikTok aceita) é número, não complemento — mesma regra no texto da página e na Shopee (`_exp_numero_lido`).
+Número colado na rua sem vírgula ("Rua X 342, Casa…") continua virando "RUA X 342, SN" (aceito). Teste: `TESTES/test_endereco_sem_numero_v2050.py`.
 **Cidade do CEP** (pedido 2000019436248196): o Apollo recusa "O CEP é de CRISTALINA, não de CAMPOS LINDOS" (o ML manda o distrito);
 `_exp_porta_endereco` tenta uma vez de novo com a cidade que o Apollo indica (criar e atualizar, também no Full) e avisa a troca.
 
