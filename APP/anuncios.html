@@ -1180,7 +1180,8 @@ function motivoCurtoEst(i) {
 function desenharPainelEstoque() {
   const el = $("painelEstoque"); if (!el) return;
   const contas = PE.casa === CASA ? Object.entries(PE.contas).filter(([, d]) => d && d.status !== 403) : [];
-  const temAlgo = contas.some(([, d]) => d.erro || (d.resumo && (d.resumo.automatico || d.resumo.manual)) || (d.log && d.log.length));
+  // V20.57 (dono, 11/11: "deixe tudo igual"): o painel aparece com qualquer casa, mesmo sem anúncio em Automático
+  const temAlgo = contas.length > 0;
   el.hidden = !temAlgo;
   if (!temAlgo) { el.innerHTML = ""; return; }
   const blocoConta = ([conta, d]) => {
@@ -1213,7 +1214,7 @@ function desenharPainelEstoque() {
   const loteTxt = !lote ? "" : lote.em_dia
     ? `<div class="muted">Apollo relido a cada minuto, todos os ${Number(lote.codigos || 0)} código(s) de uma vez (último ${quando(lote.ok_em)}).</div>`
     : `<div class="nk-aviso">Leitura em lote do Apollo fora do ar${lote.erro ? ": " + esc(lote.erro) : ""}. Enquanto isso, o rodízio relê 3 códigos por minuto.</div>`;
-  el.innerHTML = `<div class="nk-painel-tit"><div><h2>Estoque automático</h2><p>Anúncios do ML controlados pelo Noromak em Automático: Apollo da filial menos o vendido e ainda não baixado. Sem leitura do Apollo nada é enviado (nunca zero). O modo vale para a conta inteira; anúncio em Manual nunca é tocado.</p>${loteTxt}</div></div>
+  el.innerHTML = `<div class="nk-painel-tit"><div><h2>Estoque automático</h2><p>Anúncios controlados pelo Noromak em Automático: Apollo da filial menos o vendido e ainda não baixado. Sem leitura do Apollo nada é enviado (nunca zero). O modo vale para a conta inteira; anúncio em Manual nunca é tocado.</p>${loteTxt}</div></div>
     <div class="estq-contas">${contas.map(blocoConta).join("")}</div>
     ${itens.length ? `<details class="rem bloco"><summary>O que mudaria ou está sem número (${itens.length})</summary>
       <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_estoque_mudaria"><thead><tr><th>Conta</th><th>Anúncio</th><th>Produto</th><th class="n">No ML</th><th class="n">Calculado</th><th>Por quê</th></tr></thead>

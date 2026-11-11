@@ -647,6 +647,15 @@ linhas do espelho deles saem de `anuncio_canal_v2023` (o removido pelo ADMIN fic
 (`tiktok_catalogo_rodar`); thread que não sobe solta a trava e o andamento. **O servidor** (`tiktok_fonte_definir`) recusa passar
 para a API com a etiqueta automática ligada (vale também para o cartão de Integrações). A tela não mostra "0" quando o número não
 veio e para de consultar depois de 12 falhas seguidas ou 15 min.
+**V20.57 — Bauru igual a Araçatuba** (dono, 11/11, com prints: Bauru mostrava os 91 do TikTok "sem nome · sem ficha" e sem o
+painel de estoque). `_tiktok_anuncios_espelhar` cria a ficha que ainda não existe como o Puxar do ML (`ficha_importar` com
+`nome` = título, origem `anuncio_tiktok`, abaixo do ML e do Admin; kit por `anuncio_ficha_do_sku` → `_ficha_garantir_kit`);
+roda no boot, então as fichas que faltavam nascem na publicação; falha na ficha não impede o espelho. O painel "Estoque automático"
+aparece com qualquer casa, mesmo sem anúncio em Automático. Teste: `TESTES/test_tiktok_ficha_v2057.py`.
+**revisar-antes-de-subir (11/11):** o espelho roda sob o `DB_LOCK`, então **não lê o Precificador** (`_separacao_codigos_conhecidos`
+pega o `_PRECIFICADOR_CACHE_LOCK` e relê o banco: ordem de travas invertida = sistema travado); o kit vem só do Cadastro de Kits e o
+"A/B" sem o Precificador. SKU cortado (V20.08) sem vínculo à mão não ganha ficha. O nome é gravado antes do kit (falha não deixa
+ficha kit vazia).
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

@@ -134,7 +134,7 @@ memoria_limitar_arenas()
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.56-TIKTOK-NOS-ANUNCIOS"
+APP_VERSION = "20.57-BAURU-IGUAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -9828,6 +9828,10 @@ def _tiktok_anuncios_espelhar() -> int:
         "SELECT * FROM anuncio_canal_v2023 WHERE canal=? AND conta=?", (TIKTOK_ANUNCIO_CANAL, TIKTOK_CASA))}
     n = 0
     agora = now_iso()
+    # V20.57 (dono, 11/11: "Araçatuba um padrão e Bauru outro"): a ficha nasce como no Puxar do ML (nome = título,
+    # origem anuncio_tiktok, abaixo do ML e do Admin; kit pelo mesmo critério). Só para ficha que ainda não existe.
+    fichas = {str(x[0]) for x in DB.execute("SELECT codigo FROM anuncio_ficha_v2023").fetchall()}
+    kit_ctx: dict[str, Any] = {}
     for r in DB.execute("SELECT * FROM tiktok_sku_v1964").fetchall():
         sku_id = str(r["sku_id"])
         sku = vinculos.get(sku_id) or str(r["seller_sku"] or "")
@@ -9836,6 +9840,24 @@ def _tiktok_anuncios_espelhar() -> int:
         atual = atuais.get(sku_id)
         if atual is not None and str(atual["removido_em"] or ""):
             continue  # removido pelo ADMIN: não é atualizado nem recriado
+        # revisão V20.57: SKU cortado no limite do TikTok (V20.08) sem vínculo à mão não ganha ficha (o fim pode ter
+        # perdido uma peça); o vínculo à mão cria a ficha certa na volta seguinte.
+        cortado = not vinculos.get(sku_id) and len(str(r["seller_sku"] or "")) >= TIKTOK_SKU_LIMITE
+        if ficha and ficha not in fichas and str(r["titulo"] or "").strip() and not cortado:
+            try:
+                if not kit_ctx:
+                    # revisão V20.57 (ALTO): só o Cadastro de Kits (relê o banco, mesmo RLock). O Precificador
+                    # (_separacao_codigos_conhecidos) pega outra trava e relê o banco: lido aqui, sob o DB_LOCK, podia
+                    # travar o sistema inteiro (ordem de travas invertida). "A/B" sem o Precificador = um de cada.
+                    kit_ctx["catalogo"] = _load_kit_catalog()
+                _, tipo = anuncio_ficha_do_sku(sku, kit_ctx["catalogo"], set())
+                # revisão: o nome primeiro — falha aqui não deixa uma ficha kit vazia que nunca recebe o nome
+                ficha_importar(ficha, {"nome": str(r["titulo"]).strip()[:300]}, "anuncio_tiktok", commit=False)
+                if tipo == "kit":
+                    _ficha_garantir_kit(sku, "importacao:anuncio_tiktok", commit=False)
+                fichas.add(ficha)
+            except Exception as exc:  # a ficha é conveniência: falhar aqui não impede o espelho
+                print(f"Aviso: ficha do TikTok {ficha} não criada: {exc}", file=sys.stderr)
         if atual is not None and (str(atual["ficha_codigo"] or ""), str(atual["sku_anuncio"] or ""),
                                   str(atual["controle"] or ""), str(atual["status"] or ""),
                                   str(atual["user_product_id"] or "")) == (
