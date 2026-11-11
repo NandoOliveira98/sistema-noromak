@@ -1116,6 +1116,10 @@ sobrescrito; até 50) e a prova compara o `created_at` com **todos** os envios d
 não mexem no `enviado_em` (o prazo recomeça pelo `etapa_em`, `_magalu_passou_envio`); envio recusado (4xx, 429, 423, trace com erro)
 sai do histórico. Migração no boot: a coluna nova é preenchida pelo `audit_log` (`anuncios.magalu_publicar` "aguardando" sem mensagem
 ou com "Sem resposta"/"Falha depois do envio").
+**V20.55 — 409 "already exists" no estoque** (11/11, TUNAP109): a Magalu levou 7 min para mostrar o 24 aceito às 13:40 e o
+Automático reenviava o mesmo número; cada reenvio voltava 409 "Stock cannot be saved because it already exists" e na 3ª vez
+o anúncio parava. `_magalu_estoque_enviar` não grava quando a Magalu já mostra o número, e o 409 com "already exists" conta
+como "aguardando a Magalu" (3 seguidas = erro), não como recusa. Teste: `test_v2055_*` em `TESTES/test_anuncios_magalu_v2034.py`.
 
 **V20.26 — fase 3: controle de estoque dos anúncios do ML** (decisões do dono 05/11; plano
 `docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md`). **Exceção à regra "o Noromak nunca grava estoque": o Noromak grava

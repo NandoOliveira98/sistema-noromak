@@ -731,6 +731,33 @@ class MagaluEstoque(EstoqueBase):
         self.assertEqual(r["resultado"], "erro", "sem laço calado")
         self.assertIn("3 vezes", r["erro"])
 
+    def test_v2055_ja_mostra_o_numero_nao_grava(self):
+        """Caso real 11/11 (TUNAP109): a Magalu já mostrava 24 e o reenvio do mesmo número voltava 409."""
+        self.inserir_magalu(estoque=21)
+        self.mg.estoque["P1"] = 8
+        r = S.anuncio_estoque_manual("magalu", "P1", 8, "luis")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.mg.escritas("/stocks/"), [], "mesmo número: nada enviado")
+
+    def test_v2055_409_ja_existe_e_gravacao_em_andamento(self):
+        self.inserir_magalu()
+        self.mg.estoque["P1"] = 5
+        S._MAGALU_ESTOQUE_SEM_MOSTRAR.clear()
+        msg = "Stock cannot be saved because it already exists for the sku {sku}."
+        self.mg.estoque_erro = S.MagaluRecusou("Magalu HTTP 409: " + msg, msg, 409)
+        r = S.anuncio_estoque_manual("magalu", "P1", 8, "luis")
+        self.assertEqual((r["ok"], r["resultado"]), (False, "ignorado"), "409 'já existe' = a Magalu ainda processa")
+        self.mg.estoque["P1"] = 8  # a Magalu terminou a gravação anterior
+        r = S.anuncio_estoque_manual("magalu", "P1", 8, "luis")
+        self.assertTrue(r["ok"], r)
+
+    def test_v2055_outro_409_continua_erro(self):
+        self.inserir_magalu()
+        self.mg.estoque["P1"] = 5
+        self.mg.estoque_erro = S.MagaluRecusou("Magalu HTTP 409: conflito qualquer", "conflito qualquer", 409)
+        r = S.anuncio_estoque_manual("magalu", "P1", 8, "luis")
+        self.assertEqual(r["resultado"], "erro")
+
     def test_automatico_mesmo_disponivel_dos_outros_canais(self):
         self.inserir_magalu(modo="automatico", estoque=3)
         self.mg.estoque["P1"] = 3

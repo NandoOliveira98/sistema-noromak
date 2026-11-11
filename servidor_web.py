@@ -134,7 +134,7 @@ memoria_limitar_arenas()
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.54-PORTA-VEZ"
+APP_VERSION = "20.55-MAGALU-ESTOQUE-409"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -40031,6 +40031,11 @@ def _magalu_estoque_enviar(sku: str, qtd: int, criar: bool = False) -> dict[str,
         out["erro"] = ("o SKU tem estoque em mais de um centro de distribuição na Magalu (" + ", ".join(antes["branches"])
                        + "): ajuste na Magalu, o Noromak não escolhe")
         return out
+    if antes["estoque"] is not None and antes["estoque"] == int(qtd):
+        # V20.55 (caso real 11/11, TUNAP109): a Magalu ja mostra o numero; reenviar o mesmo voltava 409 "already exists"
+        # e na 3a vez o Automatico parava. Nada a enviar (quem chama rele e ve o numero).
+        out.update(aceito=True, ja_tinha=True, metodo="stocks (já estava)")
+        return out
     corpo: dict[str, Any] = {"channel": {"id": MAGALU_CANAL_ID}, "quantity": int(qtd), "type": "AVAILABLE"}
     if antes["branches"]:
         corpo["branch"] = {"id": antes["branches"][0]}
@@ -40043,7 +40048,12 @@ def _magalu_estoque_enviar(sku: str, qtd: int, criar: bool = False) -> dict[str,
         out["aceito"] = True
     except MagaluRecusou as exc:
         _anuncio_amostra(f"magalu_estoque_{metodo.lower()} [erro]", {"erro": str(exc), "corpo": exc.corpo})
-        out["erro"] = f"a Magalu recusou: {exc}"
+        if exc.status == 409 and "already exists" in str(exc).lower():
+            # V20.55: 409 "already exists" = a gravacao anterior ainda esta sendo processada (11/11: o 202 das 13:40 so
+            # apareceu as 13:47). Conta como "aguardando a Magalu" (3 seguidas = erro), nao como recusa.
+            out["pendente"] = f"a Magalu ainda processa a gravação anterior ({exc})"
+        else:
+            out["erro"] = f"a Magalu recusou: {exc}"
     except MagaluSemResposta as exc:
         out["sem_resposta"] = f"sem resposta da Magalu ({exc})"
     return out
@@ -40079,7 +40089,7 @@ def _magalu_estoque_gravar_api(sku: str, qtd: int, ficha_codigo: str = "") -> di
             res.update(ok=True, erro="")
             _MAGALU_ESTOQUE_SEM_MOSTRAR.pop(sku, None)
             return res
-    if envio.get("aceito") or envio.get("sem_resposta"):
+    if envio.get("aceito") or envio.get("sem_resposta") or envio.get("pendente"):
         n = _MAGALU_ESTOQUE_SEM_MOSTRAR.get(sku, 0) + 1
         _MAGALU_ESTOQUE_SEM_MOSTRAR[sku] = n
         if n >= MAGALU_ESTOQUE_SEM_MOSTRAR_MAX:  # 2a revisao: sem laco calado - na 3a vez seguida conta como erro
