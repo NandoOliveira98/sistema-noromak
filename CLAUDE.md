@@ -1126,6 +1126,9 @@ continua recusa — também no estoque inicial do Publicar (`criar=True`), que a
 "recusou com 409", não "aceitou (202)". Junto, achados da V20.54: a leitura segurada pela vez do painel (`PortaErro.segurada`)
 não conta para o "Apollo sem resposta há 30 min" do Faturamento; no atendimento do TikTok o cadastro com Apollo ocupado fica
 `aguardando` (2 min, era `erro` e 10 min); no cadastro do Full para a volta sem gastar tentativa nem vencer a janela de 1 dia.
+2ª revisão (só das correções): o Apollo ocupado no TikTok **para a volta** (`apollo_ocupado`, sem passar pelos outros pedidos nem
+pelo comprometer: cada um seguraria a porta); a volta segurada não começa os 30 min do Faturamento, mas a atenção de falha real
+que já passou deles continua (não pula de aba); rótulo "Apollo ocupado" no cartão do TikTok (Admin).
 
 **V20.26 — fase 3: controle de estoque dos anúncios do ML** (decisões do dono 05/11; plano
 `docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md`). **Exceção à regra "o Noromak nunca grava estoque": o Noromak grava

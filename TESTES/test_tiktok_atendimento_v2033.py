@@ -156,6 +156,20 @@ class Rotina(Base):
             prox = S.DB.execute("SELECT proxima_epoch FROM tiktok_atendimento_v2033 WHERE pedido='580099'").fetchone()[0]
         self.assertLess(prox - t0, 300, "Apollo ocupado tenta de novo em 2 min, não em 10")
 
+    def test_v2055_apollo_ocupado_para_a_volta(self):
+        """2ª revisão: com o Apollo ocupado a rodada não passa pelos outros pedidos (cada um seguraria a porta)."""
+        self.receber(_sc("580097"), _sc("580098"))
+
+        class Segura(Porta):
+            def __call__(self, rota, corpo, escrita=False):
+                if rota == "cliente/buscar":
+                    self.chamadas.append((rota, dict(corpo)))
+                    raise S.PortaErro("Apollo reservado para o painel neste minuto.", passageiro=True)
+                return super().__call__(rota, corpo, escrita)
+        porta = Segura()
+        self.rodar(porta)
+        self.assertEqual(porta.rotas().count("cliente/buscar"), 1, porta.rotas())
+
     def test_desligado_nao_chama_o_apollo(self):
         S._tiktok_config_gravar("atendimento_auto", "0", "teste")
         self.receber(_sc("580002"))

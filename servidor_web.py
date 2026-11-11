@@ -12050,7 +12050,7 @@ def tiktok_atendimento_pedido(pedido: str) -> dict[str, Any]:
                 # erro: "aguardando" e de novo em 2 min.
                 detalhe = "Apollo ocupado no cadastro do cliente: " + str(r.get("error") or "?")
                 _tiktok_atendimento_registrar(pedido, "aguardando", detalhe, espera="passageiro")
-                return {"ok": False, "situacao": "aguardando", "motivo": detalhe}
+                return {"ok": False, "situacao": "aguardando", "motivo": detalhe, "apollo_ocupado": True}
             situacao = "incerto" if r.get("situacao") == "incerto" else "erro"
             detalhe = "Cadastro do cliente: " + str(r.get("error") or r.get("situacao") or "?")
             _tiktok_atendimento_registrar(pedido, situacao, detalhe, espera="cadastro")
@@ -12137,6 +12137,7 @@ def tiktok_atendimento_rodada(forcar: bool = False) -> dict[str, Any]:
     ligado = tiktok_atendimento_ligado()
     feitos = 0
     resultados = []
+    apollo_ocupado = False
     if ligado:
         try:
             _tiktok_marcar_fora_da_fila()
@@ -12151,12 +12152,18 @@ def tiktok_atendimento_rodada(forcar: bool = False) -> dict[str, Any]:
         except Exception as exc:
             _tiktok_atendimento_registrar(numero, "erro", str(exc)[:300], espera="erro")
             r = {"ok": False, "situacao": "erro", "motivo": str(exc)}
+        if r.get("apollo_ocupado"):
+            # 2a revisao (11/11): Apollo ocupado para a volta (cada pedido seguraria a porta de novo); o comprometer
+            # abaixo também espera a próxima volta.
+            resultados.append({"pedido": numero, **r})
+            apollo_ocupado = True
+            break
         if r.get("situacao") != "aguardando":
             feitos += 1
             resultados.append({"pedido": numero, **r})
     # V20.43: atendimento criado e ainda sem as peças comprometidas — só o comprometer, na vaga que sobrou
     # (a porta aceita 6 escritas/min; um pedido por volta).
-    for numero in _tiktok_comp_candidatos():
+    for numero in ([] if apollo_ocupado else _tiktok_comp_candidatos()):
         if feitos >= TIKTOK_ATEND_POR_RODADA and not forcar:
             break
         try:
@@ -23220,7 +23227,8 @@ def faturamento_conferir(pedido: str, marketplace: str = "", agora: float | None
             # nem completa os 30 min de atenção (o que já contava fica guardado).
             segurado = bool(res.get("segurado"))
             desde = desde or (0.0 if segurado else agora)
-            if desde and not segurado and agora - desde >= FATURAMENTO_APOLLO_ATENCAO_S:
+            # 2a revisao: a volta segurada não começa a contagem, mas a que já passou dos 30 min continua em atenção
+            if desde and agora - desde >= FATURAMENTO_APOLLO_ATENCAO_S:
                 res = {**res, "situacao": "atencao",
                        "motivo": f"Apollo sem resposta há {int((agora - desde) // 60)} min ({d.get('aviso') or 'sem resposta'}). "
                                  f"Confira a porta do Apollo; o pedido continua sendo conferido."}

@@ -9996,7 +9996,7 @@ async function carregarAtendimentoTiktokAdmin(){
     const d=await mlApiAdmin("/expedicao/api/integracoes/tiktok/atendimento");
     info.textContent=d.ligado?"🟢 Automático — cadastra o cliente e cria o atendimento (revenda de Bauru)":"⚪ Desligado";
     if(bt){bt.textContent=d.ligado?"Desligar atendimento automático":"Ligar atendimento automático";bt.dataset.ligado=d.ligado?"1":"0";}
-    const nomes={criado:"✅ criado",ja_existia:"✅ já existia",erro:"❌ erro",incerto:"⚠ sem resposta (tenta de novo)",revisar:"⚠ conferir",anterior:"— atendido à mão",fora_da_fila:"⚠ saiu da fila sem atendimento"};
+    const nomes={criado:"✅ criado",ja_existia:"✅ já existia",erro:"❌ erro",incerto:"⚠ sem resposta (tenta de novo)",revisar:"⚠ conferir",anterior:"— atendido à mão",fora_da_fila:"⚠ saiu da fila sem atendimento",aguardando:"⏳ Apollo ocupado (tenta de novo)"};
     const linhas=(d.pedidos||[]).slice(0,8);
     if(box)box.innerHTML=linhas.length?'<div class="integracao-nota"><b>Últimos pedidos</b></div>'+linhas.map(p=>
       `<div class="integracao-nota">${esc(p.pedido)} · ${esc(nomes[p.situacao]||p.situacao)}${p.atendimento?" · atend. "+esc(p.atendimento):""}${p.detalhe?" — "+esc(p.detalhe):""}</div>`).join(""):"";
