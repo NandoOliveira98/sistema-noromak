@@ -22305,10 +22305,24 @@ def exp_endereco_entrega(pedido: str) -> dict[str, Any]:
         return _exp_endereco_shopee(str(order_number(row) or pedido))
     if marketplace != "Mercado Livre":
         return {"endereco": None, "falta": f"endereço automático ainda não existe para {marketplace or 'este marketplace'}"}
+    # V20.50 (dono, 11/11, ML 2000019449560734): só a 1ª linha era olhada; sem o envio nela o cadastro do cliente novo
+    # parava em "pedido sem número de envio do ML". Agora: o envio de qualquer linha do pedido e, sem nenhum, o da
+    # venda lida no ML (/orders/{venda} → shipping.id), com a conta do pedido. A fila não é alterada aqui.
+    com_envio = next((r for r in linhas if re.sub(r"\D", "", str(r.get("ShipmentIdMercadoLivre") or ""))), None)
+    row = com_envio or row
     envio = re.sub(r"\D", "", str(row.get("ShipmentIdMercadoLivre") or ""))
-    if not envio:
-        return {"endereco": None, "falta": "pedido sem número de envio do ML"}
     with ml_na_casa(ml_casa_da_linha(row)):
+        if not envio:
+            venda = next((re.sub(r"\D", "", str(r.get("VendaMercadoLivre") or "")) for r in linhas
+                          if re.sub(r"\D", "", str(r.get("VendaMercadoLivre") or ""))), "") or re.sub(r"\D", "", str(pedido))
+            try:
+                ordem = ml_api_get(f"/orders/{venda}") if venda else None
+            except Exception:
+                ordem = None
+            envio_ml = (ordem or {}).get("shipping") if isinstance(ordem, dict) else None
+            envio = re.sub(r"\D", "", str((envio_ml or {}).get("id") or "")) if isinstance(envio_ml, dict) else ""
+        if not envio:
+            return {"endereco": None, "falta": "pedido sem número de envio do ML"}
         ship = ml_api_get(f"/shipments/{envio}")
     ship = ship if isinstance(ship, dict) else {}
     a = ship.get("receiver_address") if isinstance(ship.get("receiver_address"), dict) else {}

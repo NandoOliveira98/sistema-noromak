@@ -78,5 +78,46 @@ class RevisaoV2050(unittest.TestCase):
                 self.assertEqual(S._exp_numero_ou_sn(n), n)
 
 
+class EnvioDoPedido(unittest.TestCase):
+    """Caso real 11/11 (ML 2000019449560734, envio 48479376661): "Cliente novo precisa do endereço inteiro: pedido
+    sem número de envio do ML". O endereço só olhava a 1ª linha do pedido; sem o envio nela, o cadastro parava."""
+
+    def setUp(self):
+        reiniciar_banco()
+
+    def test_envio_de_outra_linha_do_pedido(self):
+        from base import gravar_como_admin, linha
+        gravar_como_admin([linha(PEDIDO, "0893764272", Marketplace="MERCADO LIVRE"),
+                           linha(PEDIDO, "0893480130", Marketplace="MERCADO LIVRE", ShipmentIdMercadoLivre="48479376661")])
+        with mock.patch.object(S, "ml_api_get", return_value=_envio("480")) as ml:
+            r = S.exp_endereco_entrega(PEDIDO)
+        self.assertEqual(r["endereco"]["numero"], "480", r)
+        ml.assert_called_once_with("/shipments/48479376661")
+
+    def test_sem_envio_na_fila_le_a_venda_no_ml(self):
+        from base import gravar_como_admin, linha
+        gravar_como_admin([linha(PEDIDO, "0893480130", Marketplace="MERCADO LIVRE")])
+        chamadas = []
+
+        def ml_get(caminho, *a, **k):
+            chamadas.append(caminho)
+            if caminho.startswith("/orders/"):
+                return {"id": int(PEDIDO), "shipping": {"id": 48479376661}}
+            return _envio("480")
+
+        with mock.patch.object(S, "ml_api_get", side_effect=ml_get):
+            r = S.exp_endereco_entrega(PEDIDO)
+        self.assertEqual(r["endereco"]["rua"], "BR 101 KM 26", r)
+        self.assertEqual(chamadas, [f"/orders/{PEDIDO}", "/shipments/48479376661"])
+
+    def test_venda_sem_envio_no_ml_continua_avisando(self):
+        from base import gravar_como_admin, linha
+        gravar_como_admin([linha(PEDIDO, "0893480130", Marketplace="MERCADO LIVRE")])
+        with mock.patch.object(S, "ml_api_get", return_value={"id": int(PEDIDO), "shipping": {}}):
+            r = S.exp_endereco_entrega(PEDIDO)
+        self.assertIsNone(r["endereco"])
+        self.assertIn("sem número de envio", r["falta"])
+
+
 if __name__ == "__main__":
     unittest.main()
