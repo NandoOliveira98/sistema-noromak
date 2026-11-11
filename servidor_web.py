@@ -133,7 +133,7 @@ memoria_limitar_arenas()
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.51-ATEND-MANUAL"
+APP_VERSION = "20.52-ATEND-INTERRUPTOR"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -12277,7 +12277,41 @@ def ensure_mkt_atendimento_schema() -> None:
                    "confira e tente de novo.' WHERE situacao='criando'")
         DB.execute("UPDATE mkt_atendimento_v2047 SET comprometido='erro', comp_detalhe='O servidor reiniciou no meio: "
                    "tente de novo.' WHERE comprometido='comprometendo'")
+        # V20.52 (dono, 11/11): liga/desliga do botão por marketplace, no Noromak (sem linha = ligado).
+        DB.execute(
+            """CREATE TABLE IF NOT EXISTS mkt_atendimento_config_v2052 (
+                   marketplace TEXT PRIMARY KEY,
+                   ligado INTEGER NOT NULL DEFAULT 1,
+                   em TEXT NOT NULL DEFAULT '',
+                   por TEXT NOT NULL DEFAULT ''
+               )""")
         DB.commit()
+
+
+def mkt_atendimento_config() -> dict[str, dict[str, Any]]:
+    """V20.52 (dono, 11/11: "essa porta de ligação tem que ser minha, eu controlo o e-commerce"): o NoromakWeb deixa
+    ML/Shopee abertos uma vez; quem decide no dia a dia se o botão cria atendimento é este interruptor (perfil Admin)."""
+    with DB_LOCK:
+        rows = {r["marketplace"]: dict(r) for r in DB.execute("SELECT * FROM mkt_atendimento_config_v2052")}
+    saida: dict[str, dict[str, Any]] = {}
+    for mp in MKT_ATEND_CANAIS:
+        r = rows.get(mp) or {}
+        saida[mp] = {"ligado": bool(r.get("ligado", 1)), "em": str(r.get("em") or ""), "por": str(r.get("por") or "")}
+    return saida
+
+
+def mkt_atendimento_ligar(marketplace: str, ligado: bool, usuario: str) -> dict[str, Any]:
+    mp = str(marketplace or "").strip()
+    if mp not in MKT_ATEND_CANAIS:
+        raise ValueError("Marketplace inválido: use Mercado Livre ou Shopee.")
+    with DB_LOCK:
+        DB.execute(
+            """INSERT INTO mkt_atendimento_config_v2052(marketplace, ligado, em, por) VALUES(?,?,?,?)
+               ON CONFLICT(marketplace) DO UPDATE SET ligado=excluded.ligado, em=excluded.em, por=excluded.por""",
+            (mp, 1 if ligado else 0, now_iso(), str(usuario or "")[:80]))
+        DB.commit()
+    audit(usuario, "expedicao.mkt_atendimento_config", f"{mp}|{'ligado' if ligado else 'desligado'}")
+    return {"ok": True, "config": mkt_atendimento_config()}
 
 
 def mkt_atendimento_do_pedido(pedido: str) -> dict[str, Any] | None:
@@ -12376,6 +12410,11 @@ def mkt_atendimento_estado(pedido: str, agora: float | None = None) -> dict[str,
         return {**saida, "motivo": str(atual.get("detalhe") or "já existe atendimento no Apollo")}
     if ja_atendido:
         return {**saida, "motivo": "o pedido já tem romaneio/caixa"}
+    # V20.52: desligado só barra o CRIAR (comprometer o que já foi criado continua valendo, acima).
+    if not mkt_atendimento_config()[mp]["ligado"]:
+        return {**saida, "desligado": True,
+                "motivo": f"criar atendimento do {MKT_ATEND_CANAIS[mp][3]} pelo painel está desligado "
+                          f"(Admin › Integrações)"}
     conhecido = _exp_cliente_do_pedido(pedido)
     if not conhecido["documento"] or not conhecido["nome_fiscal"]:
         return {**saida, "motivo": "sem nome/CPF da nota"}
@@ -51183,6 +51222,13 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.send_json({"ok": True, **cadastro_auto_config()})
             return
+        if path == "/api/expedicao-apollo/atendimento-mkt":
+            # V20.52: liga/desliga do botão de atendimento de ML/Shopee (quem tem o módulo admin vê).
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            self.send_json({"ok": True, "config": mkt_atendimento_config()})
+            return
         if path == "/api/expedicao-apollo/romaneio":
             # V19.30: botão do romaneio pela porta da Expedição (Admin e Supervisor).
             ctx = self.auth(admin_only=True)
@@ -51714,6 +51760,18 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             body = self.read_json()
             self.send_json(cadastro_auto_ligar(body.get("ligado") is True, str(ctx.get("username") or "")))
+            return
+        if path == "/api/expedicao-apollo/atendimento-mkt":
+            # V20.52: ligar/desligar o botão de atendimento de ML/Shopee — só o perfil Admin.
+            ctx = self.auth_full_admin()
+            if ctx is None:
+                return
+            body = self.read_json()
+            try:
+                self.send_json(mkt_atendimento_ligar(str(body.get("marketplace") or ""), body.get("ligado") is True,
+                                                     str(ctx.get("username") or "")))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
             return
         # V19.30: romaneio, caixa e cadastro pela porta da Expedição (Admin e Supervisor).
         if path in ("/api/expedicao-apollo/romaneio/soltar", "/api/expedicao-apollo/caixa/previa",

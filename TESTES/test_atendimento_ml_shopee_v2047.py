@@ -574,5 +574,81 @@ class CepDeOutraCidade(Base):
         self.assertEqual(porta.rotas().count("cliente/atualizar"), 1)
 
 
+class Interruptor(Base):
+    """V20.52 (dono, 11/11: "essa porta de ligação tem que ser minha"): liga/desliga por marketplace no Noromak
+    (Admin › Integrações, só o perfil Admin). Padrão = ligado (como já funcionava)."""
+
+    def test_padrao_ligado_nos_dois(self):
+        c = S.mkt_atendimento_config()
+        self.assertTrue(c["Mercado Livre"]["ligado"])
+        self.assertTrue(c["Shopee"]["ligado"])
+
+    def test_desligado_o_botao_some_e_nada_vai_a_porta(self):
+        self.pedido()
+        S.mkt_atendimento_ligar("Mercado Livre", False, "admin")
+        e = S.mkt_atendimento_estado(PEDIDO)
+        self.assertFalse(e["disponivel"])
+        self.assertIn("desligado", e["motivo"])
+        porta = Porta()
+        with self.assertRaises(ValueError):
+            self.criar(porta)
+        self.assertEqual(porta.rotas(), [])
+
+    def test_desligar_um_nao_desliga_o_outro(self):
+        S.mkt_atendimento_ligar("Shopee", False, "admin")
+        self.pedido()
+        self.assertTrue(S.mkt_atendimento_estado(PEDIDO)["disponivel"])
+        c = S.mkt_atendimento_config()
+        self.assertTrue(c["Mercado Livre"]["ligado"])
+        self.assertFalse(c["Shopee"]["ligado"])
+
+    def test_desligado_ainda_compromete_o_que_ja_foi_criado(self):
+        self.pedido()
+        S._mkt_atend_gravar(PEDIDO, marketplace="Mercado Livre", situacao="criado", atendimento="795001",
+                            comprometido="erro", cliente="99001")
+        S.mkt_atendimento_ligar("Mercado Livre", False, "admin")
+        e = S.mkt_atendimento_estado(PEDIDO)
+        self.assertTrue(e["disponivel"])
+        self.assertEqual(e["acao"], "comprometer")
+
+    def test_religar_volta_o_botao(self):
+        self.pedido()
+        S.mkt_atendimento_ligar("Mercado Livre", False, "admin")
+        S.mkt_atendimento_ligar("Mercado Livre", True, "admin")
+        self.assertTrue(S.mkt_atendimento_estado(PEDIDO)["disponivel"])
+
+    def test_marketplace_desconhecido_recusado(self):
+        with self.assertRaises(ValueError):
+            S.mkt_atendimento_ligar("Magalu", False, "admin")
+
+
+class InterruptorRotas(unittest.TestCase):
+    def setUp(self):
+        reiniciar_banco()
+        from base import iniciar_servidor
+        self.url = iniciar_servidor()
+
+    def test_admin_liga_e_desliga(self):
+        from base import Cliente
+        admin = Cliente(self.url)
+        admin.entrar()
+        status, d = admin.pedir("GET", "/api/expedicao-apollo/atendimento-mkt")
+        self.assertEqual((status, d["config"]["Shopee"]["ligado"]), (200, True))
+        status, d = admin.pedir("POST", "/api/expedicao-apollo/atendimento-mkt", {"marketplace": "Shopee", "ligado": False})
+        self.assertEqual(status, 200, d)
+        self.assertFalse(d["config"]["Shopee"]["ligado"])
+        from base import USUARIO_ADMIN
+        self.assertEqual(d["config"]["Shopee"]["por"], USUARIO_ADMIN)
+        status, _ = admin.pedir("POST", "/api/expedicao-apollo/atendimento-mkt", {"marketplace": "Magalu", "ligado": False})
+        self.assertEqual(status, 400)
+
+    def test_sem_login_nao_muda(self):
+        from base import Cliente
+        status, _ = Cliente(self.url).pedir("POST", "/api/expedicao-apollo/atendimento-mkt",
+                                            {"marketplace": "Shopee", "ligado": False})
+        self.assertEqual(status, 401)
+        self.assertTrue(S.mkt_atendimento_config()["Shopee"]["ligado"])
+
+
 if __name__ == "__main__":
     unittest.main()

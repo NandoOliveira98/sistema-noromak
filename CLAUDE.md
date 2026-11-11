@@ -1956,6 +1956,12 @@ vez com "RUA " na frente (`_EXP_TIPO_RUA_RE`) e avisa; junto com a cidade do CEP
 ("clique de gente no painel"), chave `ML-`/`SHOPEE-<venda>` e a origem ligada no NoromakWeb (Gestão › Configurações › Apollo /
 LinxDMS › Parâmetros da concessionária › Marketplaces que abrem atendimento pela Expedição); senão `origem_recusada`.
 `mkt_atendimento_pedido` (só o botão chama) manda `manual: true`; o TikTok não muda.
+**V20.52 — o liga/desliga é do Noromak** (dono, 11/11: "essa porta de ligação tem que ser minha, eu controlo o e-commerce"; o
+dono só acessa o /expedicao). O Guilherme deixa as duas origens ligadas uma vez; no dia a dia manda o interruptor
+`mkt_atendimento_config_v2052` (por marketplace, sem linha = ligado), cartão "Atendimento de ML e Shopee pelo painel" em Admin ›
+Integrações, `GET/POST /api/expedicao-apollo/atendimento-mkt` (ver = módulo admin, mudar = perfil Admin, audit
+`expedicao.mkt_atendimento_config`). Desligado, `mkt_atendimento_estado` não oferece o criar (motivo "desligado", nada vai à porta);
+comprometer atendimento já criado continua. Teste: classes `Interruptor`/`InterruptorRotas`.
 **Cidade do CEP** (pedido 2000019436248196): o Apollo recusa "O CEP é de CRISTALINA, não de CAMPOS LINDOS" (o ML manda o distrito);
 `_exp_porta_endereco` tenta uma vez de novo com a cidade que o Apollo indica (criar e atualizar, também no Full) e avisa a troca.
 

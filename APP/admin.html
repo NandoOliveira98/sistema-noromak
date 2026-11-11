@@ -2154,6 +2154,17 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
           </div>
           <div class="integracao-nota">Só entram pedidos cujo nome/CPF da NF-e chegou depois de ligar. Só o perfil Admin liga e desliga.</div>
         </div>
+        <!-- V20.52: liga/desliga do botão "Criar cliente e atendimento no Apollo" por marketplace (o controle é do e-commerce). -->
+        <div class="integracao-card">
+          <h3><i class=nk-i-file></i> Atendimento de ML e Shopee pelo painel</h3>
+          <div id="atendMktStatus" class="integracao-status off">⚪ Carregando...</div>
+          <div class="integracao-dados">
+            <b>O que faz</b><span>Libera o botão "Criar cliente e atendimento no Apollo" do painel do pedido quando a venda não caiu no Apollo</span>
+            <b>Mercado Livre</b><span><span id="atendMktML">—</span> <button type="button" id="btnAtendMktML" class="btn-secundario" onclick="alternarAtendMktAdmin('Mercado Livre')" disabled>…</button></span>
+            <b>Shopee</b><span><span id="atendMktSP">—</span> <button type="button" id="btnAtendMktSP" class="btn-secundario" onclick="alternarAtendMktAdmin('Shopee')" disabled>…</button></span>
+          </div>
+          <div class="integracao-nota">Desligado, o botão some e nada é enviado ao Apollo (comprometer um atendimento já criado continua valendo). Só o perfil Admin liga e desliga.</div>
+        </div>
         <!-- V19.45: cadastro dos clientes do Full pela nota que o ML emitiu. -->
         <div class="integracao-card">
           <h3><i class=nk-i-file></i> Cadastro dos clientes do Full</h3>
@@ -9674,6 +9685,30 @@ async function alternarCadastroAutoAdmin(){
   try{await mlApiAdmin("/expedicao/api/expedicao-apollo/cadastro-auto",{method:"POST",body:JSON.stringify({ligado:ligar})});await carregarCadastroAutoAdmin();}
   catch(e){alert("Cadastro automático: "+e.message);}
 }
+/* V20.52 — Atendimento de ML/Shopee pelo painel: liga/desliga por marketplace (só perfil Admin muda). */
+let atendMktV2052={};
+async function carregarAtendMktAdmin(){
+  const badge=document.getElementById("atendMktStatus");if(!badge)return;
+  try{
+    const d=await mlApiAdmin("/expedicao/api/expedicao-apollo/atendimento-mkt");
+    atendMktV2052=d.config||{};
+    const pares=[["Mercado Livre","atendMktML","btnAtendMktML"],["Shopee","atendMktSP","btnAtendMktSP"]];
+    let ligados=0;
+    for(const [mp,idTxt,idBtn] of pares){
+      const c=atendMktV2052[mp]||{};if(c.ligado)ligados++;
+      document.getElementById(idTxt).textContent=(c.ligado?"🟢 Ligado":"⚪ Desligado")+(c.em?" · "+String(c.em).slice(0,16).replace("T"," ")+(c.por?" · "+c.por:""):"");
+      const b=document.getElementById(idBtn);b.textContent=c.ligado?"Desligar":"Ligar";b.className=c.ligado?"btn-perigo":"btn-primario";b.disabled=false;
+    }
+    badge.className="integracao-status "+(ligados?"ok":"off");
+    badge.textContent=ligados===2?"🟢 Ligado nos dois":ligados?"🟡 Ligado em um":"⚪ Desligado";
+  }catch(e){badge.className="integracao-status erro";badge.textContent="🔴 "+e.message;}
+}
+async function alternarAtendMktAdmin(mp){
+  const ligar=!(atendMktV2052[mp]||{}).ligado;
+  if(!await nkConfirmar(ligar?`Ligar o botão de atendimento do ${mp}?\n\nO painel do pedido volta a oferecer "Criar cliente e atendimento no Apollo" quando a venda não caiu no Apollo.`:`Desligar o botão de atendimento do ${mp}?\n\nO painel deixa de criar atendimento desse marketplace.`))return;
+  try{await mlApiAdmin("/expedicao/api/expedicao-apollo/atendimento-mkt",{method:"POST",body:JSON.stringify({marketplace:mp,ligado:ligar})});await carregarAtendMktAdmin();}
+  catch(e){alert("Atendimento pelo painel: "+e.message);}
+}
 /* V19.45 — Cadastro dos clientes do Full: interruptor e pendências. */
 let cadFullLigadoV1945=false;
 async function carregarCadastroFullAdmin(){
@@ -9700,6 +9735,7 @@ async function alternarCadastroFullAdmin(){
 }
 async function carregarIntegracaoLinxAdmin(){
   carregarCadastroAutoAdmin();
+  carregarAtendMktAdmin();
   carregarCadastroFullAdmin();
   const badge=document.getElementById("linxIntegracaoStatus");if(!badge)return;
   const msg=document.getElementById("linxIntegracaoMensagem");
