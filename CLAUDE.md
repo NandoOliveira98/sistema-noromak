@@ -1965,6 +1965,14 @@ comprometer atendimento já criado continua. Teste: classes `Interruptor`/`Inter
 (MERCADOLIVRE/SHOPEE/TIKTOK = usuário 210 do DMS, o mesmo vendedor da integração). Respostas novas da porta (contrato de 10/11):
 `ja_aberto_no_apollo` (ela achou atendimento aberto do mesmo cliente com todas as peças) = `ja_tinha` com o número, nada criado;
 `sem_estoque` (peça sem saldo na revenda) e `apollo_fora` = erro, o clique pode repetir. Teste: classe `RespostasNovasDaPorta`.
+**V20.54 — a vez do painel na porta** (dono, 11/11: "Muitas chamadas ao Apollo neste minuto" nos 3 PCs). A porta aceita 12
+leituras e 6 gravações por minuto **por rota**, e tudo sai deste servidor (os computadores e as rotinas dividem o teto); cada
+painel aberto faz até 6 leituras (situação + abertos + até 4 prévias). `_exp_porta` conta cada chamada por rota e origem
+(`exp_porta_uso`, em `/api/saude/medicao` → `porta_apollo`: painel/rotina no último minuto, total, 429, seguradas). Rotinas
+automáticas rodam em `with exp_porta_rotina():` (Faturamento, cadastro automático, cadastro do Full, atendimento do TikTok; a
+marca passa às tarefas do `_exp_em_paralelo`) e, nas rotas de leitura (`EXP_PORTA_LEITURAS`), usam no máximo
+`EXP_PORTA_ROTINA_LEITURAS` (6) por minuto; passou, ou depois de um 429 na rota (1 min), recebem o PortaErro passageiro de um
+429 sem chamar a porta. Gravação não é segurada. Teste: `TESTES/test_porta_vez_v2054.py`.
 **Cidade do CEP** (pedido 2000019436248196): o Apollo recusa "O CEP é de CRISTALINA, não de CAMPOS LINDOS" (o ML manda o distrito);
 `_exp_porta_endereco` tenta uma vez de novo com a cidade que o Apollo indica (criar e atualizar, também no Full) e avisa a troca.
 

@@ -37,6 +37,7 @@ import urllib.error
 import urllib.request
 import unicodedata
 import zipfile
+from collections import deque  # V20.54: janela de 1 min das chamadas à porta do Apollo
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone, timedelta
 from http.cookies import SimpleCookie
@@ -133,7 +134,7 @@ memoria_limitar_arenas()
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.53-CONDICAO-ML"
+APP_VERSION = "20.54-PORTA-VEZ"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -12777,7 +12778,8 @@ def tiktok_atendimento_loop(stop_event: threading.Event) -> None:
     stop_event.wait(90)
     while not stop_event.is_set():
         try:
-            tiktok_atendimento_rodada()
+            with exp_porta_rotina():   # V20.54: cede a vez da porta ao painel
+                tiktok_atendimento_rodada()
         except Exception as exc:
             tiktok_log_event_se_mudou("atendimento", "worker", "ERRO", str(exc)[:800])
         stop_event.wait(TIKTOK_ATEND_INTERVALO)
@@ -21740,16 +21742,102 @@ def _exp_corpo_sem_acento(rota: str, corpo: Any) -> Any:
     return _exp_texto_sem_acento(corpo) if isinstance(corpo, str) else corpo
 
 
+# V20.54 (dono, 11/11: "Muitas chamadas ao Apollo neste minuto" nos 3 PCs). A porta do NoromakWeb aceita 12 leituras
+# e 6 gravações por minuto POR ROTA, e tudo sai deste servidor: os computadores e as rotinas automáticas dividem o
+# mesmo teto. Cada chamada é contada por rota e origem (painel × rotina, `exp_porta_uso`, na medição) e, nas rotas de
+# LEITURA, a rotina usa no máximo EXP_PORTA_ROTINA_LEITURAS por minuto — o resto fica para quem está no painel. Passou,
+# a rotina recebe o PortaErro passageiro de um 429 (todas já tratam: tentam depois) SEM chamar a porta. Depois de um
+# 429 numa rota, a rotina espera o minuto virar. Gravação não é segurada.
+EXP_PORTA_LEITURAS = frozenset({"cliente/situacao", "cliente/buscar", "atendimentos/abertos", "atendimentos/itens",
+                                "romaneio/previa", "caixa/previa"})
+EXP_PORTA_ROTINA_LEITURAS = 6
+_EXP_PORTA_MARCA = threading.local()
+_EXP_PORTA_USO_LOCK = threading.Lock()
+_EXP_PORTA_USO: dict[str, dict[str, Any]] = {}
+
+
+class exp_porta_rotina:
+    """`with exp_porta_rotina():` — as chamadas à porta feitas aqui são de rotina automática (cedem a vez)."""
+
+    def __enter__(self):
+        self.antes = getattr(_EXP_PORTA_MARCA, "rotina", False)
+        _EXP_PORTA_MARCA.rotina = True
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        _EXP_PORTA_MARCA.rotina = self.antes
+
+
+def _exp_porta_e_rotina() -> bool:
+    return bool(getattr(_EXP_PORTA_MARCA, "rotina", False))
+
+
+def _exp_porta_uso_rota(rota: str) -> dict[str, Any]:
+    u = _EXP_PORTA_USO.get(rota)
+    if u is None:
+        u = _EXP_PORTA_USO[rota] = {"painel": deque(), "rotina": deque(), "total": 0, "recusas_429": 0,
+                                    "seguradas": 0, "bloqueado_ate": 0.0, "ultimo_429": ""}
+    return u
+
+
+def _exp_porta_vez(rota: str) -> None:
+    """Conta a chamada; segura a rotina quando a vez é do painel (só leituras)."""
+    agora = time.monotonic()
+    rotina = _exp_porta_e_rotina()
+    with _EXP_PORTA_USO_LOCK:
+        u = _exp_porta_uso_rota(rota)
+        for fila in (u["painel"], u["rotina"]):
+            while fila and agora - fila[0] > 60:
+                fila.popleft()
+        if rotina and rota in EXP_PORTA_LEITURAS and (
+                u["bloqueado_ate"] > agora or len(u["rotina"]) >= EXP_PORTA_ROTINA_LEITURAS):
+            u["seguradas"] += 1
+            raise PortaErro("Apollo reservado para o painel neste minuto. A rotina tenta de novo depois.", passageiro=True)
+        (u["rotina"] if rotina else u["painel"]).append(agora)
+        u["total"] += 1
+
+
+def _exp_porta_429(rota: str) -> None:
+    with _EXP_PORTA_USO_LOCK:
+        u = _exp_porta_uso_rota(rota)
+        u["recusas_429"] += 1
+        u["bloqueado_ate"] = time.monotonic() + 60
+        u["ultimo_429"] = now_iso()
+
+
+def exp_porta_uso() -> dict[str, Any]:
+    agora = time.monotonic()
+    with _EXP_PORTA_USO_LOCK:
+        rotas = {}
+        for rota, u in sorted(_EXP_PORTA_USO.items()):
+            rotas[rota] = {"painel_1min": sum(1 for t in u["painel"] if agora - t <= 60),
+                           "rotina_1min": sum(1 for t in u["rotina"] if agora - t <= 60),
+                           "total": u["total"], "recusas_429": u["recusas_429"], "seguradas": u["seguradas"],
+                           "ultimo_429": u["ultimo_429"], "leitura": rota in EXP_PORTA_LEITURAS}
+    return {"rotina_max_leituras_min": EXP_PORTA_ROTINA_LEITURAS, "rotas": rotas}
+
+
+def exp_porta_uso_zerar() -> None:
+    with _EXP_PORTA_USO_LOCK:
+        _EXP_PORTA_USO.clear()
+
+
 def _exp_porta(rota: str, corpo: dict[str, Any], *, escrita: bool = False) -> dict[str, Any]:
     if not CHAVE_CRM:
         raise PortaErro("CHAVE_CRM não está configurada no servidor.")
     corpo = _exp_corpo_sem_acento(rota, corpo)
+    _exp_porta_vez(rota)   # V20.54
     req = urllib.request.Request(
         f"{EXP_PORTA_BASE}/{rota}", data=json.dumps(corpo).encode("utf-8"), method="POST",
         headers={"X-Chave-Expedicao": CHAVE_CRM, "Content-Type": "application/json",
                  "Accept": "application/json", "User-Agent": f"NoromakExpedicao/{APP_VERSION}"},
     )
-    return _exp_porta_resposta(req, escrita)
+    try:
+        return _exp_porta_resposta(req, escrita)
+    except PortaErro as exc:
+        if exc.status == 429:
+            _exp_porta_429(rota)
+        raise
 
 
 def _exp_porta_get(rota: str, params: dict[str, Any], timeout: float | None = None) -> dict[str, Any]:
@@ -21868,8 +21956,15 @@ def _exp_em_paralelo(tarefas: list[Any]) -> list[Any]:
     """Roda as funções juntas e devolve os resultados na ordem (o erro sobe como antes)."""
     if len(tarefas) <= 1:
         return [t() for t in tarefas]
+    rotina = _exp_porta_e_rotina()   # V20.54: a marca de rotina vale também nas tarefas paralelas
+
+    def rodar(t: Any) -> Any:
+        if not rotina:
+            return t()
+        with exp_porta_rotina():
+            return t()
     with ThreadPoolExecutor(max_workers=len(tarefas)) as ex:
-        futuros = [ex.submit(t) for t in tarefas]
+        futuros = [ex.submit(rodar, t) for t in tarefas]
         return [f.result() for f in futuros]
 
 
@@ -22884,7 +22979,8 @@ def cadastro_auto_rodada(agora: float | None = None, esperar=None) -> dict[str, 
 def cadastro_auto_loop(stop_event: threading.Event) -> None:
     while not stop_event.is_set():
         try:
-            cadastro_auto_rodada(esperar=lambda s: stop_event.wait(s))
+            with exp_porta_rotina():   # V20.54
+                cadastro_auto_rodada(esperar=lambda s: stop_event.wait(s))
         except Exception as exc:
             print(f"[cadastro-auto] {exc}", flush=True)
         stop_event.wait(120)
@@ -25335,7 +25431,8 @@ def faturamento_rodada(agora: float | None = None, esperar=None) -> int:
 def faturamento_loop(stop_event: threading.Event) -> None:
     while not stop_event.is_set():
         try:
-            faturamento_rodada(esperar=lambda s: stop_event.wait(s))
+            with exp_porta_rotina():   # V20.54
+                faturamento_rodada(esperar=lambda s: stop_event.wait(s))
         except Exception as exc:
             print(f"[faturamento] {exc}", flush=True)
         stop_event.wait(120)
@@ -26007,7 +26104,8 @@ def cadastro_full_rodada(agora: float | None = None, esperar=None, hoje: date | 
 def cadastro_full_loop(stop_event: threading.Event) -> None:
     while not stop_event.is_set():
         try:
-            cadastro_full_rodada(esperar=lambda s: stop_event.wait(s))
+            with exp_porta_rotina():   # V20.54
+                cadastro_full_rodada(esperar=lambda s: stop_event.wait(s))
         except Exception as exc:
             print(f"[cadastro-full] {exc}", flush=True)
         stop_event.wait(300)
@@ -57300,7 +57398,8 @@ def medicao_payload(zerar: bool = False) -> dict[str, Any]:
     janela = max(1.0, time.time() - desde)
     return {"ok": True, "desde": _saude_epoch_iso(desde), "janela_s": round(janela),
             "banco_ocupado_pct": round(100 * sum(i["posse"]["total_s"] for i in linhas) / janela, 1),
-            "itens": linhas, "lentos": lentos}
+            "itens": linhas, "lentos": lentos,
+            "porta_apollo": exp_porta_uso()}   # V20.54: quem gasta as chamadas da porta (painel × rotina)
 
 
 def saude_payload() -> dict[str, Any]:
