@@ -1952,6 +1952,10 @@ Número colado na rua sem vírgula ("Rua X 342, Casa…") continua virando "RUA 
 (a fila não muda). **Tipo de rua** (11/11, ML 2000015965127073 "Condomínio Algodoal 8B"): o Apollo lê a 1ª palavra como tipo de
 rua e recusa a que não tem ("o tipo de rua "Condomínio" não está cadastrado"); decisão do dono: `_exp_porta_endereco` repete UMA
 vez com "RUA " na frente (`_EXP_TIPO_RUA_RE`) e avisa; junto com a cidade do CEP, cada correção uma vez. Teste: `TESTES/test_endereco_sem_numero_v2050.py`.
+**V20.51 — `manual: true`** (Guilherme, 11/11): a porta `atendimento/criar` só abre MERCADOLIVRE/SHOPEE com `manual: true`
+("clique de gente no painel"), chave `ML-`/`SHOPEE-<venda>` e a origem ligada no NoromakWeb (Gestão › Configurações › Apollo /
+LinxDMS › Parâmetros da concessionária › Marketplaces que abrem atendimento pela Expedição); senão `origem_recusada`.
+`mkt_atendimento_pedido` (só o botão chama) manda `manual: true`; o TikTok não muda.
 **Cidade do CEP** (pedido 2000019436248196): o Apollo recusa "O CEP é de CRISTALINA, não de CAMPOS LINDOS" (o ML manda o distrito);
 `_exp_porta_endereco` tenta uma vez de novo com a cidade que o Apollo indica (criar e atualizar, também no Full) e avisa a troca.
 

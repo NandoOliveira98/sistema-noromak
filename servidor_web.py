@@ -133,7 +133,7 @@ memoria_limitar_arenas()
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.50-ENDERECO-SN"
+APP_VERSION = "20.51-ATEND-MANUAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -12610,7 +12610,10 @@ def mkt_atendimento_pedido(pedido: str, ator: str, endereco_texto: str = "", bai
         return parar("revisar", "O pedido já tem romaneio/caixa: nada criado.", cliente=codigo)
     corpo: dict[str, Any] = {"revenda": _exp_revenda(pedido), "operador": "noromak", "origem": origem,
                              "pedido_externo": f"{prefixo}-{pedido}", "cliente": int(codigo),
-                             "observacao": f"{nome_canal} {pedido}", "valor_esperado": esperado, "itens": itens}
+                             "observacao": f"{nome_canal} {pedido}", "valor_esperado": esperado, "itens": itens,
+                             # V20.51 (Guilherme, 11/11): a porta só abre ML/Shopee com o clique de gente no painel
+                             # (esta rotina só roda pelo botão); sem isto volta `origem_recusada`.
+                             "manual": True}
     if condicao:
         corpo["condicao_pagamento"] = condicao
     with EXP_PORTA_LOCK:

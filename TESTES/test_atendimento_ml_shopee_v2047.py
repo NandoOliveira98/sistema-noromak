@@ -202,6 +202,8 @@ class Criar(Base):
                          ("MERCADOLIVRE", f"ML-{PEDIDO}", 1, 99001))
         self.assertEqual(corpo["itens"], [{"codigo": "0893764272", "quantidade": 1, "unitario": 25.9}])
         self.assertEqual(corpo["valor_esperado"], 25.9)
+        # V20.51 (Guilherme, 11/11): ML/Shopee só abrem com `manual: true` (clique de gente no painel).
+        self.assertIs(corpo.get("manual"), True)
         e = self.estado()
         self.assertEqual((e["situacao"], e["atendimento"], e["comprometido"]), ("criado", "795001", "sim"))
         self.assertEqual(S.cadastro_auto_do_pedido(PEDIDO)["situacao"], "feito")
