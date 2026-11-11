@@ -12668,6 +12668,12 @@ def mkt_atendimento_pedido(pedido: str, ator: str, endereco_texto: str = "", bai
     _tiktok_guardar_amostra(f"porta atendimento/criar {origem}", ra)
     situacao = str(ra.get("situacao") or "")
     numero = re.sub(r"\D", "", str(ra.get("atendimento") or ""))
+    if situacao == "ja_aberto_no_apollo" and numero:
+        # V20.52 (contrato de 10/11, tarefa #567): a porta achou um atendimento aberto do mesmo cliente com todas as
+        # peças (a integração trouxe a venda) — nada criado, igual ao nosso "ja_tinha".
+        return parar("ja_tinha", f"O Apollo já tem o atendimento {numero} aberto deste cliente com as peças desta venda "
+                                 f"(veio da integração): nenhum outro foi criado.", cliente=codigo, atendimento=numero,
+                     enviado_em="")
     if not ra.get("ok") or situacao not in MKT_ATEND_FINAIS or not numero:
         motivo = str(ra.get("erro") or ra.get("mensagem") or situacao or "o Apollo não confirmou")
         textos = {"sem_credito": "Cliente sem crédito liberado no Apollo (libere pelo painel ou no Apollo)",
@@ -23475,6 +23481,14 @@ def ensure_devolucoes_schema() -> None:
                 detalhe TEXT NOT NULL DEFAULT '{}'
             );
             CREATE INDEX IF NOT EXISTS idx_devolucao_evento ON devolucao_evento_v1988(devolucao_id);
+            -- V20.52: aviso no Chat Seguro ao tratar devolução com peça ruim (um por devolução).
+            CREATE TABLE IF NOT EXISTS devolucao_aviso_v2052 (
+                devolucao_id INTEGER PRIMARY KEY,
+                situacao TEXT NOT NULL DEFAULT '',
+                detalhe TEXT NOT NULL DEFAULT '',
+                para TEXT NOT NULL DEFAULT '',
+                em TEXT NOT NULL DEFAULT ''
+            );
             -- Índice de busca: uma linha por peça de pedido concluído (o payload do histórico é lido
             -- uma vez só, fora do DB_LOCK; o bip consulta só esta tabela pequena).
             CREATE TABLE IF NOT EXISTS devolucao_busca_v1988 (
@@ -24328,8 +24342,107 @@ def _devolucao_mudar(dev_id: Any, versao: Any, filial: str, usuario: str, mudar)
     return {"ok": True, "devolucao": atual}
 
 
+# V20.52 (dono, 11/11): ao TRATAR uma devolução com peça ruim, avisa o Alejandro (peças) no Chat Seguro pela porta
+# `mensagens/enviar` do NoromakWeb (contrato do Guilherme, seção 7: login de quem recebe, a entrega é deles; a 1ª linha
+# "Expedição" e o "enviado por" são postos por eles). Fora do DB_LOCK, em segundo plano; falha nunca desfaz o tratar.
+# Um aviso por devolução: entregue ("enviada"/"repetida") não sai de novo ao reabrir e tratar.
+DEVOLUCAO_AVISO_PARA = ("alejandro",)
+DEVOLUCAO_AVISO_REPETIR_S = 60          # chat_seguro_fora / nao_tentada / porta sem resposta: tenta mais 1 vez
+DEVOLUCAO_AVISO_ENTREGUE = ("enviada", "repetida")
+
+
+def devolucao_aviso_do(dev_id: Any) -> dict[str, Any] | None:
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM devolucao_aviso_v2052 WHERE devolucao_id=?", (int(dev_id),)).fetchone()
+    return dict(row) if row else None
+
+
+def _devolucao_aviso_texto(d: dict[str, Any], ruins: list[dict[str, Any]]) -> dict[str, Any]:
+    pedido = str(d.get("pedido") or "sem pedido")
+    linhas = [f"Devolução tratada com peça ruim — pedido {pedido} ({d.get('marketplace') or 'sem marketplace'})."]
+    if d.get("cliente"):
+        linhas.append(f"Cliente: {d['cliente']}")
+    for i in ruins[:30]:
+        motivo = DEVOLUCAO_MOTIVOS.get(str(i.get("motivo") or ""), str(i.get("motivo") or "sem motivo"))
+        desc = f" {i['descricao']}" if i.get("descricao") else ""
+        linhas.append(f"- {i.get('sku')}{desc}: {int(i.get('qtd') or 0)} un. — {motivo}")
+    if len(ruins) > 30:
+        linhas.append(f"... e mais {len(ruins) - 30} peças")
+    linhas.append(f"Documento no Apollo: {d.get('documento_apollo') or '-'}")
+    if d.get("filial"):
+        linhas.append(f"Filial: {d['filial']}")
+    return {"titulo": f"Devolução com peça ruim - pedido {pedido}"[:120], "texto": "\n".join(linhas)[:3500],
+            "link": f"{SAUDE_PUBLIC_URL}/devolucoes-admin"}
+
+
+def devolucao_avisar_chat(dev_id: Any, usuario: str) -> dict[str, Any] | None:
+    """Manda o aviso (se houver peça ruim e ainda não foi entregue). Devolve o que ficou gravado, ou None."""
+    if not CHAVE_CRM:          # sem a chave das portas (instalação de teste/prévia) não há como avisar
+        return None
+    dev_id = int(dev_id)
+    with DB_LOCK:
+        d = _devolucao_ler(dev_id)
+        antes = DB.execute("SELECT situacao FROM devolucao_aviso_v2052 WHERE devolucao_id=?", (dev_id,)).fetchone()
+    if not d or (antes and antes["situacao"] in DEVOLUCAO_AVISO_ENTREGUE):
+        return None
+    ruins = [i for i in d.get("itens") or [] if i.get("estado") == "ruim" and int(i.get("qtd") or 0) > 0]
+    if not ruins:
+        return None
+    corpo = {"para": list(DEVOLUCAO_AVISO_PARA), "operador": str(usuario or "noromak")[:60], **_devolucao_aviso_texto(d, ruins)}
+    situacao, detalhe = "erro", ""
+    for tentativa in range(2):
+        try:
+            r = _exp_porta("mensagens/enviar", corpo, escrita=True)
+        except PortaErro as exc:
+            situacao, detalhe = "erro", str(exc)[:300]
+            if tentativa == 0 and (exc.passageiro or exc.incerto):   # reenviar é seguro: a porta devolve "repetida"
+                time.sleep(DEVOLUCAO_AVISO_REPETIR_S)
+                continue
+            break
+        res = [x for x in (r.get("resultados") or []) if isinstance(x, dict)]
+        ruim = [x for x in res if not x.get("ok")]
+        if r.get("ok") and not ruim:
+            situacao = "repetida" if res and all(x.get("situacao") == "repetida" for x in res) else "enviada"
+            detalhe = ""
+            break
+        primeiro = ruim[0] if ruim else {}
+        situacao = str(primeiro.get("situacao") or "erro")[:40]
+        detalhe = str(primeiro.get("erro") or r.get("erro") or "")[:300]
+        if tentativa == 0 and situacao in ("chat_seguro_fora", "nao_tentada"):
+            time.sleep(DEVOLUCAO_AVISO_REPETIR_S)
+            continue
+        break
+    with DB_LOCK:
+        DB.execute("INSERT INTO devolucao_aviso_v2052(devolucao_id, situacao, detalhe, para, em) VALUES(?,?,?,?,?) "
+                   "ON CONFLICT(devolucao_id) DO UPDATE SET situacao=excluded.situacao, detalhe=excluded.detalhe, "
+                   "para=excluded.para, em=excluded.em",
+                   (dev_id, situacao, detalhe, ",".join(DEVOLUCAO_AVISO_PARA), now_iso()))
+        DB.commit()
+    audit(usuario, "devolucao.aviso_chat", f"{dev_id}|{situacao}|{detalhe[:120]}")
+    return {"situacao": situacao, "detalhe": detalhe}
+
+
+def _devolucao_avisar_seguro(dev_id: Any, usuario: str) -> None:
+    try:
+        devolucao_avisar_chat(dev_id, usuario)
+    except Exception as exc:   # o aviso nunca derruba nada
+        print(f"[devolucao] aviso no Chat Seguro falhou ({dev_id}): {exc}", flush=True)
+
+
 def devolucao_tratar(dev_id: Any, documento: Any, versao: Any, usuario: str,
-                     filial: str = FILIAL_TODAS) -> dict[str, Any]:
+                     filial: str = FILIAL_TODAS, aviso_em_fundo: bool = True) -> dict[str, Any]:
+    resultado = _devolucao_tratar(dev_id, documento, versao, usuario, filial)
+    if resultado.get("ok"):
+        if aviso_em_fundo:
+            threading.Thread(target=_devolucao_avisar_seguro, args=(dev_id, usuario), daemon=True,
+                             name="devolucao-aviso").start()
+        else:
+            _devolucao_avisar_seguro(dev_id, usuario)
+    return resultado
+
+
+def _devolucao_tratar(dev_id: Any, documento: Any, versao: Any, usuario: str,
+                      filial: str = FILIAL_TODAS) -> dict[str, Any]:
     documento = str(documento or "").strip()[:80]
     custos_ctx = _financeiro_custos_aracatuba()   # V19.95: lido fora da trava; o custo fica congelado ao tratar
 

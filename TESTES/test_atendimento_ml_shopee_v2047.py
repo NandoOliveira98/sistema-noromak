@@ -574,6 +574,34 @@ class CepDeOutraCidade(Base):
         self.assertEqual(porta.rotas().count("cliente/atualizar"), 1)
 
 
+class RespostasNovasDaPorta(Base):
+    """V20.52 (contrato do Guilherme, 10/11, tarefa #567): a porta procura do lado dela um atendimento aberto do mesmo
+    cliente com todas as peças e devolve `ja_aberto_no_apollo` com o número — nada criado, como o nosso "ja_tinha"."""
+
+    def test_ja_aberto_no_apollo_vira_ja_tinha_com_o_numero(self):
+        self.pedido()
+        porta = Porta()
+        porta.criar_atend = {"ok": False, "situacao": "ja_aberto_no_apollo", "atendimento": 796123,
+                             "erro": "Já existe o atendimento 796123 aberto deste cliente com todas as peças."}
+        r = self.criar(porta)
+        self.assertFalse(r["ok"])
+        e = self.estado()
+        self.assertEqual((e["situacao"], e["atendimento"]), ("ja_tinha", "796123"))
+        self.assertIn("796123", e["detalhe"])
+        self.assertNotIn("atendimento/comprometer", porta.rotas())
+        self.assertFalse(S.mkt_atendimento_estado(PEDIDO)["disponivel"])
+
+    def test_sem_estoque_e_erro_com_o_motivo_da_porta(self):
+        self.pedido()
+        porta = Porta()
+        porta.criar_atend = {"ok": False, "situacao": "sem_estoque",
+                             "erro": "Sem saldo na revenda 1: 0893764272 (pedido 1, disponível 0)."}
+        self.criar(porta)
+        e = self.estado()
+        self.assertEqual(e["situacao"], "erro")
+        self.assertIn("Sem saldo", e["detalhe"])
+
+
 class Interruptor(Base):
     """V20.52 (dono, 11/11: "essa porta de ligação tem que ser minha"): liga/desliga por marketplace no Noromak
     (Admin › Integrações, só o perfil Admin). Padrão = ligado (como já funcionava)."""
