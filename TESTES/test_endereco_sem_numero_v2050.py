@@ -119,5 +119,50 @@ class EnvioDoPedido(unittest.TestCase):
         self.assertIn("sem número de envio", r["falta"])
 
 
+class TipoDeRuaRecusado(unittest.TestCase):
+    """Caso real 11/11 (ML 2000015965127073, "Condomínio Algodoal 8B"): o Apollo lê a 1ª palavra como tipo de rua e
+    recusou "o tipo de rua "Condomínio" não está cadastrado no Apollo". Decisão do dono: repetir uma vez com "RUA" na frente."""
+
+    RECUSA = 'o tipo de rua "Condomínio" não está cadastrado no Apollo.'
+
+    def _porta(self, recusas):
+        chamadas = []
+
+        def porta(rota, corpo, escrita=False):
+            chamadas.append(dict(corpo["endereco"]))
+            if recusas:
+                return {"ok": False, "erro": recusas.pop(0)}
+            return {"ok": True, "situacao": "atualizado"}
+        return porta, chamadas
+
+    def test_repete_uma_vez_com_rua_e_avisa(self):
+        porta, chamadas = self._porta([self.RECUSA])
+        avisos = []
+        corpo = {"endereco": {"rua": "CONDOMINIO ALGODOAL 8B", "numero": "", "bairro": "PARQUE VERDE", "cep": "67208142",
+                              "cidade": "MARITUBA", "uf": "PA"}}
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            r = S._exp_porta_endereco("cliente/atualizar", corpo, avisos)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual([c["rua"] for c in chamadas], ["CONDOMINIO ALGODOAL 8B", "RUA CONDOMINIO ALGODOAL 8B"])
+        self.assertTrue(any("RUA CONDOMINIO" in a for a in avisos), avisos)
+
+    def test_recusa_tambem_com_rua_nao_repete_de_novo(self):
+        porta, chamadas = self._porta([self.RECUSA, 'o tipo de rua "Rua" não está cadastrado no Apollo.'])
+        corpo = {"endereco": {"rua": "CONDOMINIO X", "numero": "1", "bairro": "B", "cep": "67208142", "cidade": "C", "uf": "PA"}}
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            r = S._exp_porta_endereco("cliente/atualizar", corpo, [])
+        self.assertIn("tipo de rua", r["erro"])
+        self.assertEqual(len(chamadas), 2)
+
+    def test_cidade_e_tipo_de_rua_na_mesma_vez(self):
+        porta, chamadas = self._porta(["O CEP é de MARITUBA, não de BENEVIDES. Nada foi enviado.", self.RECUSA])
+        corpo = {"endereco": {"rua": "CONDOMINIO X", "numero": "1", "bairro": "B", "cep": "67208142", "cidade": "BENEVIDES",
+                              "uf": "PA"}}
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            r = S._exp_porta_endereco("cliente/atualizar", corpo, [])
+        self.assertTrue(r["ok"], r)
+        self.assertEqual((chamadas[-1]["rua"], chamadas[-1]["cidade"]), ("RUA CONDOMINIO X", "MARITUBA"))
+
+
 if __name__ == "__main__":
     unittest.main()

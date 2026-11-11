@@ -22363,6 +22363,7 @@ EXP_NOME_ROTULO = re.compile(r"^(TIPO DE CONTRIBUINTE|NAO CONTRIBUINTE|CONTRIBUI
 # Cristalina-GO; o ML manda o distrito). Tenta UMA vez de novo com a cidade que o próprio Apollo indica para o CEP e
 # avisa a troca. Outro erro, ou a mesma cidade, segue como antes.
 _EXP_CEP_CIDADE_RE = re.compile(r"CEP\s+(?:\S+\s+)?(?:é|e|eh)\s+de\s+(.+?),\s*n(?:ã|a)o\s+de\s+(.+?)(?:[.;]|$)", re.I)
+_EXP_TIPO_RUA_RE = re.compile(r"tipo\s+de\s+(?:rua|logradouro|via)\b.*?n(?:ã|a)o\s+est(?:á|a)\s+cadastrad", re.I)
 
 
 # V20.50 (dono, 11/11, ML 2000019472156870 "Br 101 km 26, SN"): o Apollo não tem campo de número (vai DENTRO do
@@ -22380,26 +22381,44 @@ def _exp_porta_endereco(rota: str, corpo: dict[str, Any], avisos: list[str]) -> 
     erro_porta: PortaErro | None = None
     if isinstance(corpo.get("endereco"), dict):
         corpo["endereco"]["numero"] = _exp_numero_ou_sn(corpo["endereco"].get("numero"))
-    try:
-        r: dict[str, Any] | None = _exp_porta(rota, corpo, escrita=True)
-        texto = str((r or {}).get("erro") or "")
-    except PortaErro as exc:
-        if exc.incerto or exc.passageiro:
-            raise
-        erro_porta, r, texto = exc, None, str(exc)
-    m = _EXP_CEP_CIDADE_RE.search(texto) if texto else None
     end = corpo.get("endereco")
-    nova = _exp_limpo(m.group(1))[:50] if m else ""   # revisão: sem acento, como todo endereço
-    if not nova or not isinstance(end, dict) or normalize(nova) == normalize(end.get("cidade")):
-        if erro_porta is not None:
-            raise erro_porta
-        return r or {}
-    antiga = str(end.get("cidade") or "")
-    end["cidade"] = nova       # o mesmo endereço segue para o atualizar e para a resposta da tela
-    r = _exp_porta(rota, corpo, escrita=True)
-    if not r.get("erro"):
-        avisos.append(f"Cidade gravada como {nova}: no Apollo o CEP {end.get('cep') or ''} é de lá "
-                      f"(o marketplace mandou {antiga}).".replace("CEP  é", "CEP é"))
+    feitas: set[str] = set()     # cada correção (cidade do CEP, tipo de rua) uma vez só
+    pendentes: list[str] = []    # avisos que só valem se a porta aceitar no fim
+    while True:
+        erro_porta = None
+        try:
+            r: dict[str, Any] | None = _exp_porta(rota, corpo, escrita=True)
+            texto = str((r or {}).get("erro") or "")
+        except PortaErro as exc:
+            if exc.incerto or exc.passageiro:
+                raise
+            erro_porta, r, texto = exc, None, str(exc)
+        if not texto or not isinstance(end, dict):
+            break
+        m = _EXP_CEP_CIDADE_RE.search(texto) if "cidade" not in feitas else None
+        nova = _exp_limpo(m.group(1))[:50] if m else ""   # revisão: sem acento, como todo endereço
+        if nova and normalize(nova) != normalize(end.get("cidade")):
+            feitas.add("cidade")
+            antiga = str(end.get("cidade") or "")
+            end["cidade"] = nova   # o mesmo endereço segue para o atualizar e para a resposta da tela
+            pendentes.append(f"Cidade gravada como {nova}: no Apollo o CEP {end.get('cep') or ''} é de lá "
+                             f"(o marketplace mandou {antiga}).".replace("CEP  é", "CEP é"))
+            continue
+        # V20.50 (dono, 11/11, ML 2000015965127073 "Condomínio Algodoal 8B"): o Apollo lê a 1ª palavra do endereço como
+        # tipo de rua e recusa a que não tem no cadastro dele. Decisão do dono: repetir UMA vez com "RUA" na frente.
+        rua = str(end.get("rua") or "").strip()
+        if ("tipo" not in feitas and _EXP_TIPO_RUA_RE.search(texto) and rua
+                and not normalize(rua).startswith("RUA")):
+            feitas.add("tipo")
+            end["rua"] = f"RUA {rua}"[:120]
+            pendentes.append(f'Endereço gravado como "{end["rua"]}": o Apollo não tem o tipo de rua de "{rua}".')
+            continue
+        break
+    if erro_porta is not None:
+        raise erro_porta
+    r = r or {}
+    if pendentes and not r.get("erro"):
+        avisos.extend(pendentes)
     return r
 
 
