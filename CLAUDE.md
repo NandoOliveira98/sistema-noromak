@@ -628,6 +628,12 @@ Testes: `TESTES/test_tiktok_anuncios_estoque_v2041.py`, `TESTES/test_anuncios_ti
 o Publicar já reservado confere a fonte de novo antes de criar; amostra uma por rota também em `/products/{id}` e `/categories/{id}`;
 marcas até `TIKTOK_MARCAS_PAGINAS` (20) páginas com `incompleta` e, cortada, a marca da ficha é buscada pelo nome
 (`tiktok_marca_buscar`, `brand_name`); `listing_check` FAILED sem motivo legível não conta como conferido.
+**V20.56 — TikTok junto dos outros** (dono, 11/11: "tudo junto onde já tem o ML, Shopee e Magalu" e "trazer os anúncios do
+TikTok, vamos controlar Bauru por lá"; a API do TikTok foi conectada em 11/11 16:58). Os painéis de criar anúncio (Shopee,
+Magalu, TikTok) aparecem com qualquer casa no seletor. Botão **"Puxar anúncios do TikTok"** ao lado do do ML (`puxarTiktok`, só
+tela): lê `/api/integracoes/tiktok/status`; não conectado = aviso; fonte ainda na extensão = pergunta e troca pela mesma rota do
+cartão (`/api/integracoes/tiktok/fonte`, perfil Admin; o estoque do TikTok volta a Simulação); depois `/api/tiktok-estoque/atualizar`
+(catálogo em 2º plano) e a lista recarrega em 1 min. Teste: `TESTES/test_anuncios_tiktok_tela_v2056.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

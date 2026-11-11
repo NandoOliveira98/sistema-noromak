@@ -499,7 +499,8 @@ class Tela(TesteNoromak):
     def test_painel_e_botao(self):
         texto = (S.APP_DIR / "anuncios.html").read_text(encoding="utf-8")
         for trecho in ('id="secTiktok"', "Criar anúncio no TikTok", "/api/anuncios/tiktok/publicar",
-                       'a.canal === "tiktok" && a.controle === "noromak") b.push', 'CASA === "bauru"'):
+                       'a.canal === "tiktok" && a.controle === "noromak") b.push'):
+            # V20.56: o painel não depende mais da casa (test_anuncios_tiktok_tela_v2056)
             self.assertIn(trecho, texto)
 
 
