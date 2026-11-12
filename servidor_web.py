@@ -12677,11 +12677,14 @@ def mkt_atendimento_automatico_ligar(marketplace: str, ligado: bool, usuario: st
                                "WHERE mkt_atendimento_v2047.situacao IN ('', 'erro', 'incerto', 'aguardando', 'revisar')",
                                (numero, mp, "anterior", "Já estava na fila ao ligar o automático: pelo botão do painel.",
                                 agora))
-        DB.execute(
-            """INSERT INTO mkt_atendimento_config_v2052(marketplace, automatico, auto_em, auto_por) VALUES(?,?,?,?)
-               ON CONFLICT(marketplace) DO UPDATE SET automatico=excluded.automatico, auto_em=excluded.auto_em,
-               auto_por=excluded.auto_por""",
-            (mp, 1 if ligado else 0, now_iso(), str(usuario or "")[:80]))
+        # 2ª revisão: só grava quando o estado muda — "Ligar" de uma aba desatualizada não adianta a hora de ligar (que
+        # decide o que é venda nova) nem tira da rotina os pedidos em andamento
+        if bool(ligado) != bool(estava):
+            DB.execute(
+                """INSERT INTO mkt_atendimento_config_v2052(marketplace, automatico, auto_em, auto_por) VALUES(?,?,?,?)
+                   ON CONFLICT(marketplace) DO UPDATE SET automatico=excluded.automatico, auto_em=excluded.auto_em,
+                   auto_por=excluded.auto_por""",
+                (mp, 1 if ligado else 0, now_iso(), str(usuario or "")[:80]))
         DB.commit()
     audit(usuario, "expedicao.mkt_atendimento_automatico", f"{mp}|{'ligado' if ligado else 'desligado'}")
     return {"ok": True, "config": mkt_atendimento_config()}
@@ -13328,8 +13331,13 @@ def _mkt_atendimento_candidatos(agora: float | None = None) -> list[tuple[str, s
             continue
         ligado_em = _iso_epoch(cfg[mp]["auto_em"])
         if ligado_em and venda_em < ligado_em - MKT_ATEND_AUTO_MARGEM:
-            _mkt_atend_gravar(numero, marketplace=mp, situacao="anterior",
-                              detalhe="Venda anterior ao automático (entrou na fila depois): pelo botão do painel.")
+            # 2ª revisão: nunca cobre o "criando" de um clique no mesmo instante (nem o que já foi criado)
+            with DB_LOCK:
+                DB.execute("INSERT OR IGNORE INTO mkt_atendimento_v2047(pedido, marketplace) VALUES(?,?)", (numero, mp))
+                DB.execute("UPDATE mkt_atendimento_v2047 SET situacao='anterior', detalhe=?, atualizado_em=? WHERE pedido=? "
+                           "AND situacao IN ('', 'erro', 'incerto', 'aguardando', 'revisar')",
+                           ("Venda anterior ao automático (entrou na fila depois): pelo botão do painel.", now_iso(), numero))
+                DB.commit()
             continue
         if mp == "Shopee" and not (_cliente_fiscal_guardado(numero) or {}).get("documento_numero"):
             _mkt_nota_da_shopee(numero, linhas)

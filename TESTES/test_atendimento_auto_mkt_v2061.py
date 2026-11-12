@@ -249,3 +249,20 @@ class RevisaoV2061(BaseAuto):
         S._mkt_nota_da_shopee(sn, [{"CPFShopee": "***.***.***-72", "CNPJShopee": "11222333000181",
                                     "NomeFiscalShopee": "Empresa Exemplo Ltda"}])
         self.assertEqual((S._cliente_fiscal_guardado(sn) or {}).get("documento_numero"), "11222333000181")
+
+
+class Revisao2V2061(BaseAuto):
+    def test_ligar_de_novo_nao_adianta_a_hora(self):
+        self.ligar()
+        antes = S.mkt_atendimento_config()["Mercado Livre"]["auto_em"]
+        time.sleep(0.01)
+        self.ligar()
+        self.assertEqual(S.mkt_atendimento_config()["Mercado Livre"]["auto_em"], antes)
+
+    def test_anterior_da_rotina_nao_cobre_o_criando_do_botao(self):
+        self.ligar()
+        self.pedido(horas=5)
+        S._mkt_atend_gravar(PEDIDO, marketplace="Mercado Livre", situacao="criando", detalhe="pelo painel")
+        with mock.patch.object(S, "mkt_atendimento_do_pedido", return_value={}):  # o retrato da volta é de antes do clique
+            S._mkt_atendimento_candidatos()
+        self.assertEqual(self.estado()["situacao"], "criando")
