@@ -12581,6 +12581,7 @@ MKT_ATEND_CANAIS: dict[str, tuple[str, str, int | None, str]] = {
     "Shopee": ("SHOPEE", "SHOPEE", 971, "Shopee"),
 }
 MKT_ATEND_FINAIS = ("criado", "ja_existia")
+MKT_JA_TINHA_AUTO = "Automático:"   # V20.61: o "já tinha" achado pela busca da rotina
 MKT_ATEND_VALOR_TOL = 0.10          # atendimento "da integração" só com o valor da venda (até 10 centavos)
 _MKT_ATEND_LOCK = threading.Lock()
 
@@ -12668,8 +12669,12 @@ def mkt_atendimento_automatico_ligar(marketplace: str, ligado: bool, usuario: st
                 numero = str(order_number(r) or "").strip()
                 if numero and numero not in vistos:
                     vistos.add(numero)
-                    DB.execute("INSERT OR IGNORE INTO mkt_atendimento_v2047(pedido, marketplace, situacao, detalhe, "
-                               "atualizado_em) VALUES(?,?,?,?,?)",
+                    # revisão: o clique que falhou (erro/incerto/aguardando/revisar) também fica "anterior" — alguém pode
+                    # ter criado o atendimento à mão depois; criado/ja_existia/ja_tinha ficam como estão.
+                    DB.execute("INSERT INTO mkt_atendimento_v2047(pedido, marketplace, situacao, detalhe, atualizado_em) "
+                               "VALUES(?,?,?,?,?) ON CONFLICT(pedido) DO UPDATE SET situacao=excluded.situacao, "
+                               "detalhe=excluded.detalhe, atualizado_em=excluded.atualizado_em "
+                               "WHERE mkt_atendimento_v2047.situacao IN ('', 'erro', 'incerto', 'aguardando', 'revisar')",
                                (numero, mp, "anterior", "Já estava na fila ao ligar o automático: pelo botão do painel.",
                                 agora))
         DB.execute(
@@ -12789,8 +12794,18 @@ def mkt_atendimento_estado(pedido: str, agora: float | None = None) -> dict[str,
         if ja_atendido:
             return {**saida, "motivo": "o pedido já tem romaneio/caixa"}
         return {**saida, "disponivel": True, "acao": "comprometer"}
-    if situacao == "ja_tinha":
+    if situacao == "ja_tinha" and not str(atual.get("detalhe") or "").startswith(MKT_JA_TINHA_AUTO):
+        # o "já tinha" do botão (peças E valor) ou da porta (`ja_aberto_no_apollo`, pelo código do cliente): fica
         return {**saida, "motivo": str(atual.get("detalhe") or "já existe atendimento no Apollo")}
+    if situacao == "ja_tinha":
+        # V20.61 (revisão): o "já tinha" da ROTINA pode ser homônimo ou outra compra do cliente — o automático não cria,
+        # mas o clique de gente decide (como no TikTok, V20.60). O botão procura de novo (peças E valor) antes de criar.
+        if ja_atendido:
+            return {**saida, "motivo": "o pedido já tem romaneio/caixa"}
+        if not mkt_atendimento_config()[mp]["ligado"]:
+            return {**saida, "desligado": True, "motivo": str(atual.get("detalhe") or "já existe atendimento no Apollo")}
+        return {**saida, "disponivel": True, "acao": "criar", "marketplace": mp, "requer_sem_atendimento": True,
+                "motivo": str(atual.get("detalhe") or "")}
     if ja_atendido:
         return {**saida, "motivo": "o pedido já tem romaneio/caixa"}
     # V20.52: desligado só barra o CRIAR (comprometer o que já foi criado continua valendo, acima).
@@ -12806,7 +12821,8 @@ def mkt_atendimento_estado(pedido: str, agora: float | None = None) -> dict[str,
     # V20.49: com o cliente no Apollo, o botão só aparece sem atendimento aberto com as peças (a extensão confere no
     # painel) — enquanto o criar não saiu. Antes a marca sumia depois de um clique que parou em "revisar"/"erro".
     requer = bool(cliente_existe and not atual.get("enviado_em"))
-    if not situacao:
+    # V20.61 (revisão): "anterior"/"aguardando" da rotina seguem a mesma espera de 2 h do pedido sem situação
+    if situacao in ("", "anterior", "aguardando"):
         if cliente_existe and int(auto.get("cliente_criado") or 0):
             # V20.49 (dono, 10/11, pedido 2000015964547311): o Noromak CRIOU o cliente (não existia no Apollo) — a
             # integração ainda não trouxe a venda: na hora.
@@ -13070,8 +13086,9 @@ def mkt_atendimento_pedido(pedido: str, ator: str, endereco_texto: str = "", bai
             return parar("erro", "Não deu para conferir no Apollo se o atendimento já existe: " + erro_busca,
                          cliente=codigo)
         if numero_ja:
-            return parar("ja_tinha", f"O cliente já tem o atendimento {numero_ja} aberto no Apollo com as peças desta "
-                                     f"venda: nenhum outro foi criado.", cliente=codigo, atendimento=numero_ja)
+            # revisão: "Automático:" marca a busca da rotina (pode ser homônimo/outra compra) — o botão volta a valer
+            return parar("ja_tinha", f"{MKT_JA_TINHA_AUTO} o cliente já tem o atendimento {numero_ja} aberto no Apollo com "
+                                     f"as peças desta venda: nenhum outro foi criado.", cliente=codigo, atendimento=numero_ja)
     elif not atual.get("enviado_em"):
         numero_ja, erro_busca = _mkt_atend_ja_tem(pedido, esperado, mp)
         if erro_busca:
@@ -13229,6 +13246,31 @@ MKT_ATEND_AUTO_INTERVALO = 120
 MKT_ATEND_AUTO_ESPERA_ERRO = 600
 MKT_ATEND_AUTO_ESPERA_AGUARDANDO = 300
 MKT_ATEND_AUTO_MAX_TENTATIVAS = 5
+MKT_ATEND_AUTO_MARGEM = 15 * 60   # revisão: venda feita até 15 min antes de ligar ainda conta como nova (chega à fila)
+
+
+def _iso_epoch(texto: Any) -> float | None:
+    try:
+        return datetime.fromisoformat(str(texto).replace("Z", "+00:00")).timestamp() if str(texto or "").strip() else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _mkt_venda_epoch(pedido: str) -> float | None:
+    """Hora da venda (a mais antiga das linhas copiadas, por pedido ou carrinho). Sem venda copiada = None."""
+    chave = str(pedido or "").strip()
+    menor: float | None = None
+    with DB_LOCK:
+        for tabela in ("vendas_v1799", "vendas_conta_v1898"):
+            try:
+                rows = DB.execute(f"SELECT sale_at FROM {tabela} WHERE order_id=? OR pack_id=?", (chave, chave)).fetchall()
+            except sqlite3.OperationalError:
+                continue
+            for r in rows:
+                t = _iso_epoch(r["sale_at"])
+                if t is not None:
+                    menor = t if menor is None else min(menor, t)
+    return menor
 # situações que a rotina não retoma (o botão do painel continua valendo para elas)
 MKT_ATEND_AUTO_PARADOS = ("criado", "ja_existia", "ja_tinha", "revisar", "anterior", "criando")
 
@@ -13238,9 +13280,11 @@ def _mkt_nota_da_shopee(pedido: str, linhas: list[dict[str, Any]]) -> None:
     nome/CPF da nota do pedido quando ainda não há nada guardado (o que a extensão gravou nunca é trocado). Mascarado
     ("***") não vale — o salvar recusa documento sem 11/14 dígitos."""
     for r in linhas:
-        doc = str(r.get("CPFShopee") or r.get("CNPJShopee") or "").strip()
+        # revisão: o primeiro documento LEGÍVEL (CPF mascarado com CNPJ legível = o CNPJ)
+        doc = next((str(v).strip() for v in (r.get("CPFShopee"), r.get("CNPJShopee"))
+                    if str(v or "").strip() and "*" not in str(v)), "")
         nome = str(r.get("NomeFiscalShopee") or "").strip()
-        if "*" in doc or "*" in nome or not doc or not nome:
+        if "*" in nome or not doc or not nome:
             continue
         salvar_cliente_fiscal(pedido, doc, nome, fonte="api_shopee", usuario="automatico", so_se_vazio=True)
         return
@@ -13276,6 +13320,16 @@ def _mkt_atendimento_candidatos(agora: float | None = None) -> list[tuple[str, s
                 and int(e.get("tentativas") or 0) >= MKT_ATEND_AUTO_MAX_TENTATIVAS:
             continue
         if _tiktok_atendimento_ja_atendido(numero):   # romaneio/caixa pelo painel: atendido à mão
+            continue
+        # revisão: só VENDA nova (reinclusão do ADMIN, print, Mover de filial trazem venda antiga, que pode já ter sido
+        # faturada direto no Apollo). Sem a venda copiada ainda = espera.
+        venda_em = _mkt_venda_epoch(numero)
+        if venda_em is None:
+            continue
+        ligado_em = _iso_epoch(cfg[mp]["auto_em"])
+        if ligado_em and venda_em < ligado_em - MKT_ATEND_AUTO_MARGEM:
+            _mkt_atend_gravar(numero, marketplace=mp, situacao="anterior",
+                              detalhe="Venda anterior ao automático (entrou na fila depois): pelo botão do painel.")
             continue
         if mp == "Shopee" and not (_cliente_fiscal_guardado(numero) or {}).get("documento_numero"):
             _mkt_nota_da_shopee(numero, linhas)

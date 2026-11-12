@@ -2064,6 +2064,14 @@ botão). Botão rodando (`_MKT_ATEND_LOCK`) = a rotina espera a volta seguinte. 
 `so_se_vazio`; mascarado não vale). Cartão "Atendimento de ML e Shopee pelo painel" ganhou as linhas "Automático · ML/Shopee";
 `POST /api/expedicao-apollo/atendimento-mkt {marketplace, automatico}` (perfil Admin, audit `expedicao.mkt_atendimento_automatico`).
 Teste: `TESTES/test_atendimento_auto_mkt_v2061.py`.
+**revisar-antes-de-subir da V20.61 (12/11).** Decisões do dono mantidas com o risco explicado: **na hora para todos** (se a
+integração da Linx continuar abrindo atendimento das vendas ML/Shopee, ela pode abrir OUTRO ~1 h depois do nosso — não confere o
+nosso) e **nome/CPF da API da Shopee** (em presente/entrega para outra pessoa o nome é o do destinatário com o CPF do comprador).
+Corrigido: só **venda** feita depois de ligar (`_mkt_venda_epoch` ≥ `auto_em` − `MKT_ATEND_AUTO_MARGEM` 15 min; venda antiga que
+entra depois — reinclusão, print, Mover de filial — vira `anterior`); ao ligar, o clique que falhou (erro/incerto/aguardando/revisar)
+também vira `anterior` (criado/ja_* ficam); `anterior`/`aguardando` seguem a espera de 2 h do botão; o `ja_tinha` achado pela
+ROTINA (detalhe com `MKT_JA_TINHA_AUTO`, pode ser homônimo ou outra compra) deixa o botão criar — o do botão/porta continua sem
+botão; Shopee com CPF mascarado e CNPJ legível usa o CNPJ. Teste: classe `RevisaoV2061`.
 **V20.54 — a vez do painel na porta** (dono, 11/11: "Muitas chamadas ao Apollo neste minuto" nos 3 PCs). A porta aceita 12
 leituras e 6 gravações por minuto **por rota**, e tudo sai deste servidor (os computadores e as rotinas dividem o teto); cada
 painel aberto faz até 6 leituras (situação + abertos + até 4 prévias). `_exp_porta` conta cada chamada por rota e origem

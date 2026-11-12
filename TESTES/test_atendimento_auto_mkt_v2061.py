@@ -163,7 +163,7 @@ class Shopee(BaseAuto):
         with S.DB_LOCK:
             S.DB.execute("INSERT INTO vendas_v1799(marketplace,order_id,line_key,sale_at,sale_day,sku,qty,amount,status,updated_at) "
                          "VALUES('shopee',?,?,?,'2026-11-12','0893764272',1,25.90,'paid','2026-11-12T10:00:00')",
-                         (self.SN, "1", "2026-11-12T13:00:00+00:00"))
+                         (self.SN, "1", S.datetime.now(S.timezone.utc).isoformat()))
             S.DB.commit()
         endereco = {"endereco": {"rua": "RUA A", "numero": "10", "bairro": "CENTRO", "cep": "16010000",
                                  "cidade": "ARACATUBA", "uf": "SP"}, "falta": ""}
@@ -198,3 +198,54 @@ class Rotas(BaseAuto):
         self.assertIn("mkt_atendimento_loop", S.SAUDE_WORKERS_INFO)
         html = (S.APP_DIR / "admin.html").read_text(encoding="utf-8")
         self.assertIn("alternarAtendMktAutoAdmin(", html)
+
+
+class RevisaoV2061(BaseAuto):
+    """revisar-antes-de-subir da V20.61 (12/11). Decisões do dono mantidas: na hora para todos; nome/CPF da API da Shopee."""
+
+    def test_venda_antiga_que_entra_depois_de_ligar_nao_cria(self):
+        """Reinclusão/print/Mover de filial de venda antiga: o atendimento original pode já ter sido faturado no Apollo."""
+        self.ligar()
+        self.pedido(horas=5)   # entrou na fila agora, mas a venda é de 5 h atrás
+        porta = Porta()
+        self.rodada(porta)
+        self.assertNotIn("atendimento/criar", porta.rotas())
+        self.assertEqual(self.estado()["situacao"], "anterior")
+
+    def test_ao_ligar_o_clique_que_falhou_vira_anterior(self):
+        self.pedido(horas=0.1)
+        S._mkt_atend_gravar(PEDIDO, marketplace="Mercado Livre", situacao="erro", detalhe="clique que falhou")
+        self.ligar()
+        self.assertEqual(self.estado()["situacao"], "anterior")
+
+    def test_ao_ligar_nao_mexe_no_que_ja_foi_criado(self):
+        self.pedido(horas=0.1)
+        S._mkt_atend_gravar(PEDIDO, marketplace="Mercado Livre", situacao="criado", atendimento="795001")
+        self.ligar()
+        self.assertEqual(self.estado()["situacao"], "criado")
+
+    def test_anterior_e_aguardando_seguem_a_espera_de_2h_do_botao(self):
+        self.pedido(horas=0.2)
+        for situacao in ("anterior", "aguardando"):
+            S._mkt_atend_gravar(PEDIDO, marketplace="Mercado Livre", situacao=situacao, detalhe="x")
+            self.assertFalse(S.mkt_atendimento_estado(PEDIDO)["disponivel"], situacao)
+
+    def test_ja_tinha_deixa_o_botao_criar(self):
+        """Homônimo ou outra compra do cliente: o automático não cria, mas o clique de gente decide (regra da V20.60)."""
+        self.pedido(horas=3)
+        S._mkt_atend_gravar(PEDIDO, marketplace="Mercado Livre", situacao="ja_tinha", atendimento="794001",
+                            detalhe=S.MKT_JA_TINHA_AUTO + " o cliente já tem o atendimento 794001")
+        e = S.mkt_atendimento_estado(PEDIDO)
+        self.assertTrue(e["disponivel"])
+        self.assertEqual(e["acao"], "criar")
+        # o "já tinha" do botão/porta (conferido pelo código do cliente) continua sem botão
+        S._mkt_atend_gravar(PEDIDO, situacao="ja_tinha", detalhe="O Apollo já tem o atendimento 796123 aberto deste cliente")
+        self.assertFalse(S.mkt_atendimento_estado(PEDIDO)["disponivel"])
+
+    def test_shopee_cpf_mascarado_e_cnpj_legivel_usa_o_cnpj(self):
+        sn = "261112ABCDEF02"
+        gravar_como_admin([linha(sn, "0893764272", 1, Marketplace="SHOPEE", CPFShopee="***.***.***-72",
+                                 CNPJShopee="11222333000181", NomeFiscalShopee="Empresa Exemplo Ltda")])
+        S._mkt_nota_da_shopee(sn, [{"CPFShopee": "***.***.***-72", "CNPJShopee": "11222333000181",
+                                    "NomeFiscalShopee": "Empresa Exemplo Ltda"}])
+        self.assertEqual((S._cliente_fiscal_guardado(sn) or {}).get("documento_numero"), "11222333000181")
