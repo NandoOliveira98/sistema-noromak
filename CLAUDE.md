@@ -602,6 +602,14 @@ Apollo = não cria (situação `ja_tinha`, em `TIKTOK_ATEND_PARADOS`, rótulo no
 nada criado; depois de um criar `incerto` vai direto à porta (a chave devolve `ja_existia`). Vale também para o botão do painel do
 TikTok. **ML/Shopee automáticos ficaram de fora:** a porta só abre MERCADOLIVRE/SHOPEE com `manual: true` (clique de gente, V20.51)
 — precisa o Guilherme liberar um modo automático. Teste: `TESTES/test_tiktok_ja_tem_atendimento_v2060.py`.
+**revisar-antes-de-subir (12/11):** a procura não roda depois que um criar saiu (`criar_enviado_em`, gravado antes da chamada e
+limpo só quando a porta responde `ok: false` = nada criado com a chave): senão o atendimento que o próprio Noromak criou num criar
+`incerto` seguido de 429/erro virava `ja_tinha`. O romaneio já solto também passa pelos atendimentos ligados a outro pedido; o
+atendimento precisa ter cada peça em quantidade igual ou maior que a do pedido. O **botão do painel** cria mesmo com `ja_tinha`
+(`forcar`: o operador conferiu). Classe `Revisao` no mesmo teste. 2ª revisão: recusa sem processar (429, 4xx: `PortaErro` sem
+`incerto`) devolve a marca ao valor de antes; `ok: false` só limpa nas recusas que provam que nada foi criado
+(`TIKTOK_ATEND_NADA_CRIADO`; `valor_divergente` = o Apollo gravou, fica); a migração marca toda linha que já existia (menos
+`anterior`/`fora_da_fila`).
 **revisar-antes-de-subir (09/11, "corrigir todos"):** revenda sempre a de Bauru
 (`SEPARACAO_REVENDA[TIKTOK_CASA]`, não pela fila: pedido fora dela caía em Araçatuba); rotina e botão com as mesmas barreiras
 (`_tiktok_comp_pode`: pedido na fila, TikTok ainda "a enviar" — venda cancelada não reserva —, sem romaneio/caixa, venda não

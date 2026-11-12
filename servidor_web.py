@@ -11526,9 +11526,17 @@ def ensure_tiktok_atendimento_schema() -> None:
         for nome, tipo in (("comprometido", "TEXT NOT NULL DEFAULT ''"), ("comp_detalhe", "TEXT NOT NULL DEFAULT ''"),
                            ("comp_itens_json", "TEXT NOT NULL DEFAULT ''"),
                            ("comp_tentativas", "INTEGER NOT NULL DEFAULT 0"), ("comp_proxima", "REAL NOT NULL DEFAULT 0"),
-                           ("comp_passageiros", "INTEGER NOT NULL DEFAULT 0")):
+                           ("comp_passageiros", "INTEGER NOT NULL DEFAULT 0"),
+                           # V20.60 (revisão): o criar já saiu com a chave TIKTOK-<pedido> e a porta não disse que nada
+                           # foi criado — a procura do "já tem atendimento" não roda (acharia o NOSSO).
+                           ("criar_enviado_em", "TEXT NOT NULL DEFAULT ''")):
             if nome not in colunas:
                 DB.execute(f"ALTER TABLE tiktok_atendimento_v2033 ADD COLUMN {nome} {tipo}")
+                if nome == "criar_enviado_em":
+                    # 2ª revisão: toda linha que já existia pode ter tido um criar (incerto seguido de erro,
+                    # "criando" interrompido): a 1ª volta vai direto à porta, cuja chave decide.
+                    DB.execute("UPDATE tiktok_atendimento_v2033 SET criar_enviado_em=COALESCE(NULLIF(atualizado_em,''),'antes') "
+                               "WHERE situacao NOT IN ('', 'anterior', 'fora_da_fila')")
         # revisar-antes-de-subir (09/11): a thread do botão morre com o processo — o "comprometendo" que sobrou
         # volta a ser tentado (sem isso a rotina o pulava para sempre e a extensão escondia o botão).
         DB.execute("UPDATE tiktok_atendimento_v2033 SET comprometido='erro', comp_proxima=0, "
@@ -12081,6 +12089,9 @@ def _tiktok_comp_candidatos() -> list[str]:
 
 # Situações em que a rotina não mexe mais no pedido ("anterior" = atendido à mão; "fora_da_fila" = saiu sem atendimento).
 TIKTOK_ATEND_PARADOS = TIKTOK_ATEND_FINAIS + ("anterior", "fora_da_fila", "ja_tinha")  # V20.60: + ja_tinha
+# V20.60 (2ª revisão): recusas da porta que provam que nada foi criado com a chave TIKTOK-<pedido>
+TIKTOK_ATEND_NADA_CRIADO = ("sem_credito", "sem_estoque", "item_nao_encontrado", "cliente_nao_encontrado",
+                            "preco_recusado", "origem_recusada")
 
 
 def _tiktok_atendimento_ja_atendido(pedido: str) -> bool:
@@ -12284,8 +12295,9 @@ def _tiktok_atendimento_itens(venda: dict[str, Any], canal: str = "TikTok") -> l
     return saida
 
 
-def tiktok_atendimento_pedido(pedido: str) -> dict[str, Any]:
-    """Cadastro do cliente e atendimento de UM pedido do TikTok. Grava o estado; nunca levanta."""
+def tiktok_atendimento_pedido(pedido: str, forcar: bool = False) -> dict[str, Any]:
+    """Cadastro do cliente e atendimento de UM pedido do TikTok. Grava o estado; nunca levanta.
+    V20.60 (revisão): `forcar` = clique de gente no painel — cria mesmo com o cliente tendo atendimento aberto."""
     pedido = str(pedido).strip()
     conhecido = _exp_cliente_do_pedido(pedido)
     if not conhecido["documento"] or not conhecido["nome_fiscal"]:
@@ -12348,8 +12360,8 @@ def tiktok_atendimento_pedido(pedido: str) -> dict[str, Any]:
     # V20.60 (dono, 12/11: "se esse cliente já tiver atendimento criado do mesmo item, a nossa integração não cria"):
     # procura os atendimentos abertos do cliente no Apollo. Depois de um criar incerto o aberto pode ser o NOSSO:
     # aí vai direto à porta (a chave devolve ja_existia).
-    if str((tiktok_atendimento_do_pedido(pedido) or {}).get("situacao") or "") != "incerto":
-        numero_ja, erro_busca, ocupado = _atend_aberto_mesmas_pecas(pedido)
+    if not forcar and not str((tiktok_atendimento_do_pedido(pedido) or {}).get("criar_enviado_em") or ""):
+        numero_ja, erro_busca, ocupado = _atend_aberto_mesmas_pecas(pedido, itens)
         if erro_busca:
             detalhe = "Não deu para conferir no Apollo se o cliente já tem atendimento: " + erro_busca
             _tiktok_atendimento_registrar(pedido, "aguardando" if ocupado else "erro", detalhe[:500],
@@ -12369,10 +12381,23 @@ def tiktok_atendimento_pedido(pedido: str) -> dict[str, Any]:
              "condicao_pagamento": TIKTOK_ATEND_CONDICAO, "observacao": f"TikTok {pedido}",
              "valor_esperado": esperado, "itens": itens}
     with EXP_PORTA_LOCK:
+        with DB_LOCK:   # V20.60 (revisão): o criar vai sair — a repetição vai direto à porta (a chave decide)
+            DB.execute("INSERT OR IGNORE INTO tiktok_atendimento_v2033(pedido) VALUES(?)", (pedido,))
+            marca_antes = str((DB.execute("SELECT criar_enviado_em FROM tiktok_atendimento_v2033 WHERE pedido=?",
+                                          (pedido,)).fetchone() or [""])[0] or "")
+            DB.execute("UPDATE tiktok_atendimento_v2033 SET criar_enviado_em=? WHERE pedido=?", (now_iso(), pedido))
+            DB.commit()
         try:
             r = _exp_porta("atendimento/criar", corpo, escrita=True)
         except PortaErro as exc:
             situacao = "incerto" if exc.incerto else "erro"
+            if not exc.incerto:
+                # 2ª revisão: recusa sem processar (429, 4xx) = este criar não criou nada: a marca volta a ser a de
+                # antes (a de um incerto anterior continua valendo)
+                with DB_LOCK:
+                    DB.execute("UPDATE tiktok_atendimento_v2033 SET criar_enviado_em=? WHERE pedido=?",
+                               (marca_antes, pedido))
+                    DB.commit()
             # A mesma chave nunca cria outro atendimento: o incerto é tentado de novo sozinho.
             _tiktok_atendimento_registrar(pedido, situacao, str(exc), cliente=codigo, valor=esperado, itens=itens,
                                           espera="passageiro" if exc.passageiro else ("incerto" if exc.incerto else "erro"))
@@ -12390,6 +12415,13 @@ def tiktok_atendimento_pedido(pedido: str) -> dict[str, Any]:
         detalhe = f"{textos.get(situacao, 'Recusado')}: {motivo}"[:500]
         espera = "passageiro" if situacao == "apollo_fora" else "erro"
         estado_final = "erro"
+        if r.get("ok") is False and situacao in TIKTOK_ATEND_NADA_CRIADO:
+            # V20.60 (revisão): a porta respondeu que NÃO criou (a chave devolveria ja_existia se um criar anterior
+            # tivesse criado): a próxima volta procura de novo o atendimento aberto do cliente. 2ª revisão: só nas
+            # recusas que provam isso (valor_divergente = o Apollo gravou; situação desconhecida = fica a marca).
+            with DB_LOCK:
+                DB.execute("UPDATE tiktok_atendimento_v2033 SET criar_enviado_em='' WHERE pedido=?", (pedido,))
+                DB.commit()
         if situacao == "sem_credito":
             # revisar-antes-de-subir (06/11): o crédito não se resolve sozinho (o cadastro já está feito e não é
             # refeito); alguém libera pelo painel do pedido (Linx web) ou no Apollo, e a rotina tenta de novo em 1 h.
@@ -12511,7 +12543,8 @@ def tiktok_atendimento_manual_iniciar(pedido: str, ator: str) -> dict[str, Any]:
                 if so_comprometer:
                     tiktok_atendimento_comprometer(pedido)
                     return
-                r = tiktok_atendimento_pedido(pedido)
+                # V20.60 (revisão): o clique de gente decide — cria mesmo com atendimento aberto do cliente (ja_tinha)
+                r = tiktok_atendimento_pedido(pedido, forcar=True)
                 if r.get("situacao") == "aguardando":  # nada foi feito: deixa o motivo na tela
                     _tiktok_atendimento_registrar(pedido, "revisar", "Não criado: " + str(r.get("motivo") or "aguardando"))
             except Exception as exc:
@@ -12844,20 +12877,39 @@ def _mkt_atend_ja_tem(pedido: str, esperado: float, marketplace: str = "") -> tu
     return "", ""
 
 
-def _atend_aberto_mesmas_pecas(pedido: str) -> tuple[str, str, bool]:
+def _atend_aberto_mesmas_pecas(pedido: str, itens: Any = None) -> tuple[str, str, bool]:
     """V20.60 (dono, 12/11): o cliente já tem atendimento ABERTO no Apollo com TODAS as peças do pedido? O valor não
     importa ("do mesmo item"); o atendimento ligado a OUTRO pedido nosso não conta (é outra venda do mesmo cliente);
     romaneio já solto no Apollo conta. Devolve (número, erro, apollo_ocupado). Lê a porta (situação + abertos +
-    prévias), como o painel."""
+    prévias), como o painel. Revisão: com `itens` (código + quantidade do pedido) o atendimento precisa ter cada peça
+    em quantidade igual ou maior; o romaneio já solto também passa pelos ligados e pela quantidade."""
     d = exp_romaneio_preparar(pedido)
     if not d.get("ok") or d.get("situacao") in ("erro", "cliente", "informar_atendimento"):
         return "", str(d.get("aviso") or d.get("error") or "o Apollo não listou os atendimentos"), bool(d.get("apollo_ocupado"))
-    if d.get("romaneio_fora"):
-        return re.sub(r"\D", "", str(d.get("romaneio_fora") or "")), "", False
     ligados = _mkt_atend_ligados(pedido)
-    for c in d.get("candidatos") or []:
-        numero = re.sub(r"\D", "", str(c.get("atendimento") or ""))
-        if numero and c.get("bate") and not c.get("faltam") and numero not in ligados:
+    precisa: dict[str, float] = {}
+    for i in itens or []:
+        if isinstance(i, dict) and _exp_norm_codigo(i.get("codigo")):
+            k = _exp_norm_codigo(i.get("codigo"))
+            precisa[k] = precisa.get(k, 0.0) + float(i.get("quantidade") or 0)
+
+    def cobre(c: dict[str, Any]) -> bool:
+        if not precisa:
+            return True
+        tem: dict[str, float] = {}
+        for it in c.get("itens") or []:
+            if isinstance(it, dict):
+                k = _exp_norm_codigo(it.get("codigo"))
+                tem[k] = tem.get(k, 0.0) + (_tiktok_num(it.get("quantidade")) or 0.0)
+        return all(tem.get(k, 0.0) + 1e-9 >= q for k, q in precisa.items())
+
+    candidatos = {re.sub(r"\D", "", str(c.get("atendimento") or "")): c
+                  for c in d.get("candidatos") or [] if isinstance(c, dict)}
+    fora = re.sub(r"\D", "", str(d.get("romaneio_fora") or ""))
+    if fora and fora not in ligados and (not precisa or (fora in candidatos and cobre(candidatos[fora]))):
+        return fora, "", False
+    for numero, c in candidatos.items():
+        if numero and c.get("bate") and not c.get("faltam") and numero not in ligados and cobre(c):
             return numero, "", False
     return "", "", False
 
