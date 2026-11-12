@@ -134,7 +134,7 @@ memoria_limitar_arenas()
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.59-PREFIXO-ANUNCIO"
+APP_VERSION = "20.60-JA-TEM-ATENDIMENTO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -12080,7 +12080,7 @@ def _tiktok_comp_candidatos() -> list[str]:
 
 
 # Situações em que a rotina não mexe mais no pedido ("anterior" = atendido à mão; "fora_da_fila" = saiu sem atendimento).
-TIKTOK_ATEND_PARADOS = TIKTOK_ATEND_FINAIS + ("anterior", "fora_da_fila")
+TIKTOK_ATEND_PARADOS = TIKTOK_ATEND_FINAIS + ("anterior", "fora_da_fila", "ja_tinha")  # V20.60: + ja_tinha
 
 
 def _tiktok_atendimento_ja_atendido(pedido: str) -> bool:
@@ -12345,6 +12345,24 @@ def tiktok_atendimento_pedido(pedido: str) -> dict[str, Any]:
         _tiktok_atendimento_conferir_fila(pedido, venda, linhas)
     except TikTokAtendRevisar as exc:
         return revisar(exc)
+    # V20.60 (dono, 12/11: "se esse cliente já tiver atendimento criado do mesmo item, a nossa integração não cria"):
+    # procura os atendimentos abertos do cliente no Apollo. Depois de um criar incerto o aberto pode ser o NOSSO:
+    # aí vai direto à porta (a chave devolve ja_existia).
+    if str((tiktok_atendimento_do_pedido(pedido) or {}).get("situacao") or "") != "incerto":
+        numero_ja, erro_busca, ocupado = _atend_aberto_mesmas_pecas(pedido)
+        if erro_busca:
+            detalhe = "Não deu para conferir no Apollo se o cliente já tem atendimento: " + erro_busca
+            _tiktok_atendimento_registrar(pedido, "aguardando" if ocupado else "erro", detalhe[:500],
+                                          espera="passageiro" if ocupado else "erro", cliente=codigo)
+            return {"ok": False, "situacao": "aguardando" if ocupado else "erro", "motivo": detalhe,
+                    "apollo_ocupado": ocupado}
+        if numero_ja:
+            detalhe = (f"O cliente já tem o atendimento {numero_ja} aberto no Apollo com as peças deste pedido: "
+                       f"nenhum outro foi criado.")
+            _tiktok_atendimento_registrar(pedido, "ja_tinha", detalhe, cliente=codigo, atendimento=numero_ja,
+                                          valor=esperado, itens=itens)
+            tiktok_log_event_se_mudou("atendimento", pedido, "JA_TINHA", detalhe[:300])
+            return {"ok": False, "situacao": "ja_tinha", "motivo": detalhe, "atendimento": numero_ja}
     # 3) atendimento (revenda pela conta do pedido: TikTok = Bauru)
     corpo = {"revenda": _exp_revenda(pedido), "operador": "noromak", "origem": TIKTOK_ATEND_ORIGEM,
              "pedido_externo": f"{TIKTOK_ATEND_ORIGEM}-{pedido}", "cliente": int(codigo),
@@ -12824,6 +12842,24 @@ def _mkt_atend_ja_tem(pedido: str, esperado: float, marketplace: str = "") -> tu
                 and valor_ok and numero not in ligados):
             return numero, ""
     return "", ""
+
+
+def _atend_aberto_mesmas_pecas(pedido: str) -> tuple[str, str, bool]:
+    """V20.60 (dono, 12/11): o cliente já tem atendimento ABERTO no Apollo com TODAS as peças do pedido? O valor não
+    importa ("do mesmo item"); o atendimento ligado a OUTRO pedido nosso não conta (é outra venda do mesmo cliente);
+    romaneio já solto no Apollo conta. Devolve (número, erro, apollo_ocupado). Lê a porta (situação + abertos +
+    prévias), como o painel."""
+    d = exp_romaneio_preparar(pedido)
+    if not d.get("ok") or d.get("situacao") in ("erro", "cliente", "informar_atendimento"):
+        return "", str(d.get("aviso") or d.get("error") or "o Apollo não listou os atendimentos"), bool(d.get("apollo_ocupado"))
+    if d.get("romaneio_fora"):
+        return re.sub(r"\D", "", str(d.get("romaneio_fora") or "")), "", False
+    ligados = _mkt_atend_ligados(pedido)
+    for c in d.get("candidatos") or []:
+        numero = re.sub(r"\D", "", str(c.get("atendimento") or ""))
+        if numero and c.get("bate") and not c.get("faltam") and numero not in ligados:
+            return numero, "", False
+    return "", "", False
 
 
 def _mkt_itens_iguais(a: Any, b: Any) -> bool:

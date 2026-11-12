@@ -97,6 +97,11 @@ class Base(TesteNoromak):
     def setUp(self):
         super().setUp()
         S._tiktok_config_gravar("atendimento_auto", "1", "teste")
+        # V20.60: a procura de atendimento aberto do cliente lê o Apollo (painel); aqui = nenhum aberto.
+        # test_tiktok_ja_tem_atendimento_v2060 desliga este atalho e testa a procura.
+        self._sem_aberto = mock.patch.object(S, "_atend_aberto_mesmas_pecas", return_value=("", "", False))
+        self._sem_aberto.start()
+        self.addCleanup(self._sem_aberto.stop)
 
     def receber(self, *detalhes):
         lista = [{k: v for k, v in o.items() if k not in ("price_module",)} for o in detalhes]

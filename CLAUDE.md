@@ -594,7 +594,15 @@ itens `comprometido: true` ou `ja_comprometido`); falha no comprometer nunca des
 só conta o TikTok com `comprometido='sim'` (sem isso o Apollo não reserva: desconta). O botão do painel (`POST
 /api/expedicao-apollo/tiktok-atendimento`) com o atendimento já criado e sem as peças comprometidas só compromete; extensão Linx
 Cliente **0.53**: faixa "Peças do atendimento N não comprometidas" com o botão "Comprometer peças". Teste:
-`TESTES/test_tiktok_comprometer_v2043.py`. **revisar-antes-de-subir (09/11, "corrigir todos"):** revenda sempre a de Bauru
+`TESTES/test_tiktok_comprometer_v2043.py`. **V20.60 — cliente que já tem atendimento** (dono, 12/11: "se esse cliente já
+tiver atendimento criado do mesmo item, a nossa integração não cria"; pedido para ligar o automático do TikTok). Antes do
+`atendimento/criar`, `_atend_aberto_mesmas_pecas` lê os abertos do cliente pelo `exp_romaneio_preparar` (o mesmo do painel): um com
+TODAS as peças do pedido (o valor não importa), não ligado a outro pedido nosso (`_mkt_atend_ligados`), ou romaneio já solto no
+Apollo = não cria (situação `ja_tinha`, em `TIKTOK_ATEND_PARADOS`, rótulo no cartão). Sem resposta do Apollo = `aguardando`/`erro`,
+nada criado; depois de um criar `incerto` vai direto à porta (a chave devolve `ja_existia`). Vale também para o botão do painel do
+TikTok. **ML/Shopee automáticos ficaram de fora:** a porta só abre MERCADOLIVRE/SHOPEE com `manual: true` (clique de gente, V20.51)
+— precisa o Guilherme liberar um modo automático. Teste: `TESTES/test_tiktok_ja_tem_atendimento_v2060.py`.
+**revisar-antes-de-subir (09/11, "corrigir todos"):** revenda sempre a de Bauru
 (`SEPARACAO_REVENDA[TIKTOK_CASA]`, não pela fila: pedido fora dela caía em Araçatuba); rotina e botão com as mesmas barreiras
 (`_tiktok_comp_pode`: pedido na fila, TikTok ainda "a enviar" — venda cancelada não reserva —, sem romaneio/caixa, venda não
 mudou); 429/409 não gastam tentativa; o comprometer roda **mesmo com o automático desligado** (só mexe em atendimento que já
