@@ -679,6 +679,12 @@ leitura): 720 anúncios movidos, 426 fichas renomeadas, 104 juntadas, 0 mantidas
 resumo (contas, em Automático, a enviar, sem número, contas com erro); os cartões só aparecem aberto (`nk_anuncios_estoque_aberto_v2059`,
 começa fechado). Kit lido pelo código ("KIT-A/B/C") sem composição no Cadastro de Kits abre o editor da aba Composição com as peças
 do código (uma de cada, `novoTipo`) — antes só mostrava o aviso e não dava para pôr as peças. Teste: `TESTES/test_anuncios_prefixo_v2059.py`.
+**revisar-antes-de-subir da V20.59 (12/11, 2 voltas):** o envio de estoque do TikTok aceita o SKU com o prefixo quando a ficha é o
+código sem ele (senão todo anúncio "158582-…" em Automático parava); a correção do boot decide **antes** quais fichas antigas ficam
+e o anúncio fica com elas, não mexe em Shopee/Magalu nem em ML `controle='noromak'` e faz `rollback` em erro; a mesma regra
+(`_anuncio_ficha_presa`: linha já na ficha do SKU inteiro com prefixo + ficha com trabalho do Admin, ou ML do Noromak) vale na puxada do
+ML (`_anuncio_gravar_lote`) e no espelho do TikTok — senão a 1ª puxada desfazia o que o boot protegeu. Tela: `pecasDoCodigoKit` (mesma
+regra do `_separacao_partes`, "KIT-1/A-1/B"), kit do código sem "sair sem salvar" falso (`doCodigo`), Apollo em lote fora no resumo.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

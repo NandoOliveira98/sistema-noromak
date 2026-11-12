@@ -8429,6 +8429,30 @@ _ANUNCIO_TABELAS_DA_FICHA = ("anuncio_foto_v2024", "anuncio_rascunho_v2024", "an
                              "anuncio_rascunho_magalu_v2034", "anuncio_rascunho_tiktok_v2041")
 
 
+def _anuncio_ficha_com_trabalho(codigo: str, catalogo: dict[str, dict[str, Any]]) -> bool:
+    """V20.59 (revisão): ficha com algo que não se perde — Admin (campo, tipo, criada por ele), foto, rascunho ou kit no
+    Cadastro. SOB o DB_LOCK."""
+    velha = _ficha_ler_sem_lock(codigo)
+    if velha is None:
+        return False
+    row = DB.execute("SELECT criada_por_admin, tipo_confirmado_por FROM anuncio_ficha_v2023 WHERE codigo=?",
+                     (codigo,)).fetchone()
+    usada = any(DB.execute(f"SELECT 1 FROM {t} WHERE ficha_codigo=? LIMIT 1", (codigo,)).fetchone()
+                for t in _ANUNCIO_TABELAS_DA_FICHA)
+    return bool((row and (int(row["criada_por_admin"] or 0) or str(row["tipo_confirmado_por"] or ""))) or usada
+                or "admin" in set((velha.get("origem") or {}).values()) or _kit_composicao(codigo, catalogo))
+
+
+def _anuncio_ficha_presa(ficha_atual: Any, sku: Any, noromak: bool, catalogo: dict[str, dict[str, Any]] | None) -> bool:
+    """V20.59 (2ª revisão): a linha que JÁ está na ficha do SKU inteiro com o prefixo continua nela quando essa ficha tem
+    trabalho do Admin ou o anúncio é controlado/criado pelo Noromak — a mesma regra no boot, na puxada do ML e no espelho do
+    TikTok (senão a 1ª puxada desfazia o que o boot protegeu). SOB o DB_LOCK."""
+    atual = str(ficha_atual or "")
+    if not atual or not ANUNCIO_PREFIXO_RE.match(atual) or atual != normalize(sku):
+        return False
+    return noromak or _anuncio_ficha_com_trabalho(atual, catalogo if catalogo is not None else _load_kit_catalog())
+
+
 def anuncios_prefixo_corrigir() -> dict[str, int]:
     """V20.59: correção única (boot) dos anúncios gravados com o prefixo no código da ficha. Só a linha cuja ficha é o
     próprio SKU do anúncio (vínculo para outro código é decisão de alguém e fica). A ficha antiga que ficou sem anúncio:
@@ -8439,15 +8463,7 @@ def anuncios_prefixo_corrigir() -> dict[str, int]:
 
     def _fica(antigo: str) -> bool:
         """A ficha antiga com algo que não se perde (Admin, foto, rascunho, kit no Cadastro) fica — e o anúncio com ela."""
-        velha = _ficha_ler_sem_lock(antigo)
-        if velha is None:
-            return False
-        row = DB.execute("SELECT criada_por_admin, tipo_confirmado_por FROM anuncio_ficha_v2023 WHERE codigo=?",
-                         (antigo,)).fetchone()
-        usada = any(DB.execute(f"SELECT 1 FROM {t} WHERE ficha_codigo=? LIMIT 1", (antigo,)).fetchone()
-                    for t in _ANUNCIO_TABELAS_DA_FICHA)
-        return bool((row and (int(row["criada_por_admin"] or 0) or str(row["tipo_confirmado_por"] or ""))) or usada
-                    or "admin" in set((velha.get("origem") or {}).values()) or _kit_composicao(antigo, catalogo))
+        return _anuncio_ficha_com_trabalho(antigo, catalogo)
 
     with DB_LOCK:
         try:
@@ -8544,10 +8560,15 @@ def _anuncio_gravar_lote(conta: str, lote: list[dict[str, Any]], res: dict[str, 
         parcial = {"novos": 0, "atualizados": 0, "sem_ficha": 0}
         try:
             for r in lote:
-                atual = DB.execute("SELECT removido_em, ficha_codigo, sku_anuncio, estoque_modo FROM anuncio_canal_v2023 "
+                atual = DB.execute("SELECT removido_em, ficha_codigo, sku_anuncio, estoque_modo, controle FROM anuncio_canal_v2023 "
                                    "WHERE canal='ml' AND conta=? AND anuncio_id=?", (conta, r["mlb"])).fetchone()
                 if atual is not None and str(atual["removido_em"] or ""):
                     continue  # removido pelo ADMIN: nao e atualizado nem recriado
+                # V20.59 (2ª revisão): a linha que já está na ficha do SKU com o prefixo e essa ficha tem trabalho do Admin
+                # (ou o anúncio é do Noromak) fica nela — a mesma regra da correção do boot
+                if atual is not None and r["ficha"] and r["ficha"] != str(atual["ficha_codigo"] or "") \
+                        and _anuncio_ficha_presa(atual["ficha_codigo"], r["sku"], str(atual["controle"] or "") == "noromak", None):
+                    r = {**r, "ficha": str(atual["ficha_codigo"]), "valores": (str(atual["ficha_codigo"]),) + tuple(r["valores"][1:])}
                 if not r["ficha"] and not (atual is not None and str(atual["ficha_codigo"] or "")):
                     parcial["sem_ficha"] += 1  # V20.24: conta o que fica sem ficha depois de gravar
                 v = r["valores"]
@@ -9974,6 +9995,7 @@ def _tiktok_anuncios_espelhar() -> int:
     for r in DB.execute("SELECT * FROM tiktok_sku_v1964").fetchall():
         sku_id = str(r["sku_id"])
         sku = vinculos.get(sku_id) or str(r["seller_sku"] or "")
+        sku_inteiro = sku
         if ANUNCIO_PREFIXO_RE.match(str(sku).strip()):  # V20.59: sem o prefixo de anúncio (o mesmo do ML)
             if "catalogo" not in kit_ctx:
                 kit_ctx["catalogo"] = _load_kit_catalog()
@@ -9983,6 +10005,10 @@ def _tiktok_anuncios_espelhar() -> int:
         atual = atuais.get(sku_id)
         if atual is not None and str(atual["removido_em"] or ""):
             continue  # removido pelo ADMIN: não é atualizado nem recriado
+        # V20.59 (2ª revisão): já na ficha do SKU com o prefixo e essa ficha tem trabalho do Admin = fica nela (regra do boot)
+        if atual is not None and ficha and ficha != str(atual["ficha_codigo"] or "") \
+                and _anuncio_ficha_presa(atual["ficha_codigo"], sku_inteiro, False, kit_ctx.get("catalogo")):
+            ficha, sku = str(atual["ficha_codigo"]), sku_inteiro
         # revisão V20.57: SKU cortado no limite do TikTok (V20.08) sem vínculo à mão não ganha ficha (o fim pode ter
         # perdido uma peça); o vínculo à mão cria a ficha certa na volta seguinte.
         cortado = not vinculos.get(sku_id) and len(str(r["seller_sku"] or "")) >= TIKTOK_SKU_LIMITE

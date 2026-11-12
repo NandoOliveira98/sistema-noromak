@@ -193,3 +193,45 @@ class RevisaoV2059(TesteNoromak):
         self.assertIn("function pecasDoCodigoKit(", html)
         self.assertIn("lote && !lote.em_dia", html.split("function desenharPainelEstoque()", 1)[1].split("const botao", 1)[0],
                       "Apollo em lote fora aparece no resumo do painel fechado")
+
+
+class Revisao2V2059(TesteNoromak):
+    """2ª revisão da V20.59: a ficha protegida no boot não pode ser desfeita pela 1ª puxada nem pelo espelho do TikTok."""
+
+    def _admin(self, cod):
+        S.ficha_importar(cod, {"nome": "Do ML"}, "anuncio_ml")
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE anuncio_ficha_v2023 SET origem_json=? WHERE codigo=?", (json.dumps({"nome": "admin"}), cod))
+            S.DB.commit()
+
+    def _puxar(self, conta, mlb, sku):
+        res = {"lidos": 0, "novos": 0, "atualizados": 0, "sem_ficha": 0, "parcial": 0, "erro": ""}
+        S._anuncio_gravar_itens(conta, {mlb: {"sku_ml": sku, "titulo": "Anúncio " + sku, "preco": 10.0, "estoque": 2,
+                                              "status": "active", "logistica": "drop_off"}}, res)
+        return res
+
+    def test_puxada_nao_tira_o_anuncio_da_ficha_do_admin(self):
+        self._admin("150142-2005040")
+        _linha("ml", "aracatuba", "MLB301", "150142-2005040", "150142-2005040")
+        self._puxar("aracatuba", "MLB301", "150142-2005040")
+        self.assertEqual(_ficha_da_linha("MLB301"), "150142-2005040")
+
+    def test_puxada_nao_mexe_no_anuncio_do_noromak(self):
+        _linha("ml", "aracatuba", "MLB302", "150142-2005041", "150142-2005041", controle="noromak")
+        self._puxar("aracatuba", "MLB302", "150142-2005041")
+        self.assertEqual(_ficha_da_linha("MLB302"), "150142-2005041")
+
+    def test_puxada_move_o_comum_e_o_novo_ja_nasce_certo(self):
+        _linha("ml", "aracatuba", "MLB303", "150142-2005042", "150142-2005042")
+        self._puxar("aracatuba", "MLB303", "150142-2005042")
+        self._puxar("bauru", "MLB304", "150142-2005043")
+        self.assertEqual(_ficha_da_linha("MLB303"), "2005042")
+        self.assertEqual(_ficha_da_linha("MLB304"), "2005043")
+
+    def test_espelho_do_tiktok_respeita_a_ficha_do_admin(self):
+        self._admin("151490-2005044")
+        _linha("tiktok", "bauru", "1738000000000000801", "151490-2005044", "151490-2005044", controle="tiktok")
+        S._tiktok_sku_gravar({"1738000000000000801": {"product_id": "P8", "titulo": "Peça", "status": "ACTIVATE",
+                                                       "seller_sku": "151490-2005044", "warehouse_id": "W",
+                                                       "armazens": 1, "qtd": 3}}, apagar_ausentes=False)
+        self.assertEqual(_ficha_da_linha("1738000000000000801"), "151490-2005044")
