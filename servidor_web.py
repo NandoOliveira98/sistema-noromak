@@ -8436,49 +8436,70 @@ def anuncios_prefixo_corrigir() -> dict[str, int]:
     qualquer uma dessas fica como está. Idempotente."""
     res = {"movidos": 0, "apagadas": 0, "renomeadas": 0, "mantidas": 0}
     catalogo = _load_kit_catalog()  # fora do DB_LOCK (relê o storage)
+
+    def _fica(antigo: str) -> bool:
+        """A ficha antiga com algo que não se perde (Admin, foto, rascunho, kit no Cadastro) fica — e o anúncio com ela."""
+        velha = _ficha_ler_sem_lock(antigo)
+        if velha is None:
+            return False
+        row = DB.execute("SELECT criada_por_admin, tipo_confirmado_por FROM anuncio_ficha_v2023 WHERE codigo=?",
+                         (antigo,)).fetchone()
+        usada = any(DB.execute(f"SELECT 1 FROM {t} WHERE ficha_codigo=? LIMIT 1", (antigo,)).fetchone()
+                    for t in _ANUNCIO_TABELAS_DA_FICHA)
+        return bool((row and (int(row["criada_por_admin"] or 0) or str(row["tipo_confirmado_por"] or ""))) or usada
+                    or "admin" in set((velha.get("origem") or {}).values()) or _kit_composicao(antigo, catalogo))
+
     with DB_LOCK:
-        rows = DB.execute("SELECT canal, conta, anuncio_id, ficha_codigo, sku_anuncio FROM anuncio_canal_v2023 "
-                          "WHERE ficha_codigo GLOB '[0-9][0-9][0-9][0-9][0-9]*-*'").fetchall()
-        antigas: set[str] = set()
-        for r in rows:
-            antigo = str(r["ficha_codigo"] or "")
-            if not ANUNCIO_PREFIXO_RE.match(antigo) or antigo != normalize(r["sku_anuncio"]):
-                continue
-            novo = normalize(anuncio_sem_prefixo(r["sku_anuncio"], catalogo))
-            if not novo or novo == antigo:
-                continue
-            DB.execute("UPDATE anuncio_canal_v2023 SET ficha_codigo=? WHERE canal=? AND conta=? AND anuncio_id=?",
-                       (novo, r["canal"], r["conta"], r["anuncio_id"]))
-            res["movidos"] += 1
-            antigas.add(antigo)
-        for antigo in sorted(antigas):
-            if DB.execute("SELECT 1 FROM anuncio_canal_v2023 WHERE ficha_codigo=? LIMIT 1", (antigo,)).fetchone():
-                continue  # ainda tem anúncio (vínculo ou kit): fica
-            velha = _ficha_ler_sem_lock(antigo)
-            if velha is None:
-                continue
-            row = DB.execute("SELECT criada_por_admin, tipo_confirmado_por FROM anuncio_ficha_v2023 WHERE codigo=?",
-                             (antigo,)).fetchone()
-            usada = any(DB.execute(f"SELECT 1 FROM {t} WHERE ficha_codigo=? LIMIT 1", (antigo,)).fetchone()
-                        for t in _ANUNCIO_TABELAS_DA_FICHA)
-            if (row and (int(row["criada_por_admin"] or 0) or str(row["tipo_confirmado_por"] or ""))) or usada \
-                    or "admin" in set((velha.get("origem") or {}).values()) or _kit_composicao(antigo, catalogo):
-                res["mantidas"] += 1
-                continue
-            novo = normalize(anuncio_sem_prefixo(antigo, catalogo))
-            if _ficha_ler_sem_lock(novo) is None:
-                DB.execute("UPDATE anuncio_ficha_v2023 SET codigo=? WHERE codigo=?", (novo, antigo))
-                res["renomeadas"] += 1
-                continue
-            por_origem: dict[str, dict[str, Any]] = {}
-            for nome, valor in (velha.get("campos") or {}).items():
-                por_origem.setdefault(str((velha.get("origem") or {}).get(nome) or "anuncio_ml"), {})[nome] = valor
-            for origem, campos in por_origem.items():
-                if origem in ANUNCIO_ORIGENS and origem != "admin":
-                    ficha_importar(novo, campos, origem, commit=False)
-            DB.execute("DELETE FROM anuncio_ficha_v2023 WHERE codigo=?", (antigo,))
-            res["apagadas"] += 1
-        DB.commit()
+        try:
+            rows = DB.execute("SELECT canal, conta, anuncio_id, ficha_codigo, sku_anuncio, controle FROM anuncio_canal_v2023 "
+                              "WHERE ficha_codigo GLOB '[0-9][0-9][0-9][0-9][0-9]*-*'").fetchall()
+            candidatos: list[tuple[Any, str, str]] = []
+            for r in rows:
+                antigo = str(r["ficha_codigo"] or "")
+                if not ANUNCIO_PREFIXO_RE.match(antigo) or antigo != normalize(r["sku_anuncio"]):
+                    continue
+                # revisão: anúncio criado pelo Noromak (Shopee, Magalu, ML publicado) grava sku = ficha do rascunho;
+                # movido, o acompanhamento/Liberar o devolveria ou não o acharia. Só os puxados (ML) e os do TikTok.
+                if r["canal"] in ("shopee", "magalu") or (r["canal"] == "ml" and str(r["controle"] or "") == "noromak"):
+                    continue
+                novo = normalize(anuncio_sem_prefixo(r["sku_anuncio"], catalogo))
+                if novo and novo != antigo:
+                    candidatos.append((r, antigo, novo))
+            # revisão (MÉDIO): decidido ANTES de mover — a ficha que fica não perde o anúncio para um código "sem ficha"
+            fica = {a: _fica(a) for a in {c[1] for c in candidatos}}
+            res["mantidas"] = sum(1 for v in fica.values() if v)
+            antigas: set[str] = set()
+            for r, antigo, novo in candidatos:
+                if fica[antigo]:
+                    continue
+                DB.execute("UPDATE anuncio_canal_v2023 SET ficha_codigo=? WHERE canal=? AND conta=? AND anuncio_id=?",
+                           (novo, r["canal"], r["conta"], r["anuncio_id"]))
+                res["movidos"] += 1
+                antigas.add(antigo)
+            for antigo in sorted(antigas):
+                if DB.execute("SELECT 1 FROM anuncio_canal_v2023 WHERE ficha_codigo=? LIMIT 1", (antigo,)).fetchone():
+                    continue  # ainda tem anúncio (vínculo, criado pelo Noromak): fica
+                velha = _ficha_ler_sem_lock(antigo)
+                if velha is None:
+                    continue
+                novo = normalize(anuncio_sem_prefixo(antigo, catalogo))
+                if _ficha_ler_sem_lock(novo) is None:
+                    DB.execute("UPDATE anuncio_ficha_v2023 SET codigo=? WHERE codigo=?", (novo, antigo))
+                    res["renomeadas"] += 1
+                    continue
+                por_origem: dict[str, dict[str, Any]] = {}
+                for nome, valor in (velha.get("campos") or {}).items():
+                    por_origem.setdefault(str((velha.get("origem") or {}).get(nome) or "anuncio_ml"), {})[nome] = valor
+                for origem, campos in por_origem.items():
+                    if origem in ANUNCIO_ORIGENS and origem != "admin":
+                        ficha_importar(novo, campos, origem, commit=False)
+                DB.execute("DELETE FROM anuncio_ficha_v2023 WHERE codigo=?", (antigo,))
+                res["apagadas"] += 1
+            DB.commit()
+        except Exception:
+            # revisão: nada pela metade (o próximo commit do boot gravaria o que já foi feito e a limpeza nunca terminaria)
+            DB.rollback()
+            raise
     if res["movidos"]:
         print(f"V20.59: prefixo de anúncio tirado do código da ficha: {res}", file=sys.stderr)
     return res
@@ -40975,7 +40996,10 @@ def _tiktok_estoque_gravar_api_na_vez(sku_id: str, qtd: int, ficha_codigo: str, 
         return res
     with DB_LOCK:
         vinc = DB.execute("SELECT codigos FROM tiktok_vinculo_v1964 WHERE sku_id=?", (str(sku_id),)).fetchone()
-    if ficha_codigo and not vinc and normalize(antes["sku"]) != normalize(ficha_codigo):
+    # revisar-antes-de-subir da V20.59 (ALTO): a ficha já é o código sem o prefixo de anúncio ("158582-2005001" -> 2005001)
+    # e o TikTok continua com o SKU inteiro: os dois jeitos valem (outro código continua recusado).
+    if ficha_codigo and not vinc and normalize(antes["sku"]) != normalize(ficha_codigo) \
+            and normalize(anuncio_sem_prefixo(antes["sku"])) != normalize(ficha_codigo):
         res["erro"] = f"a variação no TikTok tem o SKU {antes['sku'] or '(vazio)'}, não {ficha_codigo}: nada enviado"
         return res
     if antes["status"] in TIKTOK_STATUS_SEM_ESTOQUE:

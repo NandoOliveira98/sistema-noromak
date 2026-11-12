@@ -750,6 +750,16 @@ function prepararKit(manter) {
   KIT = {sku: F.composicao.sku_kit || F.codigo, nome: F.composicao.nome || "", fonte: F.composicao.fonte, ativo: F.composicao.ativo,
     base: JSON.stringify(comps), comps, versao_storage: F.versao_kits};
 }
+// V20.59 (revisão): peças de um código de kit sem composição no Cadastro, na mesma regra do servidor (_separacao_partes):
+// "KIT-1/10405594-1/10405569" = quantidade/código de cada peça; "KIT2-A/B" ou "KIT-A/B/C" = uma de cada (parte < 3 = variação).
+function pecasDoCodigoKit(codigo) {
+  const t = String(codigo || "").trim().toUpperCase();
+  const m = t.match(/^KIT-(\d+\/[^-\/\s]+(?:-\d+\/[^-\/\s]+)+)$/);
+  if (m) return [...m[1].matchAll(/(\d+)\/([^-\/\s]+)/g)].map(x => ({sku: x[2], quantidade: Math.max(1, Number(x[1]))}));
+  const inteiro = t.replace(/^KIT\d*-/, ""), partes = inteiro.split("/").map(s => s.trim()).filter(Boolean);
+  if (partes.some(s => s.length < 3)) return inteiro ? [{sku: inteiro, quantidade: 1}] : [];  // "WAP103/S" = uma peça
+  return partes.map(s => ({sku: s, quantidade: 1}));
+}
 function kitSujo() { return !!KIT && JSON.stringify(KIT.comps.map(c => ({sku: c.sku, quantidade: String(c.quantidade)}))) !== KIT.base; }
 function estoquePeca(filial, sku) {
   const e = (F.estoque || {})[filial];
@@ -792,9 +802,12 @@ function desenharKits() {
   if (!KIT) {
     // V20.59 (dono, 12/11: "não consigo adicionar os itens na composição do kit"): kit lido pelo código ("KIT-A/B/C") sem
     // composição no Cadastro de Kits abre o editor com as peças do código (uma de cada) para o Admin conferir e salvar.
-    const pecas = String(F.codigo || "").replace(/^KIT\d*-/i, "").split("/").map(s => s.trim()).filter(s => s.length >= 3);
+    const pecas = pecasDoCodigoKit(F.codigo);
+    const comps = pecas.length ? pecas.map(p => ({sku: p.sku, quantidade: String(p.quantidade), novo: true})) : [{sku: "", quantidade: "1", novo: true}];
+    // revisão: a base é o que veio do código — só olhar a ficha não conta como "alteração não salva" (o Salvar fica
+    // habilitado pelo `doCodigo` até gravar no Cadastro de Kits)
     KIT = {sku: F.codigo, nome: (F.ficha && F.ficha.campos && F.ficha.campos.nome) || "", fonte: "cadastro", ativo: true, novoTipo: true,
-      base: "[]", comps: pecas.length ? pecas.map(s => ({sku: s, quantidade: "1", novo: true})) : [{sku: "", quantidade: "1", novo: true}],
+      doCodigo: true, base: JSON.stringify(comps.map(c => ({sku: c.sku, quantidade: String(c.quantidade)}))), comps,
       versao_storage: F.versao_kits};
     if (pecas.length) nkToast("Este kit não está no Cadastro de Kits: as peças vieram do código, uma de cada. Confira as quantidades e salve.", "info", {duracao: 9000});
   }
@@ -825,7 +838,7 @@ function desenharKits() {
       <div id="quadroKit">${quadroEstoque(KIT.comps, true)}</div>${botaoApollo()}
       ${PODE ? `<div class="barra" style="margin-top:12px"><span class="esp"></span>
         ${sujo ? `<button class="nk-btn" onclick="${KIT.novoTipo ? "escolherTipo('peca')" : "prepararKit(false);desenharKits()"}">Descartar alterações</button>` : ""}
-        <button class="nk-btn pri" onclick="salvarKit()" ${sujo ? "" : "disabled"}><i class=nk-i-save></i> Salvar kit</button></div>` : ""}
+        <button class="nk-btn pri" onclick="salvarKit()" ${sujo || KIT.doCodigo ? "" : "disabled"}><i class=nk-i-save></i> Salvar kit</button></div>` : ""}
     </section>`;
 }
 function atualizarQuadroKit() {
@@ -1291,7 +1304,8 @@ function desenharPainelEstoque() {
   const tot = contas.reduce((s, [, d]) => { const r = d.resumo || {}; s.auto += Number(r.automatico || 0); s.muda += Number(r.mudariam || 0);
     s.sem += Number(r.sem_numero || 0); s.erro += (d.erro || (d.erros_repetidos || []).length) ? 1 : 0; return s; }, {auto: 0, muda: 0, sem: 0, erro: 0});
   const resumoTxt = `${contas.length} conta(s) · ${tot.auto} em Automático · ${tot.muda} a enviar · ${tot.sem} sem número`
-    + (tot.erro ? ` · <span class="bad">${tot.erro} conta(s) com erro</span>` : "");
+    + (tot.erro ? ` · <span class="bad">${tot.erro} conta(s) com erro</span>` : "")
+    + (lote && !lote.em_dia ? ' · <span class="bad">leitura em lote do Apollo fora do ar</span>' : "");  // revisão: visível fechado
   const botao = `<button type="button" class="estq-botao" aria-expanded="${PE_ABERTO}" onclick="alternarPainelEstoque()">
       <b>Estoque automático</b><span class="muted">${resumoTxt}</span><span class="esp"></span><span class="nk-btn mini">${PE_ABERTO ? "Fechar ▴" : "Ver Manual / Automático ▾"}</span></button>`;
   if (!PE_ABERTO) { el.innerHTML = botao; return; }

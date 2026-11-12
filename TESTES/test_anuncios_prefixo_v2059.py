@@ -77,7 +77,8 @@ class CorrecaoNoBoot(TesteNoromak):
             S.DB.commit()
         _linha("ml", "aracatuba", "MLB102", "150142-2005009", "150142-2005009")
         res = S.anuncios_prefixo_corrigir()
-        self.assertEqual(_ficha_da_linha("MLB102"), "2005009", "o anúncio vai para o produto certo")
+        # revisar-antes-de-subir: a ficha que fica não perde o anúncio (senão ele ia para um código "sem ficha")
+        self.assertEqual(_ficha_da_linha("MLB102"), "150142-2005009")
         self.assertIsNotNone(S.ficha_ler("150142-2005009"), "a ficha com dado do Admin nunca é apagada")
         self.assertEqual(res["mantidas"], 1)
 
@@ -126,5 +127,69 @@ class TelaV2059(TesteNoromak):
         from pathlib import Path
         html = (Path(S.APP_DIR) / "anuncios.html").read_text(encoding="utf-8")
         corpo = html.split("function desenharKits()", 1)[1].split("\nfunction ", 1)[0]
-        self.assertIn('replace(/^KIT\d*-/i, "").split("/")', corpo, "as peças vêm do código")
+        self.assertIn("pecasDoCodigoKit(F.codigo)", corpo, "as peças vêm do código")
         self.assertIn("novoTipo: true", corpo, "salva pelo mesmo caminho do kit novo (Cadastro de Kits)")
+
+
+class RevisaoV2059(TesteNoromak):
+    """revisar-antes-de-subir da V20.59 (12/11)."""
+
+    def test_envio_do_tiktok_aceita_o_sku_com_prefixo(self):
+        """ALTO: a ficha virou 2005001 e o TikTok continua com o SKU 158582-2005001: o envio não pode recusar."""
+        from unittest import mock
+        lido = {"existe": True, "status": "ACTIVATE", "sku": "158582-2005001", "locais": ["W1"], "estoque": 3,
+                "product_id": "P1", "variacoes": False}
+        with mock.patch.object(S, "tiktok_fonte", return_value="api"), \
+                mock.patch.object(S, "_tiktok_estoque_ler", return_value=lido), \
+                mock.patch.object(S, "tiktok_api", side_effect=RuntimeError("chamou o TikTok")) as api:
+            res = S._tiktok_estoque_gravar_api_na_vez("V9", 5, "2005001", {"ok": False, "erro": ""})
+        self.assertNotIn("nada enviado", res.get("erro", ""), "a conferência do SKU passa sem o prefixo")
+        api.assert_called()  # chegou a tentar gravar (o simulador recusa; o que importa é não parar na conferência)
+        with mock.patch.object(S, "tiktok_fonte", return_value="api"), \
+                mock.patch.object(S, "_tiktok_estoque_ler", return_value={**lido, "sku": "999999-7777777"}):
+            res = S._tiktok_estoque_gravar_api_na_vez("V9", 5, "2005001", {"ok": False, "erro": ""})
+        self.assertIn("nada enviado", res["erro"], "outro código continua recusado")
+
+    def test_ficha_antiga_que_fica_nao_perde_o_anuncio(self):
+        """MÉDIO: ficha com foto/dado do Admin fica — e o anúncio fica com ela (não vira 'sem ficha' no código novo)."""
+        S.ficha_importar("150142-2005020", {"nome": "Do ML"}, "anuncio_ml")
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO anuncio_foto_v2024(ficha_codigo,arquivo,tipo,origem,ordem,criado_em) VALUES(?,?,?,?,?,?)",
+                         ("150142-2005020", "f1.jpg", "jpg", "ml", 1, S.now_iso()))
+            S.DB.commit()
+        _linha("ml", "aracatuba", "MLB201", "150142-2005020", "150142-2005020")
+        res = S.anuncios_prefixo_corrigir()
+        self.assertEqual(_ficha_da_linha("MLB201"), "150142-2005020")
+        self.assertEqual(res["movidos"], 0)
+        self.assertEqual(res["mantidas"], 1)
+
+    def test_anuncio_criado_pelo_noromak_nao_e_movido(self):
+        """BAIXO: Shopee/Magalu/ML publicados pelo Noromak gravam sku = ficha; o rascunho continua na ficha antiga."""
+        for canal, conta, aid in (("shopee", "aracatuba", "SH1"), ("magalu", "aracatuba", "MG1"), ("ml", "aracatuba", "MLB202")):
+            _linha(canal, conta, aid, "157120-2005021", "157120-2005021", controle="noromak")
+        S.anuncios_prefixo_corrigir()
+        for aid in ("SH1", "MG1", "MLB202"):
+            self.assertEqual(_ficha_da_linha(aid), "157120-2005021", aid)
+
+    def test_erro_no_meio_desfaz_tudo(self):
+        """BAIXO: exceção no meio não deixa a correção pela metade (seria gravada pelo próximo commit)."""
+        from unittest import mock
+        S.ficha_importar("2005030", {"nome": "Certa"}, "anuncio_ml")
+        S.ficha_importar("150142-2005030", {"nome": "Do ML"}, "anuncio_ml")
+        _linha("ml", "aracatuba", "MLB203", "150142-2005030", "150142-2005030")
+        with mock.patch.object(S, "ficha_importar", side_effect=RuntimeError("falhou")):
+            with self.assertRaises(RuntimeError):
+                S.anuncios_prefixo_corrigir()
+        with S.DB_LOCK:
+            S.DB.commit()  # o próximo commit do boot não pode gravar nada da correção que falhou
+        self.assertEqual(_ficha_da_linha("MLB203"), "150142-2005030")
+        self.assertEqual(S.anuncios_prefixo_corrigir()["movidos"], 1, "na próxima subida a correção roda inteira")
+
+    def test_tela_kit_sem_aviso_falso_e_kit_q_codigo(self):
+        from pathlib import Path
+        html = (Path(S.APP_DIR) / "anuncios.html").read_text(encoding="utf-8")
+        corpo = html.split("function desenharKits()", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("pecasDoCodigoKit(", corpo)
+        self.assertIn("function pecasDoCodigoKit(", html)
+        self.assertIn("lote && !lote.em_dia", html.split("function desenharPainelEstoque()", 1)[1].split("const botao", 1)[0],
+                      "Apollo em lote fora aparece no resumo do painel fechado")
