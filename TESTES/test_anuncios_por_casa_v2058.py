@@ -122,3 +122,75 @@ class TiktokPorAnuncios(TesteNoromak):
         self.assertIn('"/api/tiktok-estoque/vinculo"', HTML)
         self.assertIn("Controlar estoque aqui", HTML)
         self.assertNotIn('href="/expedicao/tiktok-estoque" target', HTML, "o anúncio não manda mais para a tela antiga")
+
+
+class RevisaoV2058(TesteNoromak):
+    """revisar-antes-de-subir da V20.58 (12/11, "corrigir os 5")."""
+
+    def _tiktok(self, sku_id, ficha, modo):
+        S._tiktok_sku_gravar({sku_id: {"product_id": "P" + sku_id, "titulo": "Peça " + ficha, "status": "ACTIVATE",
+                                       "seller_sku": ficha, "warehouse_id": "W", "armazens": 1, "qtd": 3}},
+                             apagar_ausentes=False)
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE anuncio_canal_v2023 SET controle='noromak', estoque_modo=? WHERE anuncio_id=?",
+                         (modo, sku_id))
+            S.DB.commit()
+
+    def _modo(self, sku_id):
+        with S.DB_LOCK:
+            r = S.DB.execute("SELECT ficha_codigo, estoque_modo FROM anuncio_canal_v2023 WHERE anuncio_id=?",
+                             (sku_id,)).fetchone()
+        return str(r["ficha_codigo"]), str(r["estoque_modo"])
+
+    def test_vinculo_que_troca_a_peca_volta_o_automatico_a_manual(self):
+        from unittest import mock
+        with mock.patch.object(S, "_tiktok_controle_atual", return_value="noromak"):
+            self._tiktok("1738000000000000101", "2005101", "automatico")
+            self.assertEqual(self._modo("1738000000000000101"), ("2005101", "automatico"))
+            S.tiktok_vinculo_definir("1738000000000000101", "2005102", "admin")
+        self.assertEqual(self._modo("1738000000000000101"), ("2005102", "manual"),
+                         "trocou a peça: o Automático não manda o estoque de outra peça sem o Admin religar")
+        with S.DB_LOCK:
+            log = S.DB.execute("SELECT motivo FROM anuncio_estoque_log_v2026 WHERE anuncio_id=?",
+                               ("1738000000000000101",)).fetchall()
+        self.assertTrue(any("vínculo" in str(r["motivo"]) for r in log), "a volta a Manual fica no registro")
+
+    def test_vinculo_com_a_mesma_peca_nao_mexe_no_automatico(self):
+        from unittest import mock
+        with mock.patch.object(S, "_tiktok_controle_atual", return_value="noromak"):
+            self._tiktok("1738000000000000102", "2005103", "automatico")
+            S.tiktok_vinculo_definir("1738000000000000102", "2005103", "admin")
+        self.assertEqual(self._modo("1738000000000000102"), ("2005103", "automatico"))
+
+    def test_tela_nao_grava_a_sugestao_com_um_enter(self):
+        corpo = HTML.split("async function vincularTiktok(", 1)[1].split("\nasync function ", 1)[0]
+        self.assertNotIn("(a.sugestoes || [])[0]", corpo, "o campo não vem com a 1ª sugestão")
+        self.assertIn("nkConfirmar(", corpo, "o vínculo é confirmado mostrando as peças")
+        self.assertIn("volta para Manual", corpo)
+
+    def test_busca_pelo_codigo_exato_acha_a_peca_da_outra_casa(self):
+        S.ficha_importar("PECAKITB", {"nome": "Peça do kit"}, "anuncio_ml")
+        _anuncio("ml", "bauru", "MLB9", "PECAKITB")
+        self.assertNotIn("PECAKITB", {f["codigo"] for f in S.anuncios_lista_payload(conta="aracatuba")["fichas"]})
+        achou = {f["codigo"] for f in S.anuncios_lista_payload(busca="pecakitb", conta="aracatuba")["fichas"]}
+        self.assertIn("PECAKITB", achou, "a busca pelo código exato mostra a ficha mesmo sendo da outra casa")
+
+    def test_lista_sem_conta_quadratica(self):
+        src = S.inspect.getsource(S.anuncios_lista_payload) if hasattr(S, "inspect") else \
+            __import__("inspect").getsource(S.anuncios_lista_payload)
+        self.assertNotIn("for r in linhas)}", src, "nada de varrer os anúncios para cada ficha")
+
+    def test_tela_antiga_enquanto_a_fonte_for_a_extensao(self):
+        admin = (APP / "admin.html").read_text(encoding="utf-8")
+        self.assertIn('id="lnkTiktokEstoque"', admin)
+        self.assertIn("tiktok-estoque?antiga=1", admin)
+        with self.assertRaises(ValueError) as ctx:
+            S.anuncio_controle_definir("tiktok", "bauru", "X", "noromak", "admin", True)
+        self.assertNotIn("tela Estoque TikTok", str(ctx.exception))
+        self.assertIn("tiktok_fonte !== \"api\"", HTML, "o seletor do cartão TikTok trava com a extensão")
+
+    def test_mensagens_sem_a_tela_que_saiu_do_menu(self):
+        import re
+        fonte = Path(S.__file__).read_text(encoding="utf-8")
+        msgs = [m for m in re.findall(r'"[^"\n]*tela Estoque TikTok[^"\n]*"', fonte)]
+        self.assertEqual(msgs, [], "mensagem ao usuário não manda para a tela que saiu do menu")

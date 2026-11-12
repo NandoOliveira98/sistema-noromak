@@ -2114,11 +2114,11 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             <button type="button" id="btnTiktokEtiqueta" class="btn-secundario" onclick="alternarEtiquetaTiktokAdmin()" disabled title="Organiza o envio no TikTok e vincula a etiqueta (PDF) para a Conferência de Bauru.">Ligar etiqueta automática</button>
             <button type="button" id="btnTiktokSincronizar" class="btn-sucesso" onclick="sincronizarTiktokAdmin()" disabled>↻ Sincronizar agora</button>
             <button type="button" id="btnTiktokAtendimento" class="btn-secundario" onclick="alternarAtendimentoTiktokAdmin()" title="Cadastra o cliente e cria o atendimento no Apollo de Bauru, como a integração do Mercado Livre.">Ligar atendimento automático</button>
-            <a class="btn-secundario" href="/expedicao/tiktok-estoque" target="_blank" rel="noopener">Estoque TikTok</a>
+            <a class="btn-secundario" id="lnkTiktokEstoque" href="/expedicao/tiktok-estoque?antiga=1" target="_blank" rel="noopener">Estoque TikTok</a>
           </div>
           <div id="tiktokTeste"></div>
           <div id="tiktokAtendimentoLista"></div>
-          <div id="tiktokIntegracaoMensagem" class="integracao-nota">Entre com a conta da loja de <b>Bauru</b> no TikTok Shop e autorize o app da Noromak. Com a importação ligada, os pedidos aguardando envio entram sozinhos na fila de <b>Bauru</b>. O estoque (Apollo de Bauru → TikTok) fica na tela Estoque TikTok.</div>
+          <div id="tiktokIntegracaoMensagem" class="integracao-nota">Entre com a conta da loja de <b>Bauru</b> no TikTok Shop e autorize o app da Noromak. Com a importação ligada, os pedidos aguardando envio entram sozinhos na fila de <b>Bauru</b>. O estoque (Apollo de Bauru → TikTok) é controlado em Anúncios (casa Bauru) com a API; com a extensão, na tela antiga (botão Estoque TikTok).</div>
         </div>
         <div class="integracao-card">
           <h3><i class=nk-i-file></i> Linx DMS · Smart API</h3>
@@ -9958,6 +9958,8 @@ async function carregarIntegracaoTiktokAdmin(){
     document.getElementById("tiktokCallback").textContent=tk.redirect_uri||"—";
     // V20.40: fonte única (extensão do Seller Center ou API). Virar para a API só conectado e com a loja lida.
     const api=tk.fonte==="api",bf=document.getElementById("btnTiktokFonte"),pronto=!!(tk.connected&&tk.tem_loja);
+    // V20.58 (revisar-antes-de-subir): com a API o estoque é em Anúncios (Bauru); com a extensão, a tela antiga
+    const lk=document.getElementById("lnkTiktokEstoque");if(lk)lk.href=api?"/expedicao/anuncios?casa=bauru":"/expedicao/tiktok-estoque?antiga=1";
     document.getElementById("tiktokFonte").textContent=api?"🟢 API do TikTok — anúncios, estoque e pedidos pela API (a extensão é recusada)":"🧩 Extensão do Seller Center";
     if(bf){bf.dataset.fonte=tk.fonte||"extensao";bf.textContent=api?"Voltar para a extensão":"Usar a API";bf.disabled=!api&&!pronto;
       bf.title=!api&&!pronto?"Conecte o TikTok Shop e rode o Testar leitura antes de usar a API.":"Uma fonte de cada vez: a extensão do Seller Center ou a API do TikTok (anúncios, estoque e pedidos).";}

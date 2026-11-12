@@ -9127,7 +9127,9 @@ def anuncio_controle_definir(canal: str, conta: str, anuncio_id: str, controle: 
         if str(row["controle"]) == "full" or str(row["logistica"]) == "fulfillment":
             raise ValueError("Anúncio Full: o estoque é do Mercado Livre.")
         if canal == "tiktok" or str(row["controle"]) == "tiktok":  # V20.40
-            raise ValueError("Anúncio do TikTok: o estoque é controlado pela tela Estoque TikTok.")
+            # V20.58: a tela Estoque TikTok saiu do menu
+            raise ValueError("Anúncio do TikTok: o estoque é controlado no próprio anúncio (Manual/Automático) com a "
+                             "API do TikTok; com a extensão do Seller Center como fonte, use “Controlar estoque aqui”.")
         if controle == "noromak" and not confirmou_alephee:
             raise ValueError("Confirme que o anúncio foi desativado na Alephee.")
         modo_antes = DB.execute("SELECT estoque_modo FROM anuncio_canal_v2023 WHERE canal=? AND conta=? AND anuncio_id=?",
@@ -9178,8 +9180,16 @@ def anuncios_lista_payload(busca: str = "", filtro: str = "", conta: str = "") -
     com_anuncio = {str(r["ficha_codigo"] or "") for r in linhas if str(r["ficha_codigo"] or "")}
     if conta:  # V20.24: so os anuncios da conta (misto tambem e calculado so nela)
         linhas = [r for r in linhas if str(r["conta"]) == conta]
-        fichas = {c: f for c, f in fichas.items()
-                  if c not in com_anuncio or any(str(r["ficha_codigo"] or "") == c for r in linhas)}
+        # revisar-antes-de-subir: conjunto (antes um any() pelos anúncios para cada ficha: lento a cada tecla da busca)
+        da_casa = {str(r["ficha_codigo"] or "") for r in linhas if str(r["ficha_codigo"] or "")}
+        todas_fichas = fichas
+        fichas = {c: f for c, f in todas_fichas.items() if c not in com_anuncio or c in da_casa}
+        n_fichas_casa = len(fichas)
+        # revisar-antes-de-subir: a busca pelo código EXATO acha a ficha da outra casa (peça de um kit desta casa)
+        if termo and termo in todas_fichas and termo not in fichas:
+            fichas[termo] = todas_fichas[termo]
+    else:
+        n_fichas_casa = len(fichas)
     misto = _anuncio_misto_por_codigo(linhas)
     por_cod: dict[str, list[Any]] = {}
     soltos: list[dict[str, Any]] = []
@@ -9220,7 +9230,7 @@ def anuncios_lista_payload(busca: str = "", filtro: str = "", conta: str = "") -
         if filtro == "com_anuncio" and not item["anuncios"]:  # V20.24: cartão "Anúncios" filtra (dono, 05/11)
             continue
         saida.append(item)
-    resumo = {"fichas": len(fichas), "anuncios": sum(len(v) for v in por_cod.values()) + len(soltos),
+    resumo = {"fichas": n_fichas_casa, "anuncios": sum(len(v) for v in por_cod.values()) + len(soltos),
               "sem_ficha": len(soltos) + sum(1 for c in por_cod if c not in fichas),
               "misto": len(misto),
               "noromak": sum(1 for v in por_cod.values() if any(str(a["controle"]) == "noromak" for a in v))}
@@ -9984,7 +9994,8 @@ def tiktok_extensao_iniciar(ator: str) -> dict[str, Any]:
         _tiktok_recusar_extensao()  # V20.40: dentro da trava (a troca de fonte também a usa)
         p = tiktok_extensao_pendentes()
         if not p["pode_enviar"]:
-            raise ValueError("O Noromak está em Simulação: nada é gravado no TikTok. Mude para Lote na tela Estoque TikTok.")
+            raise ValueError("O Noromak está em Simulação: nada é gravado no TikTok. Mude para Lote na tela antiga "
+                             "do estoque do TikTok (/expedicao/tiktok-estoque?antiga=1).")
         agora = time.time()
         if TIKTOK_RODADA and agora - float(TIKTOK_RODADA.get("desde") or 0) < TIKTOK_RODADA_PRAZO:
             raise TikTokRodadaOcupada(f"Já tem um envio em andamento (por {TIKTOK_RODADA.get('por')}). Espere ele terminar.")
@@ -10149,14 +10160,30 @@ def tiktok_vinculo_definir(sku_id: str, codigos: str, ator: str) -> dict[str, An
     codigos = str(codigos or "").strip()
     if codigos and not _tiktok_pecas(codigos):
         raise ValueError("Código Apollo inválido.")
+    voltou_manual: tuple[str, str] | None = None
     with DB_LOCK:
+        antes = DB.execute("SELECT ficha_codigo, estoque_modo FROM anuncio_canal_v2023 WHERE canal=? AND conta=? "
+                           "AND anuncio_id=?", (TIKTOK_ANUNCIO_CANAL, TIKTOK_CASA, sku_id)).fetchone()
         if codigos:
             DB.execute("INSERT OR REPLACE INTO tiktok_vinculo_v1964(sku_id,codigos,por,em) VALUES(?,?,?,?)",
                        (sku_id, codigos, str(ator or ""), now_iso()))
         else:
             DB.execute("DELETE FROM tiktok_vinculo_v1964 WHERE sku_id=?", (sku_id,))
         _tiktok_anuncios_espelhar()  # V20.40: o vínculo à mão também liga a ficha na plataforma de anúncios
+        # revisar-antes-de-subir da V20.58: o vínculo que troca a PEÇA de um anúncio em Automático volta ele a Manual
+        # (como trocar Peça/Kit, V20.28) — senão o Automático mandava sozinho o estoque de outra peça ao TikTok.
+        if antes is not None and str(antes["estoque_modo"] or "") == "automatico":
+            depois = DB.execute("SELECT ficha_codigo FROM anuncio_canal_v2023 WHERE canal=? AND conta=? AND anuncio_id=?",
+                                (TIKTOK_ANUNCIO_CANAL, TIKTOK_CASA, sku_id)).fetchone()
+            if depois is not None and str(depois["ficha_codigo"] or "") != str(antes["ficha_codigo"] or ""):
+                DB.execute("UPDATE anuncio_canal_v2023 SET estoque_modo='manual' WHERE canal=? AND conta=? AND anuncio_id=?",
+                           (TIKTOK_ANUNCIO_CANAL, TIKTOK_CASA, sku_id))
+                voltou_manual = (str(antes["ficha_codigo"] or ""), str(depois["ficha_codigo"] or ""))
         DB.commit()
+    if voltou_manual:
+        _anuncio_estoque_registrar(TIKTOK_ANUNCIO_CANAL, TIKTOK_CASA, sku_id, "manual", None, None,
+                                   "vínculo trocou a peça: automatico -> manual", "ignorado",
+                                   f"{voltou_manual[0] or '(sem código)'} -> {voltou_manual[1] or '(sem código)'}", ator)
     _tiktok_estoque_log(sku_id, "", None, None, "", "VINCULO", f"vínculo à mão: {codigos or '(apagado)'}", ator)
     return {"ok": True, "sku_id": sku_id, "codigos": codigos}
 
@@ -12028,7 +12055,7 @@ def _tiktok_atendimento_pecas_do_sku(it: dict[str, Any], catalogo: dict[str, Any
         return [(c, u) for c, u in _tiktok_pecas(vinculo)], None
     if canal == "TikTok" and len(sku) >= TIKTOK_SKU_LIMITE:   # V20.47: o corte é só do TikTok
         raise TikTokAtendRevisar(f"SKU {sku} veio cortado pelo TikTok (limite de {TIKTOK_SKU_LIMITE} caracteres): faça o "
-                                 f"vínculo à mão na tela Estoque TikTok para o atendimento sair com todas as peças.")
+                                 f"vínculo à mão no anúncio (Anúncios → Vincular código) para o atendimento sair com todas as peças.")
     partes, comp = _anuncio_sku_partes(sku, catalogo, conhecidos, confirmadas)
     miolo = re.sub(r"^KIT\d*-", "", normalize(sku))
     if not comp and anuncio_sku_parece_kit(miolo) and normalize(sku) not in confirmadas \

@@ -1027,11 +1027,15 @@ async function vincularTiktok({conta, id}) {
   const corte = a.tiktok_cortado ? "\nO TikTok cortou este SKU em 50 caracteres: o fim pode ter perdido uma peça. Sem vínculo ele não recebe estoque." : "";
   const v = await nkPerguntar(`Código do Apollo da variação ${id}`, {
     detalhe: `SKU no TikTok: ${a.sku_anuncio || "(vazio)"}.${corte}${sug}\nKit: os códigos separados por “/” (ex.: 0893600022/0893764272). Deixe vazio para apagar o vínculo.`,
-    valor: a.tiktok_vinculo || (a.sugestoes || [])[0] || "", placeholder: "código do Apollo"});
+    // revisar-antes-de-subir: o campo nunca vem com a sugestão (um Enter gravava a peça errada); digita ou copia a sugestão
+    valor: a.tiktok_vinculo || "", placeholder: "código do Apollo"});
   if (v == null) return;
   const codigos = v.trim();
   if (codigos === (a.tiktok_vinculo || "")) return;
-  if (!codigos && !await nkConfirmar(`Apagar o vínculo de ${id}?\nVolta a valer o SKU do vendedor (${a.sku_anuncio || "vazio"}).`, {ok: "Apagar", perigo: true})) return;
+  const auto = a.estoque_modo === "automatico" ? "\nO anúncio está em Automático: se a peça mudar, ele volta para Manual (religue depois de conferir)." : "";
+  if (!codigos && !await nkConfirmar(`Apagar o vínculo de ${id}?\nVolta a valer o SKU do vendedor (${a.sku_anuncio || "vazio"}).${auto}`, {ok: "Apagar", perigo: true})) return;
+  // revisar-antes-de-subir: confirma mostrando as peças, como a tela antiga (V20.08)
+  if (codigos && !await nkConfirmar(`Vincular ${id} a estas peças do Apollo?\n${codigos.split("/").map(p => "• " + p.trim()).filter(p => p.length > 2).join("\n")}\nO estoque e o atendimento do TikTok passam a usar estas peças.${auto}`, {ok: "Vincular", perigo: false})) return;
   try {
     await api("/api/tiktok-estoque/vinculo", {sku_id: id, codigos});
     nkToast(codigos ? `Vínculo salvo: ${id} = ${codigos}. A ficha certa aparece na lista.` : "Vínculo apagado.", "ok", {duracao: 9000});
@@ -1215,8 +1219,10 @@ function desenharPainelEstoque() {
   const blocoConta = ([conta, d]) => {
     if (d.erro) return `<div class="estq-card estq-conta"><h3>${esc(nomeContaEst(conta))}</h3><div class="nk-aviso bad">${esc(d.erro)}</div></div>`;
     const r = d.resumo || {}, cfg = (d.config || {}).modo || "simulacao";
-    const sel = `<span class="casa-sel" role="group" aria-label="Modo do estoque automático de ${esc(nomeContaEst(conta))}">${Object.entries(ESTQ_MODO_CONTA)
-      .map(([v, n]) => `<button type="button" class="${cfg === v ? "on" : ""}" aria-pressed="${cfg === v}" ${PODE ? "" : "disabled"} data-conta="${esc(conta)}" data-modo="${v}" onclick="mudarModoConta(this.dataset.conta,this.dataset.modo)">${n}</button>`).join("")}</span>`;
+    // revisar-antes-de-subir: com a extensão como fonte, o modo que vale é o da tela antiga (este não manda nela)
+    const travado = conta === "tiktok" && d.tiktok_fonte && d.tiktok_fonte !== "api";
+    const sel = `<span class="casa-sel" role="group" aria-label="Modo do estoque automático de ${esc(nomeContaEst(conta))}" ${travado ? 'title="Com a extensão do Seller Center como fonte, o modo é o da tela antiga."' : ""}>${Object.entries(ESTQ_MODO_CONTA)
+      .map(([v, n]) => `<button type="button" class="${cfg === v ? "on" : ""}" aria-pressed="${cfg === v}" ${PODE && !travado ? "" : "disabled"} data-conta="${esc(conta)}" data-modo="${v}" onclick="mudarModoConta(this.dataset.conta,this.dataset.modo)">${n}</button>`).join("")}</span>`;
     const enviar = PODE && cfg === "lote" ? `<button type="button" class="nk-btn mini pri" data-conta="${esc(conta)}" ${r.mudariam && !(d.envio || {}).rodando ? "" : "disabled"} onclick="enviarAgoraConta(this)">${(d.envio || {}).rodando ? "Enviando…" : "Enviar agora"}${r.mudariam ? ` (${Number(r.mudariam)})` : ""}</button>` : "";
     const quem = d.config && d.config.atualizado_em ? ` · mudado ${quando(d.config.atualizado_em)}${d.config.atualizado_por ? " por " + esc(d.config.atualizado_por) : ""}` : "";
     // V20.26 (revisao): chave "o Disponível do Apollo já tira o atendimento aberto" (perfil Admin, sem OWNER)
