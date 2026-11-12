@@ -667,6 +667,18 @@ menu**: `/tiktok-estoque` abre `/anuncios?casa=bauru` (Anúncios aceita `?casa=`
 `anuncio_ficha_payload` traz `tiktok_vinculo`, `tiktok_cortado` e as `sugestoes` do SKU cortado, Precificador lido fora do
 `DB_LOCK`) e, com a extensão, "Controlar estoque aqui"; "Devolver para a Alephee" não aparece no TikTok. `nk-menu.js?v=20.58` em
 todas as telas e `CACHE` do `sw.js`. Teste: `TESTES/test_anuncios_por_casa_v2058.py`.
+**V20.59 — prefixo do anúncio fora do código da ficha** (dono, 12/11, depois da 1ª puxada em lote: "puxou duplicado assim",
+158582-2005001 × 2005001). O SKU do ML vem com um prefixo de anúncio de 5 a 6 dígitos ("158582-", "151490-"); a separação e o
+estoque já tiravam (`_separacao_partes`), a ficha não. `anuncio_sem_prefixo` (`ANUNCIO_PREFIXO_RE` `^\d{5,6}-`) vale na puxada
+(`anuncio_ficha_do_sku`) e no espelho do TikTok; kit cadastrado com o SKU exato (com o prefixo) e os dois códigos de 7+ dígitos
+(V20.28) não mudam. `anuncios_prefixo_corrigir` (no `init_db`, idempotente) move as linhas cuja ficha é o próprio SKU do anúncio
+(vínculo para outro código fica) e a ficha antiga sem anúncio: com algo do Admin, foto, rascunho ou kit no Cadastro = fica; senão
+renomeada para o código certo ou juntada nela (campos pela origem, `ficha_importar`) e apagada. Simulado em produção (12/11, só
+leitura): 720 anúncios movidos, 426 fichas renomeadas, 104 juntadas, 0 mantidas, 6 com vínculo ficam. Tela: só vale a resposta da
+última leitura da lista (`LISTA_SEQ`) e trocar a casa limpa a lista anterior. O painel "Estoque automático" vira **um botão** com o
+resumo (contas, em Automático, a enviar, sem número, contas com erro); os cartões só aparecem aberto (`nk_anuncios_estoque_aberto_v2059`,
+começa fechado). Kit lido pelo código ("KIT-A/B/C") sem composição no Cadastro de Kits abre o editor da aba Composição com as peças
+do código (uma de cada, `novoTipo`) — antes só mostrava o aviso e não dava para pôr as peças. Teste: `TESTES/test_anuncios_prefixo_v2059.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

@@ -73,6 +73,10 @@ tr.clica{cursor:pointer}
 .ok{color:var(--nk-ok)}.bad{color:var(--nk-bad)}
 .embreve td{color:var(--nk-ink3)}
 details.rem summary{cursor:pointer;font-weight:700;font-size:13px;color:var(--nk-head)}
+.estq-botao{display:flex;align-items:center;gap:12px;flex-wrap:wrap;width:100%;background:transparent;border:0;padding:0;color:var(--nk-ink);font:inherit;text-align:left;cursor:pointer}
+.estq-botao b{font-size:14px;color:var(--nk-head)}
+.estq-botao .esp{flex:1}
+.estq-botao .bad{color:var(--nk-bad)}
 details.rem[open] summary{margin-bottom:10px}
 /* V20.24: fotos da ficha e criar anúncio */
 .fotos{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}
@@ -172,7 +176,8 @@ function trocarCasa(v) {
   CASA = v;
   try { localStorage.setItem(CASA_CHAVE, v); } catch (_) {}
   // ficha: só refiltra o que já está na tela (o digitado está em FORM/CR e não se perde); lista: relê com a conta
-  if (F) desenharFicha(); else { desenharLista(); carregarLista(); }
+  // V20.59: a lista da casa anterior não fica na tela enquanto a nova é lida ("Carregando…" até chegar)
+  if (F) desenharFicha(); else { L.dados = null; desenharLista(); carregarLista(); }
 }
 const CONTROLE = {noromak: ["Noromak", "ok"], alephee: ["Alephee", "warn"], full: ["Full", "info"], tiktok: ["Extensão do TikTok", "info"]};  // V20.40  // V20.58: a tela Estoque TikTok saiu do menu
 const STATUS = {active: "Ativo", paused: "Pausado", closed: "Encerrado", under_review: "Em revisão", inactive: "Inativo"};
@@ -242,11 +247,20 @@ function acoesLista() {
       <button class="nk-btn" onclick="novoProduto()">+ Novo produto</button>` : "")
     + `<button class="nk-btn" onclick="carregarLista();carregarPainelEstoque()"><i class=nk-i-refresh></i> Atualizar</button>`;
 }
+// V20.59 (dono, 12/11: "a mudança de casas está demorando para puxar os anúncios corretos de cada casa"): só vale a
+// resposta da ÚLTIMA leitura pedida. Antes a resposta atrasada da casa anterior (ou da busca anterior) chegava depois e
+// cobria a da casa escolhida.
+let LISTA_SEQ = 0;
 async function carregarLista() {
   const filtro = L.aba === "sem_ficha" ? "sem_ficha" : L.filtro;
+  const seq = ++LISTA_SEQ;
+  let d;
   try {
-    L.dados = await api(`/api/anuncios?busca=${encodeURIComponent(L.busca)}&filtro=${encodeURIComponent(filtro)}${CASA === "todas" ? "" : "&conta=" + CASA}`);
+    d = await api(`/api/anuncios?busca=${encodeURIComponent(L.busca)}&filtro=${encodeURIComponent(filtro)}${CASA === "todas" ? "" : "&conta=" + CASA}`);
+    if (seq !== LISTA_SEQ) return;  // chegou depois de outra troca de casa, busca ou filtro: descartada
+    L.dados = d;
   } catch (e) {
+    if (seq !== LISTA_SEQ) return;
     L.dados = null;
     $("lista") ? $("lista").innerHTML = `<div class="vazio">${esc(e.status === 403 ? "Sem acesso a esta tela." : e.message)}</div>` : null;
     return;
@@ -774,7 +788,16 @@ function botaoApollo() {
 function lerApollo() { recarregar(true); }
 function desenharKits() {
   if (tipoAtual() !== "kit") return desenharKitsDaPeca();
-  if (!KIT) { $("conteudo").innerHTML = '<div class="nk-aviso">Este código é um kit, mas a composição não foi encontrada no Cadastro de Kits.</div>'; return; }
+  if (!KIT && !PODE) { $("conteudo").innerHTML = '<div class="nk-aviso">Este código é um kit, mas a composição não foi encontrada no Cadastro de Kits.</div>'; return; }
+  if (!KIT) {
+    // V20.59 (dono, 12/11: "não consigo adicionar os itens na composição do kit"): kit lido pelo código ("KIT-A/B/C") sem
+    // composição no Cadastro de Kits abre o editor com as peças do código (uma de cada) para o Admin conferir e salvar.
+    const pecas = String(F.codigo || "").replace(/^KIT\d*-/i, "").split("/").map(s => s.trim()).filter(s => s.length >= 3);
+    KIT = {sku: F.codigo, nome: (F.ficha && F.ficha.campos && F.ficha.campos.nome) || "", fonte: "cadastro", ativo: true, novoTipo: true,
+      base: "[]", comps: pecas.length ? pecas.map(s => ({sku: s, quantidade: "1", novo: true})) : [{sku: "", quantidade: "1", novo: true}],
+      versao_storage: F.versao_kits};
+    if (pecas.length) nkToast("Este kit não está no Cadastro de Kits: as peças vieram do código, uma de cada. Confira as quantidades e salve.", "info", {duracao: 9000});
+  }
   const ro = !PODE;
   const linhas = KIT.comps.map((c, i) => {
     const novo = !c.sku || c.novo;
@@ -1209,6 +1232,14 @@ function doisNumeros(i) {
 function motivoCurtoEst(i) {
   return (i.pecas || []).map(p => `${p.codigo}: Apollo ${numEst(p.disponivel)} − a baixar ${numEst(p.a_baixar)}${Number(p.quantidade) > 1 ? ` ÷ ${numEst(p.quantidade)}` : ""}`).join("; ") + ` = ${numEst(i.calculado)}`;
 }
+const PE_CHAVE = "nk_anuncios_estoque_aberto_v2059";
+let PE_ABERTO = false;
+try { PE_ABERTO = localStorage.getItem(PE_CHAVE) === "1"; } catch (_) {}
+function alternarPainelEstoque() {
+  PE_ABERTO = !PE_ABERTO;
+  try { localStorage.setItem(PE_CHAVE, PE_ABERTO ? "1" : "0"); } catch (_) {}
+  desenharPainelEstoque();
+}
 function desenharPainelEstoque() {
   const el = $("painelEstoque"); if (!el) return;
   const contas = PE.casa === CASA ? Object.entries(PE.contas).filter(([, d]) => d && d.status !== 403) : [];
@@ -1255,7 +1286,16 @@ function desenharPainelEstoque() {
   const loteTxt = !lote ? "" : lote.em_dia
     ? `<div class="muted">Apollo relido a cada minuto, todos os ${Number(lote.codigos || 0)} código(s) de uma vez (último ${quando(lote.ok_em)}).</div>`
     : `<div class="nk-aviso">Leitura em lote do Apollo fora do ar${lote.erro ? ": " + esc(lote.erro) : ""}. Enquanto isso, o rodízio relê 3 códigos por minuto.</div>`;
-  el.innerHTML = `<div class="nk-painel-tit"><div><h2>Estoque automático</h2><p>Anúncios controlados pelo Noromak em Automático: Apollo da filial menos o vendido e ainda não baixado. Sem leitura do Apollo nada é enviado (nunca zero). O modo vale para a conta inteira; anúncio em Manual nunca é tocado.</p>${loteTxt}</div></div>
+  // V20.59 (dono, 12/11: "essa tela de Manual/Automático está grande, adicione apenas um botão"): o painel vira um botão com
+  // o resumo; os cartões só aparecem aberto (escolha guardada neste navegador). Erro ou envio parado aparece no resumo.
+  const tot = contas.reduce((s, [, d]) => { const r = d.resumo || {}; s.auto += Number(r.automatico || 0); s.muda += Number(r.mudariam || 0);
+    s.sem += Number(r.sem_numero || 0); s.erro += (d.erro || (d.erros_repetidos || []).length) ? 1 : 0; return s; }, {auto: 0, muda: 0, sem: 0, erro: 0});
+  const resumoTxt = `${contas.length} conta(s) · ${tot.auto} em Automático · ${tot.muda} a enviar · ${tot.sem} sem número`
+    + (tot.erro ? ` · <span class="bad">${tot.erro} conta(s) com erro</span>` : "");
+  const botao = `<button type="button" class="estq-botao" aria-expanded="${PE_ABERTO}" onclick="alternarPainelEstoque()">
+      <b>Estoque automático</b><span class="muted">${resumoTxt}</span><span class="esp"></span><span class="nk-btn mini">${PE_ABERTO ? "Fechar ▴" : "Ver Manual / Automático ▾"}</span></button>`;
+  if (!PE_ABERTO) { el.innerHTML = botao; return; }
+  el.innerHTML = botao + `<div class="nk-painel-tit" style="margin-top:10px"><div><p>Anúncios controlados pelo Noromak em Automático: Apollo da filial menos o vendido e ainda não baixado. Sem leitura do Apollo nada é enviado (nunca zero). O modo vale para a conta inteira; anúncio em Manual nunca é tocado.</p>${loteTxt}</div></div>
     <div class="estq-contas">${contas.map(blocoConta).join("")}</div>
     ${itens.length ? `<details class="rem bloco"><summary>O que mudaria ou está sem número (${itens.length})</summary>
       <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_estoque_mudaria"><thead><tr><th>Conta</th><th>Anúncio</th><th>Produto</th><th class="n">No ML</th><th class="n">Calculado</th><th>Por quê</th></tr></thead>

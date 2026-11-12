@@ -225,7 +225,8 @@ class Anuncios(Base):
         S.tiktok_vinculo_definir("V2", "2011004", "dono")
         self.assertEqual(self._hub("V2")["ficha_codigo"], "2011004")
         S.tiktok_vinculo_definir("V2", "", "dono")
-        self.assertEqual(self._hub("V2")["ficha_codigo"], S.normalize("151490-KIT2"))
+        # V20.59: sem o prefixo de anúncio "151490-" (o mesmo código da separação e do estoque)
+        self.assertEqual(self._hub("V2")["ficha_codigo"], "KIT2")
 
     def test_removido_pelo_admin_nao_volta_e_controle_nao_muda(self):
         self._variacoes()

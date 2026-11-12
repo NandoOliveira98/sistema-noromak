@@ -134,7 +134,7 @@ memoria_limitar_arenas()
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.58-ANUNCIOS-POR-CASA"
+APP_VERSION = "20.59-PREFIXO-ANUNCIO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2824,6 +2824,10 @@ def init_db() -> None:
     ensure_tiktok_atendimento_schema()  # V20.33: cadastro + atendimento do TikTok no Apollo
     ensure_mkt_atendimento_schema()  # V20.47: cliente + atendimento de ML/Shopee pelo painel
     ensure_anuncios_schema()  # V20.23
+    try:  # V20.59: anúncios gravados com o prefixo de anúncio no código da ficha (uma vez; depois não acha nada)
+        anuncios_prefixo_corrigir()
+    except Exception as exc:  # a correção é conveniência: nunca impede o servidor de subir
+        print(f"Aviso: correção do prefixo dos anúncios não feita: {exc}", file=sys.stderr)
     tiktok_anuncios_espelhar_boot()  # V20.40: as variações do TikTok já lidas aparecem na plataforma de anúncios
     ensure_ml_billing_credito_schema()
     ensure_ml_billing_data_schema()
@@ -8403,14 +8407,93 @@ def anuncio_campos_do_detalhe(d: dict[str, Any]) -> dict[str, Any]:
     return saida
 
 
+# V20.59 (dono, 12/11: "puxou duplicado assim" — 158582-2005001 e 2005001 como dois produtos): prefixo de anuncio de 5 a 6
+# digitos na frente do codigo. 7+ digitos dos dois lados = dois codigos do Apollo (V20.28, "0893600022-0893764272"): fica.
+ANUNCIO_PREFIXO_RE = re.compile(r"^\d{5,6}-(.+)$")
+
+
+def anuncio_sem_prefixo(sku: Any, catalogo: dict[str, dict[str, Any]] | None = None) -> str:
+    """V20.59: o SKU sem o prefixo de anuncio. Kit cadastrado com o SKU EXATO (com o prefixo) fica como esta."""
+    texto = str(sku or "").strip()
+    m = ANUNCIO_PREFIXO_RE.match(texto)
+    if not m or not m.group(1).strip():
+        return texto
+    if catalogo:
+        entry = _kit_catalog_lookup(catalogo, texto)
+        if entry and normalize(entry.get("sku_kit")) == normalize(texto):
+            return texto
+    return m.group(1).strip()
+
+
+_ANUNCIO_TABELAS_DA_FICHA = ("anuncio_foto_v2024", "anuncio_rascunho_v2024", "anuncio_rascunho_shopee_v2032",
+                             "anuncio_rascunho_magalu_v2034", "anuncio_rascunho_tiktok_v2041")
+
+
+def anuncios_prefixo_corrigir() -> dict[str, int]:
+    """V20.59: correção única (boot) dos anúncios gravados com o prefixo no código da ficha. Só a linha cuja ficha é o
+    próprio SKU do anúncio (vínculo para outro código é decisão de alguém e fica). A ficha antiga que ficou sem anúncio:
+    sem nada do Admin, sem foto, sem rascunho e sem kit no Cadastro = juntada na certa (ou renomeada) e apagada; com
+    qualquer uma dessas fica como está. Idempotente."""
+    res = {"movidos": 0, "apagadas": 0, "renomeadas": 0, "mantidas": 0}
+    catalogo = _load_kit_catalog()  # fora do DB_LOCK (relê o storage)
+    with DB_LOCK:
+        rows = DB.execute("SELECT canal, conta, anuncio_id, ficha_codigo, sku_anuncio FROM anuncio_canal_v2023 "
+                          "WHERE ficha_codigo GLOB '[0-9][0-9][0-9][0-9][0-9]*-*'").fetchall()
+        antigas: set[str] = set()
+        for r in rows:
+            antigo = str(r["ficha_codigo"] or "")
+            if not ANUNCIO_PREFIXO_RE.match(antigo) or antigo != normalize(r["sku_anuncio"]):
+                continue
+            novo = normalize(anuncio_sem_prefixo(r["sku_anuncio"], catalogo))
+            if not novo or novo == antigo:
+                continue
+            DB.execute("UPDATE anuncio_canal_v2023 SET ficha_codigo=? WHERE canal=? AND conta=? AND anuncio_id=?",
+                       (novo, r["canal"], r["conta"], r["anuncio_id"]))
+            res["movidos"] += 1
+            antigas.add(antigo)
+        for antigo in sorted(antigas):
+            if DB.execute("SELECT 1 FROM anuncio_canal_v2023 WHERE ficha_codigo=? LIMIT 1", (antigo,)).fetchone():
+                continue  # ainda tem anúncio (vínculo ou kit): fica
+            velha = _ficha_ler_sem_lock(antigo)
+            if velha is None:
+                continue
+            row = DB.execute("SELECT criada_por_admin, tipo_confirmado_por FROM anuncio_ficha_v2023 WHERE codigo=?",
+                             (antigo,)).fetchone()
+            usada = any(DB.execute(f"SELECT 1 FROM {t} WHERE ficha_codigo=? LIMIT 1", (antigo,)).fetchone()
+                        for t in _ANUNCIO_TABELAS_DA_FICHA)
+            if (row and (int(row["criada_por_admin"] or 0) or str(row["tipo_confirmado_por"] or ""))) or usada \
+                    or "admin" in set((velha.get("origem") or {}).values()) or _kit_composicao(antigo, catalogo):
+                res["mantidas"] += 1
+                continue
+            novo = normalize(anuncio_sem_prefixo(antigo, catalogo))
+            if _ficha_ler_sem_lock(novo) is None:
+                DB.execute("UPDATE anuncio_ficha_v2023 SET codigo=? WHERE codigo=?", (novo, antigo))
+                res["renomeadas"] += 1
+                continue
+            por_origem: dict[str, dict[str, Any]] = {}
+            for nome, valor in (velha.get("campos") or {}).items():
+                por_origem.setdefault(str((velha.get("origem") or {}).get(nome) or "anuncio_ml"), {})[nome] = valor
+            for origem, campos in por_origem.items():
+                if origem in ANUNCIO_ORIGENS and origem != "admin":
+                    ficha_importar(novo, campos, origem, commit=False)
+            DB.execute("DELETE FROM anuncio_ficha_v2023 WHERE codigo=?", (antigo,))
+            res["apagadas"] += 1
+        DB.commit()
+    if res["movidos"]:
+        print(f"V20.59: prefixo de anúncio tirado do código da ficha: {res}", file=sys.stderr)
+    return res
+
+
 def anuncio_ficha_do_sku(sku: str, catalogo: dict[str, dict[str, Any]] | None = None,
                          conhecidos: set[str] | None = None) -> tuple[str, str]:
-    """V20.23: (codigo da ficha = normalize(sku), tipo). Kit (cadastro/prefixo) e "A/B" = o proprio SKU; vazio = ''."""
-    texto = str(sku or "").strip()
+    """V20.23: (codigo da ficha = normalize(sku), tipo). Kit (cadastro/prefixo) e "A/B" = o proprio SKU; vazio = ''.
+    V20.59: sem o prefixo de anuncio ("158582-2005001" -> 2005001), como a separacao e o estoque ja faziam."""
+    catalogo = catalogo if catalogo is not None else _load_kit_catalog()
+    texto = anuncio_sem_prefixo(sku, catalogo)
     cod = normalize(texto)
     if not cod:
         return "", "peca"
-    comp = _kit_composicao(texto, catalogo if catalogo is not None else _load_kit_catalog())
+    comp = _kit_composicao(texto, catalogo)
     if comp or len(_separacao_partes(texto, conhecidos or set())) > 1:
         return cod, "kit"
     return cod, "peca"
@@ -9870,6 +9953,10 @@ def _tiktok_anuncios_espelhar() -> int:
     for r in DB.execute("SELECT * FROM tiktok_sku_v1964").fetchall():
         sku_id = str(r["sku_id"])
         sku = vinculos.get(sku_id) or str(r["seller_sku"] or "")
+        if ANUNCIO_PREFIXO_RE.match(str(sku).strip()):  # V20.59: sem o prefixo de anúncio (o mesmo do ML)
+            if "catalogo" not in kit_ctx:
+                kit_ctx["catalogo"] = _load_kit_catalog()
+            sku = anuncio_sem_prefixo(sku, kit_ctx["catalogo"])
         ficha = normalize(sku) if str(sku).strip() else ""
         status = TIKTOK_STATUS_HUB.get(str(r["status"] or "").upper(), str(r["status"] or "").lower())
         atual = atuais.get(sku_id)
