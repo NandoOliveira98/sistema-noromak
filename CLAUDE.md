@@ -2051,6 +2051,19 @@ comprometer atendimento já criado continua. Teste: classes `Interruptor`/`Inter
 (MERCADOLIVRE/SHOPEE/TIKTOK = usuário 210 do DMS, o mesmo vendedor da integração). Respostas novas da porta (contrato de 10/11):
 `ja_aberto_no_apollo` (ela achou atendimento aberto do mesmo cliente com todas as peças) = `ja_tinha` com o número, nada criado;
 `sem_estoque` (peça sem saldo na revenda) e `apollo_fora` = erro, o clique pode repetir. Teste: classe `RespostasNovasDaPorta`.
+**V20.61 — atendimento AUTOMÁTICO de ML e Shopee** (dono, 12/11: "ativar a criação automática também, apenas ignorar se já
+existir atendimento"; a porta do Guilherme aceita sem o clique desde 12/11 11:09). Decisões: **na hora** (assim que o nome/CPF da
+nota chega), **começa desligado**, **por marketplace** (`mkt_atendimento_config_v2052.automatico/auto_em/auto_por`; precisa do
+botão `ligado`). Worker `mkt_atendimento_loop` (120 s, `exp_porta_rotina`, em `SAUDE_WORKERS_INFO`): **um pedido por volta** pelo
+mesmo `mkt_atendimento_pedido(..., automatico=True)` do botão — `manual: false` na porta; o "já existe" é o da V20.60
+(`_atend_aberto_mesmas_pecas`: aberto do cliente com TODAS as peças, valor não importa) → `ja_tinha`; venda ainda não copiada e
+Apollo ocupado = `aguardando` (sem gastar tentativa); erro/incerto = de novo em 10 min, até `MKT_ATEND_AUTO_MAX_TENTATIVAS` (5),
+depois só o botão. Ao **ligar**, o que já está na fila daquele marketplace fica `anterior` (atendido à mão/integração; segue pelo
+botão). Botão rodando (`_MKT_ATEND_LOCK`) = a rotina espera a volta seguinte. Shopee: com os dados do comprador liberados na API
+(12/11), `NomeFiscalShopee`/`CPFShopee` da linha viram o nome/CPF da nota quando não há nada guardado (`_mkt_nota_da_shopee`,
+`so_se_vazio`; mascarado não vale). Cartão "Atendimento de ML e Shopee pelo painel" ganhou as linhas "Automático · ML/Shopee";
+`POST /api/expedicao-apollo/atendimento-mkt {marketplace, automatico}` (perfil Admin, audit `expedicao.mkt_atendimento_automatico`).
+Teste: `TESTES/test_atendimento_auto_mkt_v2061.py`.
 **V20.54 — a vez do painel na porta** (dono, 11/11: "Muitas chamadas ao Apollo neste minuto" nos 3 PCs). A porta aceita 12
 leituras e 6 gravações por minuto **por rota**, e tudo sai deste servidor (os computadores e as rotinas dividem o teto); cada
 painel aberto faz até 6 leituras (situação + abertos + até 4 prévias). `_exp_porta` conta cada chamada por rota e origem

@@ -2162,8 +2162,11 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             <b>O que faz</b><span>Libera o botão "Criar cliente e atendimento no Apollo" do painel do pedido quando a venda não caiu no Apollo</span>
             <b>Mercado Livre</b><span><span id="atendMktML">—</span> <button type="button" id="btnAtendMktML" class="btn-secundario" onclick="alternarAtendMktAdmin('Mercado Livre')" disabled>…</button></span>
             <b>Shopee</b><span><span id="atendMktSP">—</span> <button type="button" id="btnAtendMktSP" class="btn-secundario" onclick="alternarAtendMktAdmin('Shopee')" disabled>…</button></span>
+            <!-- V20.61: criação AUTOMÁTICA (sem o clique), por marketplace; começa desligada -->
+            <b>Automático · ML</b><span><span id="atendMktAutoML">—</span> <button type="button" id="btnAtendMktAutoML" class="btn-secundario" onclick="alternarAtendMktAutoAdmin('Mercado Livre')" disabled>…</button></span>
+            <b>Automático · Shopee</b><span><span id="atendMktAutoSP">—</span> <button type="button" id="btnAtendMktAutoSP" class="btn-secundario" onclick="alternarAtendMktAutoAdmin('Shopee')" disabled>…</button></span>
           </div>
-          <div class="integracao-nota">Desligado, o botão some e nada é enviado ao Apollo (comprometer um atendimento já criado continua valendo). Só o perfil Admin liga e desliga.</div>
+          <div class="integracao-nota">Desligado, o botão some e nada é enviado ao Apollo (comprometer um atendimento já criado continua valendo). <b>Automático</b>: cria sozinho o cliente e o atendimento de toda venda nova assim que o nome/CPF da nota chega, pulando quando o cliente já tem atendimento aberto com as mesmas peças (precisa do botão ligado). Só o perfil Admin liga e desliga.</div>
         </div>
         <!-- V19.45: cadastro dos clientes do Full pela nota que o ML emitiu. -->
         <div class="integracao-card">
@@ -9699,9 +9702,23 @@ async function carregarAtendMktAdmin(){
       document.getElementById(idTxt).textContent=(c.ligado?"🟢 Ligado":"⚪ Desligado")+(c.em?" · "+String(c.em).slice(0,16).replace("T"," ")+(c.por?" · "+c.por:""):"");
       const b=document.getElementById(idBtn);b.textContent=c.ligado?"Desligar":"Ligar";b.className=c.ligado?"btn-perigo":"btn-primario";b.disabled=false;
     }
+    // V20.61: criação automática por marketplace
+    let autos=0;
+    for(const [mp,idTxt,idBtn] of [["Mercado Livre","atendMktAutoML","btnAtendMktAutoML"],["Shopee","atendMktAutoSP","btnAtendMktAutoSP"]]){
+      const c=atendMktV2052[mp]||{};if(c.automatico)autos++;
+      const t=document.getElementById(idTxt),b=document.getElementById(idBtn);if(!t||!b)continue;
+      t.textContent=(c.automatico?(c.ligado?"🟢 Ligado":"🟡 Ligado, mas o botão está desligado"):"⚪ Desligado")+(c.auto_em?" · "+String(c.auto_em).slice(0,16).replace("T"," ")+(c.auto_por?" · "+c.auto_por:""):"");
+      b.textContent=c.automatico?"Desligar":"Ligar";b.className=c.automatico?"btn-perigo":"btn-primario";b.disabled=false;
+    }
     badge.className="integracao-status "+(ligados?"ok":"off");
-    badge.textContent=ligados===2?"🟢 Ligado nos dois":ligados?"🟡 Ligado em um":"⚪ Desligado";
+    badge.textContent=(ligados===2?"🟢 Ligado nos dois":ligados?"🟡 Ligado em um":"⚪ Desligado")+(autos?` · automático em ${autos}`:"");
   }catch(e){badge.className="integracao-status erro";badge.textContent="🔴 "+e.message;}
+}
+async function alternarAtendMktAutoAdmin(mp){
+  const ligar=!(atendMktV2052[mp]||{}).automatico;
+  if(!await nkConfirmar(ligar?`Ligar a criação AUTOMÁTICA de atendimento do ${mp}?\n\nToda venda nova que entrar na fila ganha o cliente e o atendimento no Apollo sozinha, assim que o nome/CPF da nota chegar — sem o clique. Se o cliente já tiver atendimento aberto com as mesmas peças, nada é criado.\nO que já está na fila agora não é tocado (continua pelo botão do painel).`:`Desligar a criação automática do ${mp}?\n\nO botão do painel continua como está.`))return;
+  try{await mlApiAdmin("/expedicao/api/expedicao-apollo/atendimento-mkt",{method:"POST",body:JSON.stringify({marketplace:mp,automatico:ligar})});await carregarAtendMktAdmin();}
+  catch(e){alert("Atendimento automático: "+e.message);}
 }
 async function alternarAtendMktAdmin(mp){
   const ligar=!(atendMktV2052[mp]||{}).ligado;

@@ -134,7 +134,7 @@ memoria_limitar_arenas()
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.60-JA-TEM-ATENDIMENTO"
+APP_VERSION = "20.61-ATENDIMENTO-AUTO-ML-SHOPEE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -12605,6 +12605,11 @@ def ensure_mkt_atendimento_schema() -> None:
         colunas = {r["name"] for r in DB.execute("PRAGMA table_info(mkt_atendimento_v2047)")}
         if "enviado_em" not in colunas:
             DB.execute("ALTER TABLE mkt_atendimento_v2047 ADD COLUMN enviado_em TEXT NOT NULL DEFAULT ''")
+        # V20.61: a rotina automática tenta de novo depois de um erro (com limite)
+        if "proxima_epoch" not in colunas:
+            DB.execute("ALTER TABLE mkt_atendimento_v2047 ADD COLUMN proxima_epoch REAL NOT NULL DEFAULT 0")
+        if "tentativas" not in colunas:
+            DB.execute("ALTER TABLE mkt_atendimento_v2047 ADD COLUMN tentativas INTEGER NOT NULL DEFAULT 0")
         # "criando"/"comprometendo" que sobrou de um reinício: o botão volta a aparecer. Se o criar já tinha saído
         # (enviado_em), o clique seguinte vai direto à porta, cuja chave nunca cria dois atendimentos.
         DB.execute("UPDATE mkt_atendimento_v2047 SET situacao='incerto', detalhe='O servidor reiniciou no meio: "
@@ -12619,6 +12624,12 @@ def ensure_mkt_atendimento_schema() -> None:
                    em TEXT NOT NULL DEFAULT '',
                    por TEXT NOT NULL DEFAULT ''
                )""")
+        # V20.61 (dono, 12/11): criação AUTOMÁTICA por marketplace (começa desligada; o botão continua com `ligado`)
+        cfg = {r["name"] for r in DB.execute("PRAGMA table_info(mkt_atendimento_config_v2052)")}
+        for nome, tipo in (("automatico", "INTEGER NOT NULL DEFAULT 0"), ("auto_em", "TEXT NOT NULL DEFAULT ''"),
+                           ("auto_por", "TEXT NOT NULL DEFAULT ''")):
+            if nome not in cfg:
+                DB.execute(f"ALTER TABLE mkt_atendimento_config_v2052 ADD COLUMN {nome} {tipo}")
         DB.commit()
 
 
@@ -12630,8 +12641,45 @@ def mkt_atendimento_config() -> dict[str, dict[str, Any]]:
     saida: dict[str, dict[str, Any]] = {}
     for mp in MKT_ATEND_CANAIS:
         r = rows.get(mp) or {}
-        saida[mp] = {"ligado": bool(r.get("ligado", 1)), "em": str(r.get("em") or ""), "por": str(r.get("por") or "")}
+        saida[mp] = {"ligado": bool(r.get("ligado", 1)), "em": str(r.get("em") or ""), "por": str(r.get("por") or ""),
+                     # V20.61: sem linha = desligado (o automático começa desligado)
+                     "automatico": bool(r.get("automatico", 0)), "auto_em": str(r.get("auto_em") or ""),
+                     "auto_por": str(r.get("auto_por") or "")}
     return saida
+
+
+def mkt_atendimento_automatico_ligar(marketplace: str, ligado: bool, usuario: str) -> dict[str, Any]:
+    """V20.61 (dono, 12/11: "ativar a criação automática também, apenas ignorar se já existir atendimento"). Ao LIGAR, o
+    que já está na fila desse marketplace sem situação fica "anterior" (atendido à mão ou pela integração: um atendimento
+    aberto à mão não tem a chave ML-/SHOPEE-<pedido> e pode ter outro valor — a regra do TikTok, V20.33). O botão do
+    painel continua valendo para eles."""
+    mp = str(marketplace or "").strip()
+    if mp not in MKT_ATEND_CANAIS:
+        raise ValueError("Marketplace inválido: use Mercado Livre ou Shopee.")
+    estava = mkt_atendimento_config()[mp]["automatico"]
+    with DB_LOCK:
+        if ligado and not estava:
+            bruto, _, _ = get_storage("conf_pedidos")
+            agora = now_iso()
+            vistos: set[str] = set()
+            for r in _rows_from_storage_value(bruto):
+                if not isinstance(r, dict) or _vendas_marketplace(r.get("Marketplace") or r.get("Origem")) != mp:
+                    continue
+                numero = str(order_number(r) or "").strip()
+                if numero and numero not in vistos:
+                    vistos.add(numero)
+                    DB.execute("INSERT OR IGNORE INTO mkt_atendimento_v2047(pedido, marketplace, situacao, detalhe, "
+                               "atualizado_em) VALUES(?,?,?,?,?)",
+                               (numero, mp, "anterior", "Já estava na fila ao ligar o automático: pelo botão do painel.",
+                                agora))
+        DB.execute(
+            """INSERT INTO mkt_atendimento_config_v2052(marketplace, automatico, auto_em, auto_por) VALUES(?,?,?,?)
+               ON CONFLICT(marketplace) DO UPDATE SET automatico=excluded.automatico, auto_em=excluded.auto_em,
+               auto_por=excluded.auto_por""",
+            (mp, 1 if ligado else 0, now_iso(), str(usuario or "")[:80]))
+        DB.commit()
+    audit(usuario, "expedicao.mkt_atendimento_automatico", f"{mp}|{'ligado' if ligado else 'desligado'}")
+    return {"ok": True, "config": mkt_atendimento_config()}
 
 
 def mkt_atendimento_ligar(marketplace: str, ligado: bool, usuario: str) -> dict[str, Any]:
@@ -12968,8 +13016,12 @@ def mkt_atendimento_comprometer(pedido: str) -> dict[str, Any]:
     return {"ok": estado == "sim", "comprometido": estado, "motivo": detalhe}
 
 
-def mkt_atendimento_pedido(pedido: str, ator: str, endereco_texto: str = "", bairro: str = "") -> dict[str, Any]:
-    """Cliente + atendimento + comprometer de UM pedido do ML/Shopee. Grava o estado; nunca levanta."""
+def mkt_atendimento_pedido(pedido: str, ator: str, endereco_texto: str = "", bairro: str = "",
+                           automatico: bool = False) -> dict[str, Any]:
+    """Cliente + atendimento + comprometer de UM pedido do ML/Shopee. Grava o estado; nunca levanta.
+    V20.61: `automatico` = a rotina (sem clique): `manual: false` na porta, venda ainda não copiada e Apollo ocupado
+    viram "aguardando" (tenta de novo) e o "já existe" é o da V20.60 (atendimento aberto com TODAS as peças, sem olhar o
+    valor — decisão do dono: "ignorar se já existir atendimento")."""
     pedido = str(pedido).strip()
     atual = mkt_atendimento_do_pedido(pedido) or {}
     linhas = _mkt_linhas_na_fila(pedido)
@@ -12984,10 +13036,17 @@ def mkt_atendimento_pedido(pedido: str, ator: str, endereco_texto: str = "", bai
         _mkt_atend_gravar(pedido, situacao=situacao, detalhe=detalhe, **extra)
         return {"ok": False, "situacao": situacao, "motivo": detalhe}
 
+    def aguardar(detalhe: str, ocupado: bool = False) -> dict[str, Any]:
+        # V20.61: nada foi feito no Apollo; a rotina tenta de novo (sem gastar tentativa)
+        _mkt_atend_gravar(pedido, situacao="aguardando", detalhe=detalhe)
+        return {"ok": False, "situacao": "aguardando", "motivo": detalhe, "apollo_ocupado": ocupado}
+
     # 1) itens e preço da venda, conferidos com a fila — antes de qualquer gravação no Apollo
     try:
         itens, esperado = _mkt_atend_montar(pedido, nome_canal)
     except TikTokAtendRevisar as exc:
+        if automatico and "ainda não foi copiada" in str(exc):
+            return aguardar(str(exc))
         return parar("revisar", str(exc))
     # 2) cliente: cria se não existe. Revisão: já feito pelo botão (repetição) = não regrava (2 escritas a menos).
     conhecido = _exp_cliente_do_pedido(pedido)
@@ -12995,12 +13054,25 @@ def mkt_atendimento_pedido(pedido: str, ator: str, endereco_texto: str = "", bai
     if not ((cadastro_auto_do_pedido(pedido) or {}).get("situacao") == "feito" and codigo):
         r = exp_cadastro_atualizar(pedido, ator, endereco_texto=endereco_texto, criar=True, bairro=bairro)
         if not r.get("ok"):
+            if automatico and r.get("passageiro"):  # V20.61: Apollo ocupado não é erro (regra do TikTok, 11/11)
+                return aguardar("Apollo ocupado no cadastro do cliente: " + str(r.get("error") or "?"), ocupado=True)
             situacao = "incerto" if r.get("situacao") == "incerto" else "erro"
             return parar(situacao, "Cadastro do cliente: " + str(r.get("error") or r.get("situacao") or "?"))
         codigo = re.sub(r"\D", "", str(r.get("cliente") or ""))
     # 3) a integração pode ter trazido a venda: atendimento DESTA venda já aberto = não cria outro. Revisão: se o
     # criar já saiu antes (incerto/reinício), o aberto pode ser o NOSSO — vai direto à porta (a chave devolve ja_existia).
-    if not atual.get("enviado_em"):
+    if not atual.get("enviado_em") and automatico:
+        # V20.61: a rotina usa a regra da V20.60 — atendimento aberto do cliente com TODAS as peças (valor não importa)
+        numero_ja, erro_busca, ocupado = _atend_aberto_mesmas_pecas(pedido, itens)
+        if ocupado:
+            return aguardar("Apollo ocupado na busca do atendimento: " + (erro_busca or "?"), ocupado=True)
+        if erro_busca:
+            return parar("erro", "Não deu para conferir no Apollo se o atendimento já existe: " + erro_busca,
+                         cliente=codigo)
+        if numero_ja:
+            return parar("ja_tinha", f"O cliente já tem o atendimento {numero_ja} aberto no Apollo com as peças desta "
+                                     f"venda: nenhum outro foi criado.", cliente=codigo, atendimento=numero_ja)
+    elif not atual.get("enviado_em"):
         numero_ja, erro_busca = _mkt_atend_ja_tem(pedido, esperado, mp)
         if erro_busca:
             return parar("erro", "Não deu para conferir no Apollo se o atendimento já existe: " + erro_busca,
@@ -13022,9 +13094,9 @@ def mkt_atendimento_pedido(pedido: str, ator: str, endereco_texto: str = "", bai
     corpo: dict[str, Any] = {"revenda": _exp_revenda(pedido), "operador": "noromak", "origem": origem,
                              "pedido_externo": f"{prefixo}-{pedido}", "cliente": int(codigo),
                              "observacao": f"{nome_canal} {pedido}", "valor_esperado": esperado, "itens": itens,
-                             # V20.51 (Guilherme, 11/11): a porta só abre ML/Shopee com o clique de gente no painel
-                             # (esta rotina só roda pelo botão); sem isto volta `origem_recusada`.
-                             "manual": True}
+                             # V20.51 (Guilherme, 11/11): a porta só abre ML/Shopee com o clique de gente no painel;
+                             # V20.61 (12/11): a porta liberou a criação automática — a rotina manda `manual: false`.
+                             "manual": not automatico}
     if condicao:
         corpo["condicao_pagamento"] = condicao
     with EXP_PORTA_LOCK:
@@ -13036,6 +13108,9 @@ def mkt_atendimento_pedido(pedido: str, ator: str, endereco_texto: str = "", bai
         except PortaErro as exc:
             if exc.incerto:   # a mesma chave nunca cria outro atendimento: o botão pode tentar de novo
                 return parar("incerto", str(exc), cliente=codigo, valor=esperado, itens=itens)
+            if automatico and exc.passageiro:   # V20.61: nada criado (429/segurada): de novo na próxima volta
+                _mkt_atend_gravar(pedido, cliente=codigo, enviado_em="")
+                return aguardar("Apollo ocupado ao criar: " + str(exc), ocupado=True)
             return parar("erro", str(exc), cliente=codigo, valor=esperado, itens=itens, enviado_em="")
     _tiktok_guardar_amostra(f"porta atendimento/criar {origem}", ra)
     situacao = str(ra.get("situacao") or "")
@@ -13142,6 +13217,119 @@ def mkt_atendimento_iniciar(pedido: str, ator: str, endereco_texto: str = "", ba
     if not em_fundo:
         return resultado
     return {"ok": True, "iniciado": True, "atendimento_mkt": mkt_atendimento_estado(pedido)}
+
+
+# ---------------------------------------------------------------------------
+# V20.61 — atendimento AUTOMÁTICO de ML e Shopee (dono, 12/11; decisões: na hora, começa desligado, por marketplace;
+# "ignorar se já existir atendimento"). A rotina faz o que o botão faz (mkt_atendimento_pedido, automatico=True), um
+# pedido por volta (a porta aceita 6 escritas/min e o painel tem a vez: exp_porta_rotina, V20.54). Só pedido que entrou
+# na fila depois de ligar (o resto fica "anterior"); erro tenta de novo em 10 min, até MKT_ATEND_AUTO_MAX_TENTATIVAS.
+# ---------------------------------------------------------------------------
+MKT_ATEND_AUTO_INTERVALO = 120
+MKT_ATEND_AUTO_ESPERA_ERRO = 600
+MKT_ATEND_AUTO_ESPERA_AGUARDANDO = 300
+MKT_ATEND_AUTO_MAX_TENTATIVAS = 5
+# situações que a rotina não retoma (o botão do painel continua valendo para elas)
+MKT_ATEND_AUTO_PARADOS = ("criado", "ja_existia", "ja_tinha", "revisar", "anterior", "criando")
+
+
+def _mkt_nota_da_shopee(pedido: str, linhas: list[dict[str, Any]]) -> None:
+    """V20.61: a API da Shopee passou a mandar nome e CPF/CNPJ da nota (12/11, dados do comprador liberados): vira o
+    nome/CPF da nota do pedido quando ainda não há nada guardado (o que a extensão gravou nunca é trocado). Mascarado
+    ("***") não vale — o salvar recusa documento sem 11/14 dígitos."""
+    for r in linhas:
+        doc = str(r.get("CPFShopee") or r.get("CNPJShopee") or "").strip()
+        nome = str(r.get("NomeFiscalShopee") or "").strip()
+        if "*" in doc or "*" in nome or not doc or not nome:
+            continue
+        salvar_cliente_fiscal(pedido, doc, nome, fonte="api_shopee", usuario="automatico", so_se_vazio=True)
+        return
+
+
+def _mkt_atendimento_candidatos(agora: float | None = None) -> list[tuple[str, str]]:
+    """(pedido, marketplace) na fila, do marketplace com o automático (e o botão) ligado, sem situação parada, na vez."""
+    agora = float(agora if agora is not None else time.time())
+    cfg = mkt_atendimento_config()
+    ligados = {mp for mp, c in cfg.items() if c["automatico"] and c["ligado"]}
+    if not ligados:
+        return []
+    with DB_LOCK:
+        bruto, _, _ = get_storage("conf_pedidos")
+        estados = {r["pedido"]: dict(r) for r in DB.execute(
+            "SELECT pedido, situacao, proxima_epoch, tentativas FROM mkt_atendimento_v2047")}
+    por_pedido: dict[str, list[dict[str, Any]]] = {}
+    for r in _rows_from_storage_value(bruto):
+        if isinstance(r, dict):
+            numero = str(order_number(r) or "").strip()
+            if numero:
+                por_pedido.setdefault(numero, []).append(r)
+    saida: list[tuple[str, str]] = []
+    for numero in sorted(por_pedido):
+        linhas = por_pedido[numero]
+        mp = _vendas_marketplace(linhas[0].get("Marketplace") or linhas[0].get("Origem"))
+        if mp not in ligados:
+            continue
+        e = estados.get(numero) or {}
+        if str(e.get("situacao") or "") in MKT_ATEND_AUTO_PARADOS or float(e.get("proxima_epoch") or 0) > agora:
+            continue
+        if str(e.get("situacao") or "") in ("erro", "incerto") \
+                and int(e.get("tentativas") or 0) >= MKT_ATEND_AUTO_MAX_TENTATIVAS:
+            continue
+        if _tiktok_atendimento_ja_atendido(numero):   # romaneio/caixa pelo painel: atendido à mão
+            continue
+        if mp == "Shopee" and not (_cliente_fiscal_guardado(numero) or {}).get("documento_numero"):
+            _mkt_nota_da_shopee(numero, linhas)
+        conhecido = _exp_cliente_do_pedido(numero)
+        if not conhecido["documento"] or not conhecido["nome_fiscal"]:
+            continue   # sem nome/CPF da nota ainda: espera a extensão/API
+        saida.append((numero, mp))
+    return saida
+
+
+def mkt_atendimento_rodada() -> dict[str, Any]:
+    """Uma volta: no máximo UM pedido (cadastro + busca + criar + comprometer). Botão rodando = espera a próxima volta."""
+    resultados: list[dict[str, Any]] = []
+    for numero, mp in _mkt_atendimento_candidatos():
+        if not _MKT_ATEND_LOCK.acquire(blocking=False):
+            break   # o botão do painel está criando: a vez é dele
+        try:
+            atual = mkt_atendimento_do_pedido(numero) or {}
+            if str(atual.get("situacao") or "") in MKT_ATEND_AUTO_PARADOS:
+                continue   # revisão: o botão pode ter feito enquanto a lista era montada
+            _mkt_atend_gravar(numero, marketplace=mp, situacao="criando", detalhe="Criando automaticamente…")
+            try:
+                r = mkt_atendimento_pedido(numero, "automatico", automatico=True)
+            except Exception as exc:
+                _mkt_atend_gravar(numero, situacao="erro", detalhe=str(exc)[:300])
+                r = {"ok": False, "situacao": "erro", "motivo": str(exc)}
+            situacao = str(r.get("situacao") or "")
+            if situacao == "aguardando":
+                _mkt_atend_gravar(numero, proxima_epoch=time.time() + (MKT_ATEND_AUTO_INTERVALO if r.get("apollo_ocupado")
+                                                                         else MKT_ATEND_AUTO_ESPERA_AGUARDANDO))
+            elif situacao in ("erro", "incerto"):
+                with DB_LOCK:
+                    DB.execute("UPDATE mkt_atendimento_v2047 SET tentativas=tentativas+1, proxima_epoch=? WHERE pedido=?",
+                               (time.time() + MKT_ATEND_AUTO_ESPERA_ERRO, numero))
+                    DB.commit()
+            resultados.append({"pedido": numero, **r})
+            if r.get("apollo_ocupado"):
+                break
+        finally:
+            _MKT_ATEND_LOCK.release()
+        if resultados:
+            break   # um pedido por volta
+    return {"ok": True, "feitos": len(resultados), "resultados": resultados}
+
+
+def mkt_atendimento_loop(stop_event: threading.Event) -> None:
+    stop_event.wait(100)
+    while not stop_event.is_set():
+        try:
+            with exp_porta_rotina():   # V20.54: cede a vez da porta ao painel
+                mkt_atendimento_rodada()
+        except Exception as exc:
+            print(f"Aviso: atendimento automático de ML/Shopee: {exc}", file=sys.stderr)
+        stop_event.wait(MKT_ATEND_AUTO_INTERVALO)
 
 
 def tiktok_atendimento_loop(stop_event: threading.Event) -> None:
@@ -52394,6 +52582,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             body = self.read_json()
             try:
+                if "automatico" in body:   # V20.61: o interruptor da criação automática (o botão fica como está)
+                    self.send_json(mkt_atendimento_automatico_ligar(str(body.get("marketplace") or ""),
+                                                                    body.get("automatico") is True,
+                                                                    str(ctx.get("username") or "")))
+                    return
                 self.send_json(mkt_atendimento_ligar(str(body.get("marketplace") or ""), body.get("ligado") is True,
                                                      str(ctx.get("username") or "")))
             except ValueError as exc:
@@ -56984,6 +57177,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "tiktok_estoque_loop": ("Estoque do TikTok Shop (Apollo de Bauru)", False, 30),  # V19.64
     "tiktok_vendas_loop": ("Vendas do TikTok Shop (Bauru)", False, 30),  # V20.29
     "tiktok_atendimento_loop": ("Cadastro e atendimento do TikTok no Apollo", False, 30),  # V20.33
+    "mkt_atendimento_loop": ("Atendimento automático de ML e Shopee no Apollo", False, 30),  # V20.61
     "anuncios_estoque_loop": ("Estoque automático dos anúncios do ML (Apollo)", False, 30),  # V20.26
     "shopee_label_worker_loop": ("Etiquetas da Shopee", True, 30),
     "vendas_sync_loop": ("Vendas (Dashboard e Financeiro)", False, 120),
@@ -58111,6 +58305,11 @@ def main() -> None:
         target=_worker_protegido(tiktok_atendimento_loop), args=(watcher_stop,),
         name="tiktok-atendimento-worker", daemon=True,
     )
+    # V20.61: atendimento automático de ML e Shopee (interruptor por marketplace, começa desligado).
+    mkt_atendimento_thread = threading.Thread(
+        target=_worker_protegido(mkt_atendimento_loop), args=(watcher_stop,),
+        name="mkt-atendimento-worker", daemon=True,
+    )
     # V20.26: estoque automatico dos anuncios do ML (so anuncio `noromak` em Automatico; sem nenhum, nao le nada).
     anuncios_estoque_thread = threading.Thread(
         target=_worker_protegido(anuncios_estoque_loop), args=(watcher_stop,),
@@ -58322,6 +58521,7 @@ def main() -> None:
         tiktok_estoque_thread.start()
         tiktok_vendas_thread.start()
         tiktok_atendimento_thread.start()  # V20.33
+        mkt_atendimento_thread.start()  # V20.61
         anuncios_estoque_thread.start()
         vendas_ml_thread.start()
         vendas_rapido_thread.start()
