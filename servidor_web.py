@@ -134,7 +134,7 @@ memoria_limitar_arenas()
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.57-BAURU-IGUAL"
+APP_VERSION = "20.58-ANUNCIOS-POR-CASA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -9172,8 +9172,14 @@ def anuncios_lista_payload(busca: str = "", filtro: str = "", conta: str = "") -
     with DB_LOCK:
         fichas = {r["codigo"]: _ficha_de_linha(r) for r in DB.execute("SELECT * FROM anuncio_ficha_v2023").fetchall()}
         linhas = DB.execute("SELECT * FROM anuncio_canal_v2023").fetchall()
+    # V20.58 (dono, 12/11: "os produtos de Bauru estão aparecendo em Araçatuba, tem que ser dividido"): com uma casa
+    # escolhida, a ficha que tem anúncio (mesmo removido) só em OUTRA casa não aparece. Ficha sem nenhum anúncio
+    # (produto novo, ainda não anunciado) aparece nas duas.
+    com_anuncio = {str(r["ficha_codigo"] or "") for r in linhas if str(r["ficha_codigo"] or "")}
     if conta:  # V20.24: so os anuncios da conta (misto tambem e calculado so nela)
         linhas = [r for r in linhas if str(r["conta"]) == conta]
+        fichas = {c: f for c, f in fichas.items()
+                  if c not in com_anuncio or any(str(r["ficha_codigo"] or "") == c for r in linhas)}
     misto = _anuncio_misto_por_codigo(linhas)
     por_cod: dict[str, list[Any]] = {}
     soltos: list[dict[str, Any]] = []
@@ -9280,6 +9286,25 @@ def anuncio_ficha_payload(codigo: str, ler_apollo: bool = False,
         "tipo": (ficha or {}).get("tipo") or "", "confirmado": bool((ficha or {}).get("tipo_confirmado_por"))})
     for a in ativos:
         a["kit_suspeito"] = a_confirmar
+    # V20.58 (dono, 12/11: o estoque do TikTok passa a ser só pela tela Anúncios): o vínculo à mão do SKU do TikTok
+    # (a tela Estoque TikTok saiu do menu) vem para o anúncio, com as sugestões do SKU cortado (V20.08). Só sugere.
+    tiktok = [a for a in ativos if a.get("canal") == TIKTOK_ANUNCIO_CANAL]
+    if tiktok:
+        with DB_LOCK:
+            vinc = {str(r["sku_id"]): str(r["codigos"] or "") for r in DB.execute(
+                "SELECT sku_id, codigos FROM tiktok_vinculo_v1964 WHERE sku_id IN (%s)" % ",".join("?" * len(tiktok)),
+                [str(a["anuncio_id"]) for a in tiktok]).fetchall()}
+        conhecidos: set[str] | None = None
+        for a in tiktok:
+            a["tiktok_vinculo"] = vinc.get(str(a["anuncio_id"]), "")
+            a["tiktok_cortado"] = not a["tiktok_vinculo"] and len(str(a.get("sku_anuncio") or "")) >= TIKTOK_SKU_LIMITE
+            if a["tiktok_cortado"]:
+                if conhecidos is None:  # fora do DB_LOCK (o Precificador pega a trava dele)
+                    try:
+                        conhecidos = _separacao_codigos_conhecidos()
+                    except Exception:
+                        conhecidos = set()
+                a["sugestoes"] = tiktok_sugerir_sku(a.get("sku_anuncio"), conhecidos)
     return {"codigo": cod, "tipo": tipo,  # V20.23: a tela usa (ficha pode ser None)
             "kit_suspeito": a_confirmar, "kit_inativo": kit_inativo,
             "tipo_confirmado_por": (ficha or {}).get("tipo_confirmado_por") or "",
@@ -41846,6 +41871,8 @@ def anuncios_estoque_payload(conta: str, anuncio_id: str = "") -> dict[str, Any]
         "apollo_lote": apollo_lote_situacao(),  # V20.42
         "envio": anuncios_estoque_envio_situacao(conta),  # V20.26 (revisao): "Enviar agora" em segundo plano
         "erros_repetidos": [e for e in anuncios_estoque_erros_repetidos() if e["conta"] == conta]}
+    if conta == ESTOQUE_CONTA_TIKTOK:  # V20.58: com a extensão o cartão diz como passar o controle para cá
+        saida["tiktok_fonte"] = tiktok_fonte()
     if anuncio_id:
         saida["anuncio"] = None if anuncio is None else {
             k: anuncio.get(k) for k in ("anuncio_id", "conta", "ficha_codigo", "titulo", "controle", "logistica",

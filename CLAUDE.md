@@ -656,6 +656,17 @@ aparece com qualquer casa, mesmo sem anúncio em Automático. Teste: `TESTES/tes
 pega o `_PRECIFICADOR_CACHE_LOCK` e relê o banco: ordem de travas invertida = sistema travado); o kit vem só do Cadastro de Kits e o
 "A/B" sem o Precificador. SKU cortado (V20.08) sem vínculo à mão não ganha ficha. O nome é gravado antes do kit (falha não deixa
 ficha kit vazia).
+**V20.58 — Anúncios dividido por casa** (dono, 12/11). (1) Com uma casa no seletor, `anuncios_lista_payload(conta=)` só mostra
+a ficha com anúncio daquela casa (anúncio removido conta como da casa dele) e a ficha **sem nenhum anúncio** (produto novo) nas duas;
+o cartão Fichas conta só a casa. (2) Os cartões do Estoque automático dizem o canal (`CONTA_EST`: "Mercado Livre · Araçatuba/Bauru")
+e, sem anúncio controlado pelo Noromak, dizem o que fazer (ML: "Puxar anúncios do ML" + "Passar para o Noromak"; TikTok na extensão:
+botão "Passar o TikTok para a API", que é o `puxarTiktok` da V20.56). Em 12/11 a produção não tinha **nenhum** anúncio do ML de
+Bauru (o "Puxar anúncios do ML" em massa nunca rodou) e a fonte do TikTok ainda era a extensão. (3) **"Estoque TikTok" saiu do
+menu**: `/tiktok-estoque` abre `/anuncios?casa=bauru` (Anúncios aceita `?casa=`); a tela antiga continua em `/tiktok-estoque?antiga=1`
+(com a extensão como fonte é ela que manda). O anúncio do TikTok ganhou "Vincular código" (mesma rota `/api/tiktok-estoque/vinculo`;
+`anuncio_ficha_payload` traz `tiktok_vinculo`, `tiktok_cortado` e as `sugestoes` do SKU cortado, Precificador lido fora do
+`DB_LOCK`) e, com a extensão, "Controlar estoque aqui"; "Devolver para a Alephee" não aparece no TikTok. `nk-menu.js?v=20.58` em
+todas as telas e `CACHE` do `sw.js`. Teste: `TESTES/test_anuncios_por_casa_v2058.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

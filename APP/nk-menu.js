@@ -54,8 +54,8 @@
     { grupo: "estoque", titulo: "Estoque e compras", itens: [
       { id: "ruptura", rotulo: "Ruptura de estoque", href: "/ruptura", modulo: "admin", alt: "compras", icone: "M3 3v18h18M7 8l4 4 3-3 6 6M20 11v4h-4" },
       { id: "analise-full", rotulo: "Demanda Full", href: "/analise-full", modulo: "precificador", alias: ["/full"], icone: "M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8" },
-      // V19.64: estoque do Apollo de Bauru enviado ao TikTok Shop.
-      { id: "tiktok-estoque", rotulo: "Estoque TikTok", href: "/tiktok-estoque", modulo: "admin", icone: "M9 12a4 4 0 1 0 4 4V3c.5 2.5 2.5 4 5 4" },
+      // V20.58 (dono, 12/11): "Estoque TikTok" saiu do menu — o estoque do TikTok é controlado em Anúncios (casa Bauru).
+      // O endereço /tiktok-estoque abre Anúncios; a tela antiga (extensão) só por /tiktok-estoque?antiga=1.
       { id: "compras", rotulo: "Demanda de Compra", href: "/compras", modulo: "admin", alt: "compras", icone: "M3 3h2l2.4 12.2a2 2 0 0 0 2 1.8h7.7a2 2 0 0 0 2-1.6L21 8H6M9 21h.01M18 21h.01" },
     ] },
     { grupo: "cadastros", titulo: "Cadastros", itens: [

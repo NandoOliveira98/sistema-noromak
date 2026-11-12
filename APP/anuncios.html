@@ -21,7 +21,7 @@
 <link rel="stylesheet" href="/expedicao/theme.css?v=20.17">
 <link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
 <script src="/expedicao/nk-ui.js?v=19.13"></script>
-<script defer src="/expedicao/nk-menu.js?v=20.23" data-shell></script>
+<script defer src="/expedicao/nk-menu.js?v=20.58" data-shell></script>
 <style>
 body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
 .bloco{margin-top:14px}
@@ -155,6 +155,12 @@ const FILIAIS = [["aracatuba", "Araçatuba"], ["bauru", "Bauru"]];
 const CASA_CHAVE = "nk_anuncios_casa_v2024";
 let CASA = "todas";
 try { const c = localStorage.getItem(CASA_CHAVE); if (["todas", "aracatuba", "bauru"].includes(c)) CASA = c; } catch (_) {}
+// V20.58: ?casa=bauru no endereço (o /tiktok-estoque antigo leva para cá) escolhe a casa e fica guardado
+{ const c = new URLSearchParams(location.search).get("casa");
+  if (["todas", "aracatuba", "bauru"].includes(c)) { CASA = c; try { localStorage.setItem(CASA_CHAVE, c); } catch (_) {} } }
+// V20.58 (dono, 12/11: "não existe opção para controlar o Mercado Livre de Bauru"): os cartões do estoque dizem o canal
+const CONTA_EST = {aracatuba: "Mercado Livre · Araçatuba", bauru: "Mercado Livre · Bauru"};
+const nomeContaEst = c => CONTA_EST[c] || CONTA[c] || c;
 const filiaisVisiveis = () => FILIAIS.filter(([f]) => CASA === "todas" || f === CASA);
 const daCasa = a => CASA === "todas" || a.conta === CASA;
 function seletorCasa() {
@@ -168,7 +174,7 @@ function trocarCasa(v) {
   // ficha: só refiltra o que já está na tela (o digitado está em FORM/CR e não se perde); lista: relê com a conta
   if (F) desenharFicha(); else { desenharLista(); carregarLista(); }
 }
-const CONTROLE = {noromak: ["Noromak", "ok"], alephee: ["Alephee", "warn"], full: ["Full", "info"], tiktok: ["Estoque TikTok", "info"]};  // V20.40
+const CONTROLE = {noromak: ["Noromak", "ok"], alephee: ["Alephee", "warn"], full: ["Full", "info"], tiktok: ["Extensão do TikTok", "info"]};  // V20.40  // V20.58: a tela Estoque TikTok saiu do menu
 const STATUS = {active: "Ativo", paused: "Pausado", closed: "Encerrado", under_review: "Em revisão", inactive: "Inativo"};
 const TIPO_ANUNCIO = {gold_special: "Clássico", gold_pro: "Premium", gold_premium: "Premium", free: "Grátis"};
 const ORIGEM = {admin: "da ficha", anuncio_ml: "do anúncio ML", anuncio_tiktok: "do anúncio TikTok", alephee: "da Alephee", apollo: "do Apollo", agente: "do agente (confira)"};  // V20.41: anuncio_tiktok
@@ -453,7 +459,7 @@ async function acompanharTiktok() {
     const n = s.variacoes == null ? "" : ` ${s.variacoes} variação(ões).`;  // 2ª revisão: sem número não vira "0"
     nkToast(`Anúncios do TikTok lidos.${n}${casa}`, "ok", {duracao: 15000});
   }
-  if (!F) carregarLista();
+  if (!F) { carregarLista(); carregarPainelEstoque(); } else recarregar();  // V20.58: o clique pode vir da ficha
 }
 async function puxarUm() {
   const campo = $("puxUmTexto"), b = $("btnPuxarUm");
@@ -953,8 +959,10 @@ function desenharAnuncios() {
     if (a.canal === "ml") b.push(`<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="trazerDadosAnuncio(this)" title="Lê o anúncio no Mercado Livre e traz título, categoria, atributos, descrição e fotos para a ficha (só o que a ficha ainda não tem; o que o Admin digitou fica).">Trazer dados do anúncio</button>`);  // V20.25
     if (a.canal === "tiktok" && a.controle === "noromak") b.push(`<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="trazerDadosAnuncio(this)" title="Lê o produto no TikTok (pela API) e traz título, descrição, marca e fotos para a ficha (só o que a ficha ainda não tem; o que o Admin digitou fica).">Trazer dados do anúncio</button>`);  // V20.41
     if (a.controle === "alephee" && a.logistica !== "fulfillment") b.push(`<button class="nk-btn mini pri" ${dadosAnuncio(a)} onclick="passarNoromak(this.dataset)">Passar para o Noromak</button>`);
-    if (a.controle === "noromak") b.push(`<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="devolverAlephee(this.dataset)">Devolver para a Alephee</button>`);
-    if (a.canal === "tiktok" && a.controle === "tiktok") b.push(`<a class="nk-btn mini" href="/expedicao/tiktok-estoque" target="_blank" rel="noopener" title="O estoque do TikTok é controlado pela tela Estoque TikTok (Apollo de Bauru − fila).">Estoque TikTok</a>`);  // V20.40
+    if (a.controle === "noromak" && a.canal !== "tiktok") b.push(`<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="devolverAlephee(this.dataset)">Devolver para a Alephee</button>`);  // V20.58: o TikTok não tem Alephee
+    // V20.58 (dono, 12/11): o estoque do TikTok é controlado aqui; com a extensão ainda como fonte, o botão passa para a API
+    if (a.canal === "tiktok" && a.controle === "tiktok") b.push(`<button class="nk-btn mini pri" onclick="puxarTiktok()" title="O estoque deste anúncio ainda vem da extensão do Seller Center. Passa o TikTok para a API e o anúncio ganha Manual/Automático aqui.">Controlar estoque aqui</button>`);
+    if (a.canal === "tiktok") b.push(`<button class="nk-btn mini${a.tiktok_cortado ? " pri" : ""}" ${dadosAnuncio(a)} onclick="vincularTiktok(this.dataset)" title="Qual código do Apollo é esta variação do TikTok (vale mais que o SKU do vendedor).">${a.tiktok_vinculo ? "Vínculo: " + esc(a.tiktok_vinculo) : "Vincular código"}</button>`);
     b.push(`<button class="nk-btn mini perigo" ${dadosAnuncio(a)} onclick="removerAnuncio(this.dataset)">Remover</button>`);
     return `<div class="selos">${b.join("")}</div>`;
   };
@@ -1009,6 +1017,26 @@ async function devolverAlephee({canal, conta, id}) {
   if (!await nkConfirmar(`Devolver o ${id} para a Alephee?\nReligue o anúncio na Alephee: o Noromak deixa de controlar o estoque dele.`, {ok: "Devolver", perigo: false})) return;
   try { await api("/api/anuncios/controle", {canal, conta, anuncio_id: id, controle: "alephee", confirmou_alephee: false}); nkToast("Anúncio devolvido para a Alephee.", "ok"); recarregar(); }
   catch (e) { nkToast(e.message, "erro"); }
+}
+// V20.58: vínculo à mão do TikTok (antes só na tela Estoque TikTok). Mesma rota e mesmas regras: só o perfil Admin;
+// vazio apaga e volta a valer o SKU do vendedor. As sugestões do SKU cortado (V20.08) só completam o último código.
+async function vincularTiktok({conta, id}) {
+  const a = acharAnuncio(conta, id, "tiktok");
+  if (!PODE || !a) return;
+  const sug = (a.sugestoes || []).length ? `\nSugestões pelo cadastro (confira as peças): ${a.sugestoes.join(" · ")}` : "";
+  const corte = a.tiktok_cortado ? "\nO TikTok cortou este SKU em 50 caracteres: o fim pode ter perdido uma peça. Sem vínculo ele não recebe estoque." : "";
+  const v = await nkPerguntar(`Código do Apollo da variação ${id}`, {
+    detalhe: `SKU no TikTok: ${a.sku_anuncio || "(vazio)"}.${corte}${sug}\nKit: os códigos separados por “/” (ex.: 0893600022/0893764272). Deixe vazio para apagar o vínculo.`,
+    valor: a.tiktok_vinculo || (a.sugestoes || [])[0] || "", placeholder: "código do Apollo"});
+  if (v == null) return;
+  const codigos = v.trim();
+  if (codigos === (a.tiktok_vinculo || "")) return;
+  if (!codigos && !await nkConfirmar(`Apagar o vínculo de ${id}?\nVolta a valer o SKU do vendedor (${a.sku_anuncio || "vazio"}).`, {ok: "Apagar", perigo: true})) return;
+  try {
+    await api("/api/tiktok-estoque/vinculo", {sku_id: id, codigos});
+    nkToast(codigos ? `Vínculo salvo: ${id} = ${codigos}. A ficha certa aparece na lista.` : "Vínculo apagado.", "ok", {duracao: 9000});
+    recarregar();
+  } catch (e) { nkToast(e.message, "erro"); }
 }
 async function removerAnuncio({canal, conta, id}) {
   if (!await nkConfirmar(`Remover o ${id} da lista?\nPuxar os anúncios de novo não o traz de volta; “Reincluir” desfaz. Nada é alterado no marketplace.`)) return;
@@ -1103,7 +1131,7 @@ function desenharEstoqueAnuncios() {
   const el = $("secEstoque"); if (!el || !F) return;
   const lista = (F.anuncios || []).filter(daCasa).filter(podeEstoque);
   el.hidden = !lista.length;
-  el.innerHTML = lista.length ? `<div class="nk-painel-tit"><div><h2>Controle de estoque</h2><p>Só nos anúncios do Mercado Livre e da Shopee controlados pelo Noromak (Full e Alephee ficam de fora). <b>Manual</b>: o número digitado vai na hora para o marketplace. <b>Automático</b>: Apollo da filial menos o vendido e ainda não baixado (kit = a peça que dá menos); o envio segue o modo da conta, no topo da lista de anúncios.</p></div></div>
+  el.innerHTML = lista.length ? `<div class="nk-painel-tit"><div><h2>Controle de estoque</h2><p>Só nos anúncios controlados pelo Noromak — Mercado Livre, Shopee, Magalu e TikTok (Full e Alephee ficam de fora). <b>Manual</b>: o número digitado vai na hora para o marketplace. <b>Automático</b>: Apollo da filial menos o vendido e ainda não baixado (kit = a peça que dá menos); o envio segue o modo da conta, no topo da lista de anúncios.</p></div></div>
     <div class="estq">${lista.map(cartaoEstoque).join("")}</div>` : "";
 }
 async function carregarEstoqueAnuncios() {
@@ -1185,9 +1213,9 @@ function desenharPainelEstoque() {
   el.hidden = !temAlgo;
   if (!temAlgo) { el.innerHTML = ""; return; }
   const blocoConta = ([conta, d]) => {
-    if (d.erro) return `<div class="estq-card estq-conta"><h3>${esc(CONTA[conta] || conta)}</h3><div class="nk-aviso bad">${esc(d.erro)}</div></div>`;
+    if (d.erro) return `<div class="estq-card estq-conta"><h3>${esc(nomeContaEst(conta))}</h3><div class="nk-aviso bad">${esc(d.erro)}</div></div>`;
     const r = d.resumo || {}, cfg = (d.config || {}).modo || "simulacao";
-    const sel = `<span class="casa-sel" role="group" aria-label="Modo do estoque automático de ${esc(CONTA[conta] || conta)}">${Object.entries(ESTQ_MODO_CONTA)
+    const sel = `<span class="casa-sel" role="group" aria-label="Modo do estoque automático de ${esc(nomeContaEst(conta))}">${Object.entries(ESTQ_MODO_CONTA)
       .map(([v, n]) => `<button type="button" class="${cfg === v ? "on" : ""}" aria-pressed="${cfg === v}" ${PODE ? "" : "disabled"} data-conta="${esc(conta)}" data-modo="${v}" onclick="mudarModoConta(this.dataset.conta,this.dataset.modo)">${n}</button>`).join("")}</span>`;
     const enviar = PODE && cfg === "lote" ? `<button type="button" class="nk-btn mini pri" data-conta="${esc(conta)}" ${r.mudariam && !(d.envio || {}).rodando ? "" : "disabled"} onclick="enviarAgoraConta(this)">${(d.envio || {}).rodando ? "Enviando…" : "Enviar agora"}${r.mudariam ? ` (${Number(r.mudariam)})` : ""}</button>` : "";
     const quem = d.config && d.config.atualizado_em ? ` · mudado ${quando(d.config.atualizado_em)}${d.config.atualizado_por ? " por " + esc(d.config.atualizado_por) : ""}` : "";
@@ -1197,13 +1225,20 @@ function desenharPainelEstoque() {
         Descontar só os pedidos <b>sem atendimento</b> no Apollo</label>
       <div class="muted">Desligado: desconta todo pedido da fila. Confirmado com o Guilherme (09/11): o atendimento aberto já sai do Disponível do Apollo (8 de 9 medidos), então descontar a venda que já tem atendimento tira a peça duas vezes. Compare os dois números por alguns dias antes de ligar.${d.config && d.config.desconta_em ? ` Mudado ${quando(d.config.desconta_em)}${d.config.desconta_por ? " por " + esc(d.config.desconta_por) : ""}.` : ""}</div></div>`;
     const env = d.envio || {};
-    const envTxt = env.rodando ? `<div class="nk-aviso">Enviando ao Mercado Livre… (começou ${quando(env.iniciado_em)})</div>` : "";
+    const envTxt = env.rodando ? `<div class="nk-aviso">Enviando ${ESTQ_FORA[conta] ? ESTQ_FORA[conta][3] : "ao Mercado Livre"}… (começou ${quando(env.iniciado_em)})</div>` : "";
+    // V20.58 (dono, 12/11): conta sem anúncio controlado pelo Noromak diz o que fazer, em vez de só mostrar zeros
+    const vazio = Number(r.automatico || 0) + Number(r.manual || 0) > 0 ? ""
+      : conta === "tiktok" && d.tiktok_fonte && d.tiktok_fonte !== "api"
+        ? `<div class="nk-aviso">O estoque do TikTok ainda vem da extensão do Seller Center (tela antiga). Para controlar aqui, passe o TikTok para a API${PODE ? ` <button type="button" class="nk-btn mini pri" onclick="puxarTiktok()">Passar o TikTok para a API</button>` : ""}. Até lá, a <a href="/expedicao/tiktok-estoque?antiga=1" target="_blank" rel="noopener">tela antiga</a> continua valendo.</div>`
+      : !ESTQ_FORA[conta]
+        ? `<div class="nk-aviso">Nenhum anúncio do Mercado Livre de ${esc(CONTA[conta] || conta)} controlado pelo Noromak. Clique em “Puxar anúncios do ML” (traz Araçatuba e Bauru), abra o produto e use “Passar para o Noromak” no anúncio.</div>`
+      : `<div class="muted">Nenhum anúncio ${esc(ESTQ_FORA[conta][1])} controlado pelo Noromak ainda.</div>`;
     const rep = (d.erros_repetidos || []).length ? `<div class="nk-aviso bad">${(d.erros_repetidos || []).length} anúncio(s) com 3 erros seguidos: o Automático parou de tentar até o número ou o anúncio mudar (${esc((d.erros_repetidos || []).slice(0, 3).map(e => e.anuncio_id).join(", "))}).</div>` : "";
-    return `<div class="estq-card estq-conta"><div class="estq-topo"><h3>${esc(CONTA[conta] || conta)}</h3><span class="esp"></span>${sel}</div>
+    return `<div class="estq-card estq-conta"><div class="estq-topo"><h3>${esc(nomeContaEst(conta))}</h3><span class="esp"></span>${sel}</div>
       <div class="muted">${esc(ESTQ_MODO_TXT[cfg] || "")}${quem}</div>
       <div class="nums"><span><b>${Number(r.automatico || 0)}</b>em Automático</span><span><b>${Number(r.manual || 0)}</b>em Manual</span>
         <span><b>${Number(r.mudariam || 0)}</b>${cfg === "simulacao" ? "mudariam" : "a enviar"}</span><span><b>${Number(r.sem_numero || 0)}</b>sem número</span>
-        <span class="esp"></span>${enviar}</div>${envTxt}${rep}${chave}</div>`;
+        <span class="esp"></span>${enviar}</div>${vazio}${envTxt}${rep}${chave}</div>`;
   };
   const itens = contas.flatMap(([, d]) => (d.itens || []).filter(i => i.muda || i.calculado == null));
   const log = contas.flatMap(([, d]) => d.log || []).sort((x, y) => String(y.criado_em).localeCompare(String(x.criado_em))).slice(0, 50);
@@ -1218,13 +1253,13 @@ function desenharPainelEstoque() {
     <div class="estq-contas">${contas.map(blocoConta).join("")}</div>
     ${itens.length ? `<details class="rem bloco"><summary>O que mudaria ou está sem número (${itens.length})</summary>
       <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_estoque_mudaria"><thead><tr><th>Conta</th><th>Anúncio</th><th>Produto</th><th class="n">No ML</th><th class="n">Calculado</th><th>Por quê</th></tr></thead>
-      <tbody>${itens.map(i => `<tr><td>${esc(CONTA[i.conta] || i.conta)}</td><td>${linkAnuncio({canal: ESTQ_FORA[i.conta] ? i.conta : "ml", anuncio_id: i.anuncio_id})}<div class="muted">${esc(i.titulo)}</div></td>
+      <tbody>${itens.map(i => `<tr><td>${esc(nomeContaEst(i.conta))}</td><td>${linkAnuncio({canal: ESTQ_FORA[i.conta] ? i.conta : "ml", anuncio_id: i.anuncio_id})}<div class="muted">${esc(i.titulo)}</div></td>
         <td class="mono"><a href="?codigo=${encodeURIComponent(i.ficha)}&amp;aba=anuncios" data-cod="${esc(i.ficha)}" onclick="event.preventDefault();irPara({codigo:this.dataset.cod,aba:'anuncios'})">${esc(i.ficha)}</a></td>
         <td class="n">${esc(numEst(i.referencia))}</td><td class="n">${i.calculado == null ? SEM_LEITURA : esc(numEst(i.calculado))}</td>
         <td>${esc(i.calculado == null ? i.motivo : motivoCurtoEst(i))}${i.calculado != null && ((PE.contas[i.conta] || {}).config || {}).modo === "simulacao" ? `<div class="muted">${esc(doisNumeros(i))}</div>` : ""}${i.segurado ? `<div class="muted">${esc(i.segurado)}</div>` : ""}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
     <details class="rem bloco"><summary>Registro dos últimos envios (${log.length})</summary>
       <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_estoque_registro"><thead><tr><th>Quando</th><th>Conta</th><th>Anúncio</th><th>Modo</th><th class="n">De</th><th class="n">Para</th><th>Resultado</th><th>Motivo / detalhe</th><th>Por</th></tr></thead>
-      <tbody>${log.map(l => `<tr><td>${quando(l.criado_em)}</td><td>${esc(CONTA[l.conta] || l.conta)}</td><td>${l.anuncio_id ? linkAnuncio({canal: l.canal || "ml", anuncio_id: l.anuncio_id}) : "conta inteira"}</td>
+      <tbody>${log.map(l => `<tr><td>${quando(l.criado_em)}</td><td>${esc(nomeContaEst(l.conta))}</td><td>${l.anuncio_id ? linkAnuncio({canal: l.canal || "ml", anuncio_id: l.anuncio_id}) : "conta inteira"}</td>
         <td>${esc(MODO_ANU[l.modo] || l.modo)}</td><td class="n">${l.de == null ? "—" : esc(numEst(l.de))}</td><td class="n">${l.para == null ? "—" : esc(numEst(l.para))}</td>
         <td>${selo(l)}</td><td>${esc(l.motivo)}${l.detalhe ? `<div class="muted">${esc(l.detalhe)}</div>` : ""}</td><td>${esc(l.ator)}</td></tr>`).join("")
         || '<tr><td colspan="9" class="vazio">Nada registrado ainda.</td></tr>'}</tbody></table></div></details>`;
@@ -1234,13 +1269,13 @@ async function mudarModoConta(conta, modo, jaConfirmou) {
   if (!PODE || !d || !d.config || d.config.modo === modo || !ESTQ_MODO_CONTA[modo]) return;
   if (!jaConfirmou) {
     const txt = modo === "automatico"
-      ? `Ligar o envio automático de estoque em ${CONTA[conta] || conta}?\nO Noromak passa a enviar sozinho ao Mercado Livre o estoque calculado pelo Apollo dos anúncios em Automático (${Number((d.resumo || {}).automatico || 0)} hoje), sempre que o número mudar. Pede a senha e o código 2FA do proprietário.`
-      : `Passar o estoque automático de ${CONTA[conta] || conta} para ${ESTQ_MODO_CONTA[modo]}?\n${ESTQ_MODO_TXT[modo]}`;
+      ? `Ligar o envio automático de estoque em ${nomeContaEst(conta)}?\nO Noromak passa a enviar sozinho ${ESTQ_FORA[conta] ? ESTQ_FORA[conta][3] : "ao Mercado Livre"} o estoque calculado pelo Apollo dos anúncios em Automático (${Number((d.resumo || {}).automatico || 0)} hoje), sempre que o número mudar. Pede a senha e o código 2FA do proprietário.`
+      : `Passar o estoque automático de ${nomeContaEst(conta)} para ${ESTQ_MODO_CONTA[modo]}?\n${ESTQ_MODO_TXT[modo]}`;
     if (!await nkConfirmar(txt, {ok: modo === "automatico" ? "Ligar o Automático" : `Passar para ${ESTQ_MODO_CONTA[modo]}`, perigo: false})) return;
   }
   try {
     await api("/api/anuncios/estoque/config", {conta, modo});
-    nkToast(`${CONTA[conta] || conta}: estoque automático em ${ESTQ_MODO_CONTA[modo]}.`, "ok");
+    nkToast(`${nomeContaEst(conta)}: estoque automático em ${ESTQ_MODO_CONTA[modo]}.`, "ok");
   } catch (e) {
     if (e.status === 428 && (e.dados || {}).code === "OWNER_REAUTH_REQUIRED") {
       if (await pedirOwner("Ligar o Automático do estoque exige a senha e o código 2FA do proprietário.")) return mudarModoConta(conta, modo, true);
@@ -1254,7 +1289,7 @@ async function enviarAgoraConta(b) {
   const conta = b.dataset.conta, d = PE.contas[conta];
   if (!PODE || !d) return;
   const n = Number((d.resumo || {}).mudariam || 0);
-  if (!await nkConfirmar(`Enviar agora o estoque de ${CONTA[conta] || conta} ao Mercado Livre?\n${n} anúncio(s) em Automático com número diferente do ML. Só vai o que mudou, recalculado agora; cada envio é conferido relendo o anúncio.`,
+  if (!await nkConfirmar(`Enviar agora o estoque de ${nomeContaEst(conta)} ${ESTQ_FORA[conta] ? ESTQ_FORA[conta][3] : "ao Mercado Livre"}?\n${n} anúncio(s) em Automático com número diferente do que está no marketplace. Só vai o que mudou, recalculado agora; cada envio é conferido relendo o anúncio.`,
     {ok: "Enviar agora", perigo: false})) return;
   b.disabled = true; b.textContent = "Enviando…";
   try {
@@ -1283,22 +1318,22 @@ async function acompanharEnvioConta(conta) {
   if (env.rodando) { ENVIO_ACOMP[conta] = setTimeout(() => acompanharEnvioConta(conta), 3000); return; }
   delete ENVIO_ACOMP[conta];
   const r = env.resultado || {};
-  if (env.erro) { nkToast(`${CONTA[conta] || conta}: ${env.erro}`, "erro", {duracao: 12000}); return; }
+  if (env.erro) { nkToast(`${nomeContaEst(conta)}: ${env.erro}`, "erro", {duracao: 12000}); return; }
   const partes = [`${Number(r.enviados || 0)} enviado(s)`];
   if (r.erros) partes.push(`${Number(r.erros)} com erro`);
   if (r.ignorados) partes.push(`${Number(r.ignorados)} ignorado(s)`);
-  nkToast(`${CONTA[conta] || conta}: ${partes.join(", ")}.${r.erros ? " Veja o registro." : ""}`, r.erros ? "aviso" : "ok", {duracao: 12000});
+  nkToast(`${nomeContaEst(conta)}: ${partes.join(", ")}.${r.erros ? " Veja o registro." : ""}`, r.erros ? "aviso" : "ok", {duracao: 12000});
 }
 async function mudarDescontaConta(inp) {
   const conta = inp.dataset.conta, ligar = inp.checked;
   if (!PODE) { inp.checked = !ligar; return; }
   const txt = ligar
-    ? `Descontar só os pedidos sem atendimento no Apollo em ${CONTA[conta] || conta}?\nUse só depois de confirmar com o Guilherme que o Disponível do Apollo já tira a peça do atendimento aberto. Se não tirar, o anúncio fica com estoque a mais.`
-    : `Voltar a descontar todo pedido da fila em ${CONTA[conta] || conta}?`;
+    ? `Descontar só os pedidos sem atendimento no Apollo em ${nomeContaEst(conta)}?\nUse só depois de confirmar com o Guilherme que o Disponível do Apollo já tira a peça do atendimento aberto. Se não tirar, o anúncio fica com estoque a mais.`
+    : `Voltar a descontar todo pedido da fila em ${nomeContaEst(conta)}?`;
   if (!await nkConfirmar(txt, {ok: ligar ? "Ligar" : "Desligar", perigo: false})) { inp.checked = !ligar; return; }
   try {
     await api("/api/anuncios/estoque/config", {conta, apollo_desconta_atendimento: ligar});
-    nkToast(`${CONTA[conta] || conta}: ${ligar ? "desconta só os pedidos sem atendimento no Apollo" : "desconta todo pedido da fila"}.`, "ok");
+    nkToast(`${nomeContaEst(conta)}: ${ligar ? "desconta só os pedidos sem atendimento no Apollo" : "desconta todo pedido da fila"}.`, "ok");
   } catch (e) { inp.checked = !ligar; nkToast(e.message, "erro"); }
   carregarPainelEstoque();
 }

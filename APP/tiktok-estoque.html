@@ -12,11 +12,16 @@
      POST /api/tiktok-estoque/{config,vinculo,enviar,atualizar}.
      V19.83: tela no padrão Noromak (cabeçalho com ações, cartões com ícone que filtram, tabela e
      histórico recolhível). Só apresentação: rotas e regras não mudaram. -->
+<script>
+/* V20.58 (dono, 12/11): o estoque do TikTok é controlado em Anúncios (casa Bauru). A tela saiu do menu e o endereço
+   leva para lá; a tela antiga (estoque pela extensão do Seller Center) continua em /tiktok-estoque?antiga=1. */
+if (!new URLSearchParams(location.search).has("antiga")) location.replace("/expedicao/anuncios?casa=bauru");
+</script>
 <script defer src="/expedicao/web-auth.js?v=20.17"></script>
 <link rel="stylesheet" href="/expedicao/theme.css?v=20.17">
 <link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
 <script src="/expedicao/nk-ui.js?v=19.13"></script>
-<script defer src="/expedicao/nk-menu.js?v=20.23" data-shell></script>
+<script defer src="/expedicao/nk-menu.js?v=20.58" data-shell></script>
 <style>
 body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
 .bloco{margin-top:14px}
@@ -65,6 +70,7 @@ td.tit{max-width:320px}
       <div class="nk-rotulo">Estoque e compras</div>
       <h1>Estoque TikTok</h1>
       <p>Estoque de Bauru no Apollo, menos o que já foi vendido e está na fila de Bauru, enviado ao TikTok Shop.</p>
+      <p class="alerta">Tela antiga, do estoque pela extensão do Seller Center. O estoque do TikTok agora é controlado em <a href="/expedicao/anuncios?casa=bauru">Anúncios</a> (casa Bauru).</p>
     </div>
     <div class="nk-acoes">
       <button class="nk-btn" onclick="atualizarAnuncios()"><i class=nk-i-download></i> Ler anúncios do TikTok</button>

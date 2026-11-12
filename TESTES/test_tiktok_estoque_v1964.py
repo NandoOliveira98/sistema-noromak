@@ -316,7 +316,9 @@ class Rotas(Base):
         texto = (S.APP_DIR / "tiktok-estoque.html").read_text(encoding="utf-8")
         self.assertIn("nk-menu.js?v=", texto)
         menu = (S.APP_DIR / "nk-menu.js").read_text(encoding="utf-8")
-        self.assertIn('href: "/tiktok-estoque"', menu)
+        # V20.58 (dono, 12/11): a tela saiu do menu; o estoque do TikTok é controlado em Anúncios
+        self.assertNotIn('href: "/tiktok-estoque"', menu)
+        self.assertIn('location.replace("/expedicao/anuncios?casa=bauru")', texto)
 
     def test_workers_no_painel_de_saude(self):
         for nome in ("tiktok_pedidos_loop", "tiktok_estoque_loop"):
