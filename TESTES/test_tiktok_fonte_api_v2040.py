@@ -482,7 +482,7 @@ class Rotas(Base):
         self.assertIn('id="btnTiktokFonte"', admin)
         self.assertIn("/expedicao/api/integracoes/tiktok/fonte", admin)
         anuncios = (S.APP_DIR / "anuncios.html").read_text(encoding="utf-8")
-        self.assertIn('tiktok: ["Estoque TikTok"', anuncios)
+        self.assertIn('tiktok: ["Extensão do TikTok"', anuncios)  # V20.58: a tela Estoque TikTok saiu do menu
 
 
 if __name__ == "__main__":
